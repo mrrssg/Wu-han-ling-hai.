@@ -1,0 +1,130 @@
+﻿{# templates/order/import.html #}
+{% extends "base.html" %}
+
+{% block title %}导入订单{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header bg-white py-3">
+        <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> 导入订单</h5>
+      </div>
+
+      <div class="card-body p-4">
+
+        {% set platforms = [
+          {"key":"macy","name":"Macy"},
+          {"key":"bestbuy","name":"BestBuy"},
+          {"key":"walmart","name":"Walmart"},
+          {"key":"lowes","name":"Lowes"}
+        ] %}
+
+        <ul class="nav nav-tabs mb-4" role="tablist">
+          {% for p in platforms %}
+          <li class="nav-item" role="presentation">
+            <button
+              class="nav-link {% if loop.first %}active{% endif %}"
+              id="tab-{{ p.key }}"
+              data-bs-toggle="tab"
+              data-bs-target="#pane-{{ p.key }}"
+              type="button"
+              role="tab"
+              aria-controls="pane-{{ p.key }}"
+              aria-selected="{% if loop.first %}true{% else %}false{% endif %}"
+            >
+              {{ p.name }}
+            </button>
+          </li>
+          {% endfor %}
+        </ul>
+
+        <div class="tab-content">
+          {% for p in platforms %}
+          <div
+            class="tab-pane fade {% if loop.first %}show active{% endif %}"
+            id="pane-{{ p.key }}"
+            role="tabpanel"
+            aria-labelledby="tab-{{ p.key }}"
+          >
+            <form method="POST"
+                  enctype="multipart/form-data"
+                  onsubmit="return showLoading('{{ p.key }}')">
+
+              <input type="hidden" name="platform" value="{{ p.key }}">
+
+              <div class="mb-4">
+                <label for="{{ p.key }}_file" class="form-label fw-bold">
+                  上传 {{ p.name }} 订单表 (.xlsx/.xls)
+                </label>
+                <input class="form-control"
+                       type="file"
+                       id="{{ p.key }}_file"
+                       name="order_file"
+                       accept=".xlsx,.xls"
+                       required>
+              </div>
+
+              <div class="d-grid gap-2">
+                <button type="submit"
+                        class="btn btn-primary btn-lg"
+                        id="submitBtn_{{ p.key }}">
+                  <i class="bi bi-gear-fill"></i> 开始导入并写入数据库
+                </button>
+              </div>
+            </form>
+          </div>
+          {% endfor %}
+        </div>
+
+        <hr class="my-4">
+
+        <div class="card mt-2">
+          <div class="card-header bg-white py-3">
+            <h6 class="mb-0"><i class="bi bi-download"></i> 导出未发货订单</h6>
+          </div>
+          <div class="card-body">
+            <p class="text-muted mb-3">按供应商导出未发货订单（XLSX）</p>
+
+            <div class="d-flex gap-2 flex-wrap">
+              <a class="btn btn-outline-primary"
+                 href="{{ url_for('orders.export_haoya_unshipped_xlsx') }}">
+                导出 豪雅 未发货
+              </a>
+
+              <a class="btn btn-outline-primary"
+                 href="{{ url_for('orders.export_sishun_unshipped_xlsx') }}">
+                导出 司顺 未发货
+              </a>
+
+              <a class="btn btn-outline-primary"
+                 href="{{ url_for('orders.export_dajian_unshipped_xlsx') }}">
+                导出 大建 未发货
+              </a>
+            </div>
+
+            <div class="form-text mt-2">
+              如点击后 404，说明后端路由函数名不同，把 url_for 的 endpoint 改成实际名称。
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function showLoading(platformKey) {
+    const btn = document.getElementById(`submitBtn_${platformKey}`);
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `
+        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+        正在导入...
+      `;
+    }
+    return true;
+  }
+</script>
+{% endblock %}

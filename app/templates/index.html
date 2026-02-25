@@ -1,0 +1,92 @@
+﻿{% extends "base.html" %}
+
+{% block title %}仪表盘 - ERP系统{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h2 class="fw-light">欢迎使用自动化处理系统</h2>
+        <p class="text-muted">请选择下方的功能模块开始工作。</p>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-primary mb-3">
+                    <i class="bi bi-file-earmark-spreadsheet"></i>
+                </div>
+                <h4 class="card-title">订单导入处理</h4>
+                <p class="card-text text-muted">上传 Walmart 和 Macy 的 Excel 订单，自动合并生成发货单。</p>
+                <a href="{{ url_for('orders.import_orders') }}" class="btn btn-primary mt-3">开始导入</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-success mb-3">
+                    <i class="bi bi-search"></i>
+                </div>
+                <h4 class="card-title">订单查询</h4>
+                <p class="card-text text-muted">通过订单号、姓名或 SKU 快速检索历史订单记录。</p>
+                <a href="{{ url_for('orders.search_orders') }}" class="btn btn-outline-success mt-3">去查询</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-warning mb-3">
+                    <i class="bi bi-clipboard-data"></i>
+                </div>
+                <h4 class="card-title">库存更新</h4>
+                <p class="card-text text-muted">支持 Bestbuy、Macy、Walmart、HD 四大平台。<br>自动检索数据库并回填库存。</p>
+                <a href="{{ url_for('stock.index') }}" class="btn btn-outline-warning mt-3">更新库存</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-info mb-3">
+                    <i class="bi bi-truck"></i>
+                </div>
+                <h4 class="card-title">回传跟踪号</h4>
+                <p class="card-text text-muted">上传订单跟踪号 Excel 或手动输入，自动回传到平台。</p>
+                <a href="{{ url_for('orders.tracking') }}" class="btn btn-outline-info mt-3">去回传</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-danger mb-3">
+                    <i class="bi bi-magic"></i>
+                </div>
+                <h4 class="card-title">HD自动填模板</h4>
+                <p class="card-text text-muted">上传源数据和模板，AI 按规则自动填充并显示进度。</p>
+                <a href="{{ url_for('ai_fill.index') }}" class="btn btn-outline-danger mt-3">去处理</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-primary mb-3">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+                <h4 class="card-title">Mirakl数据同步</h4>
+                <p class="card-text text-muted">支持 Macy/Bestbuy 店铺同步，查看日志并按店铺手动同步。</p>
+                <a href="{{ url_for('orders.macy_sync_page') }}" class="btn btn-outline-primary mt-3">去同步</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

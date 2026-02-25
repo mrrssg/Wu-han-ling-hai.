@@ -1,0 +1,190 @@
+﻿{% extends "base.html" %}
+
+{% block title %}库存更新{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-10">
+
+    <div class="card mb-4 border-primary shadow-sm">
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <h5 class="card-title text-primary mb-1">
+            <i class="bi bi-database-check"></i> 供应商数据库
+          </h5>
+          <p class="card-text text-muted small mb-0">
+            上次更新时间:
+            <span class="fw-bold text-dark">{{ last_update_time if last_update_time else '暂无记录' }}</span>
+          </p>
+        </div>
+        <form action="{{ url_for('stock.sync_suppliers') }}" method="POST" onsubmit="showLoading()">
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-cloud-download"></i> 更新数据库
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card border-warning mb-3 shadow-sm">
+      <div class="card-header bg-warning text-dark py-3">
+        <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> 多平台库存自动更新</h5>
+      </div>
+      <div class="card-body p-4">
+        <form method="POST" enctype="multipart/form-data" action="{{ url_for('stock.index') }}" onsubmit="showLoading()">
+          <div class="mb-4">
+            <label for="platform" class="form-label fw-bold">1. 选择目标平台</label>
+            <select class="form-select form-select-lg" id="platform" name="platform" required>
+              <option value="" selected disabled>请选择...</option>
+              <option value="bestbuy">Bestbuy</option>
+              <option value="macy">Macy</option>
+              <option value="walmart">Walmart</option>
+            </select>
+          </div>
+
+          <div class="mb-4">
+            <label for="stock_file" class="form-label fw-bold">2. 上传平台库存模板 (.csv/.xlsx)</label>
+            <input class="form-control" type="file" id="stock_file" name="stock_file" accept=".xlsx, .xls, .csv" required>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button type="submit" class="btn btn-warning btn-lg text-dark fw-bold" id="submitBtn2">
+              <i class="bi bi-magic"></i> 检索库存并生成新表格
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-4 border-info shadow-sm">
+      <div class="card-header bg-info text-white py-3">
+        <h5 class="mb-0"><i class="bi bi-sliders"></i> 阈值规则设置</h5>
+      </div>
+      <div class="card-body p-4">
+        <form id="hdForm" method="POST">
+          <div class="mb-3">
+            <div class="fw-bold mb-2">供应商阈值规则（按最大库存所属供应商）</div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>供应商</th>
+                    <th>阈值</th>
+                    <th>大于阈值库存</th>
+                    <th>否则库存</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% set r = supplier_rules.get('haoya', {}) %}
+                  <tr>
+                    <td>豪雅</td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_haoya_threshold" value="{{ r.get('threshold', hd_threshold) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_haoya_qty_high" value="{{ r.get('qty_high', hd_qty_high) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_haoya_qty_low" value="{{ r.get('qty_low', hd_qty_low) }}" min="0"></td>
+                  </tr>
+                  {% set r = supplier_rules.get('sishun', {}) %}
+                  <tr>
+                    <td>司顺</td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_sishun_threshold" value="{{ r.get('threshold', hd_threshold) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_sishun_qty_high" value="{{ r.get('qty_high', hd_qty_high) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_sishun_qty_low" value="{{ r.get('qty_low', hd_qty_low) }}" min="0"></td>
+                  </tr>
+                  {% set r = supplier_rules.get('dajian', {}) %}
+                  <tr>
+                    <td>大建</td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_dajian_threshold" value="{{ r.get('threshold', hd_threshold) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_dajian_qty_high" value="{{ r.get('qty_high', hd_qty_high) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_dajian_qty_low" value="{{ r.get('qty_low', hd_qty_low) }}" min="0"></td>
+                  </tr>
+                  {% set r = supplier_rules.get('songmics', {}) %}
+                  <tr>
+                    <td>致欧</td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_songmics_threshold" value="{{ r.get('threshold', hd_threshold) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_songmics_qty_high" value="{{ r.get('qty_high', hd_qty_high) }}" min="0"></td>
+                    <td><input class="form-control form-control-sm" type="number" name="rule_songmics_qty_low" value="{{ r.get('qty_low', hd_qty_low) }}" min="0"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" class="btn btn-outline-dark" formaction="{{ url_for('stock.save_hd_rules') }}">
+              <i class="bi bi-save"></i> 仅保存规则
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-4 border-danger shadow-sm">
+      <div class="card-header bg-danger text-white py-3">
+        <h5 class="mb-0"><i class="bi bi-house-gear"></i> HD 更新库存 (Teapplix)</h5>
+      </div>
+      <div class="card-body p-4">
+        <form id="hdForm" method="POST">
+          <div class="mb-3">
+            <label class="form-label fw-bold">排除名单 (一行一个 SKU)</label>
+            <textarea class="form-control" name="hd_excluded" rows="6">{{ hd_excluded_text or '' }}</textarea>
+            <div class="form-text">名单内 SKU 将强制设为 0</div>
+          </div>
+
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="submit" class="btn btn-outline-dark" formaction="{{ url_for('stock.save_hd_excluded') }}">
+              <i class="bi bi-save"></i> 仅保存排除名单
+            </button>
+            <button type="submit" class="btn btn-danger" formaction="{{ url_for('stock.sync_hd') }}">
+              <i class="bi bi-arrow-repeat"></i> 同步 HD 库存
+            </button>
+          </div>
+        </form>
+
+        {% if hd_message is not none %}
+          <div class="alert mt-3 {% if hd_success %}alert-success{% else %}alert-warning{% endif %}">
+            {{ hd_message }}
+          </div>
+        {% endif %}
+
+        {% if hd_log %}
+        <div class="small text-muted mt-2">本次更新共 {{ hd_log|length }} 条</div>
+        <div class="table-responsive mt-2" style="max-height: 360px; overflow:auto;">
+          <table class="table table-sm table-striped align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>SKU</th>
+                <th>供应商</th>
+                <th>DB库存</th>
+                <th>最终库存</th>
+                <th>是否排除</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in hd_log %}
+              <tr>
+                <td><code>{{ row.sku }}</code></td>
+                <td>{{ row.supplier }}</td>
+                <td>{{ row.db_qty }}</td>
+                <td>{{ row.final_qty }}</td>
+                <td>{% if row.excluded %}是{% else %}否{% endif %}</td>
+                <td>{{ row.reason }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="alert alert-light border mt-3">
+      <h6><i class="bi bi-lightbulb"></i> <strong>操作指南：</strong></h6>
+      <ul class="mb-0 small text-muted">
+        <li><strong>第一步：</strong>点击上方“更新数据库”，确保系统里的库存是最新的。</li>
+        <li><strong>第二步：</strong>如需处理平台库存，上传平台库存模板生成新表。</li>
+        <li><strong>第三步：</strong>需要同步 HD 库存时，填写排除名单和规则并点击“同步 HD 库存”。</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

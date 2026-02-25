@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Mirakl数据同步{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h3 class="fw-light mb-1">Mirakl 数据同步</h3>
+            <div class="text-muted small">支持 macy_kuyotq、macy_wopet、bestbuy_delphi。手动同步一次只能同步一个店铺。</div>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary" onclick="loadStatus()">刷新状态</button>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="fw-semibold mb-2">手动同步</div>
+                    <div class="mb-2">
+                        <label class="form-label small text-muted">店铺</label>
+                        <select id="storeSelect" class="form-select">
+                            {% for key, label in stores.items() %}
+                            <option value="{{ key }}" {% if key == store_key %}selected{% endif %}>{{ label }} ({{ key }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small text-muted">起始时间（美东）</label>
+                        <input id="startTimeEt" type="datetime-local" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small text-muted">max（{{ max_min }}-{{ max_max }}）</label>
+                        <input id="maxInput" type="number" min="{{ max_min }}" max="{{ max_max }}" value="{{ default_max }}"
+                               class="form-control">
+                    </div>
+                    <button class="btn btn-primary w-100" onclick="runManualSync()">手动同步</button>
+                    <div class="small text-muted mt-2">
+                        注意：同步数据与“加载未发货订单”共用 /api/orders 全局冷却锁（10分钟）。
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="fw-semibold mb-2">当前状态</div>
+                    <div class="small mb-2" id="statusBox">加载中...</div>
+                    <pre class="bg-light rounded p-3 small mb-0" style="height: 180px; overflow:auto;" id="resultBox">等待操作...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="fw-semibold mb-2">最近同步日志</div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>类型</th>
+                            <th>状态</th>
+                            <th>开始(ET)</th>
+                            <th>结束(ET)</th>
+                            <th>订单数</th>
+                            <th>行数</th>
+                            <th>耗时(ms)</th>
+                            <th>原因</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function safeText(v){
+    if(v === null || v === undefined) return "";
+    return String(v);
+}
+
+function escapeHtml(str){
+    return safeText(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function currentStoreKey(){
+    return document.getElementById("storeSelect").value;
+}
+
+function renderStatus(data){
+    const cooldown = data.cooldown || {};
+    const box = document.getElementById("statusBox");
+    box.innerHTML = `
+        <div>store_key: <b>${escapeHtml(data.store_key || "")}</b></div>
+        <div>store_label: <b>${escapeHtml(data.store_label || "")}</b></div>
+        <div>last_sync_time(ET): <b>${escapeHtml(data.last_sync_time_et || "-")}</b></div>
+        <div>cooldown剩余: <b>${escapeHtml(cooldown.remaining_seconds || 0)}s</b></div>
+        <div>last_action: <b>${escapeHtml(cooldown.last_action || "-")}</b></div>
+        <div>next_allowed_at_utc: <b>${escapeHtml(cooldown.next_allowed_at_utc || "-")}</b></div>
+    `;
+}
+
+function renderLogs(logs){
+    const tbody = document.getElementById("logsBody");
+    tbody.innerHTML = "";
+    (logs || []).forEach(log => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${escapeHtml(log.id)}</td>
+            <td>${escapeHtml(log.run_type)} / ${escapeHtml(log.trigger_source)}</td>
+            <td>${escapeHtml(log.status)}</td>
+            <td>${escapeHtml(log.started_at_et)}</td>
+            <td>${escapeHtml(log.finished_at_et || "")}</td>
+            <td>${escapeHtml(log.orders_count)}</td>
+            <td>${escapeHtml(log.order_lines_upserted)}</td>
+            <td>${escapeHtml(log.duration_ms)}</td>
+            <td class="text-danger">${escapeHtml(log.reason_message || "")}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function loadStatus(){
+    const resultBox = document.getElementById("resultBox");
+    const store = currentStoreKey();
+    try{
+        const res = await fetch(`/orders/sync/macy/status?store=${encodeURIComponent(store)}`);
+        const data = await res.json();
+        if(!res.ok || !data.success){
+            resultBox.textContent = data.msg || `HTTP ${res.status}`;
+            return;
+        }
+        renderStatus(data.data || {});
+        renderLogs((data.data || {}).logs || []);
+    }catch(err){
+        resultBox.textContent = String(err);
+    }
+}
+
+async function runManualSync(){
+    const resultBox = document.getElementById("resultBox");
+    const store = currentStoreKey();
+    const startTimeEt = document.getElementById("startTimeEt").value;
+    const maxValue = Number(document.getElementById("maxInput").value || {{ default_max }});
+
+    resultBox.textContent = "手动同步执行中...";
+    try{
+        const res = await fetch("/orders/sync/macy/run", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                store_key: store,
+                start_time_et: startTimeEt,
+                max: maxValue
+            })
+        });
+        const data = await res.json();
+        resultBox.textContent = JSON.stringify(data, null, 2);
+        await loadStatus();
+    }catch(err){
+        resultBox.textContent = String(err);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("storeSelect").addEventListener("change", loadStatus);
+    loadStatus();
+});
+</script>
+{% endblock %}

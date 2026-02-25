@@ -1,0 +1,32 @@
+[
+  {
+    "success": true,
+    "code": "200",
+    "data": [
+      {
+        "sku": "W2225P156314",
+        "buyerInventoryInfo": {
+          "totalBuyerAvailableInventory": 0,
+          "totalMarginInventory": 0,
+          "totalFutureInventory": 0,
+          "totalSystemLockedInventory": 0,
+          "totalBuyerLockedInventory": 0,
+          "buyerInventoryDistribution": [],
+          "totalStorageFee": 0,
+          "unpaidStorageFee": 0,
+          "currency": "USD"
+        },
+        "sellerInventoryInfo": {
+          "sellerAvailableInventory": 7,
+          "discountAvailableInventory": 0,
+          "sellerInventoryDistribution": [],
+          "nextArrivalInventory": null
+        }
+      }
+    ],
+    "requestId": "67eb4007f3d642fc",
+    "msg": "success",
+    "subMsg": null,
+    "recommend": "https://www.gigab2b.com/index.php?route=information/open_api/index&doc_id=19"
+  }
+]

@@ -1,0 +1,190 @@
+﻿{% extends "base.html" %}
+
+{% block title %}HD自动填模板{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-10">
+    <div class="card mb-4">
+      <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-magic"></i> HD自动填模板</h5>
+      </div>
+      <div class="card-body">
+        <form id="aiFillForm" enctype="multipart/form-data" onsubmit="return false;">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-bold">源数据文件 (.xlsx)</label>
+              <input class="form-control" type="file" name="source_file" accept=".xlsx,.xls" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-bold">模板文件 (.xlsx)</label>
+              <input class="form-control" type="file" name="template_file" accept=".xlsx,.xls" required>
+            </div>
+          </div>
+
+          <hr class="my-4">
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-bold">白名单 (一行一个字段名)</label>
+              <textarea class="form-control" name="whitelist" rows="8">{{ whitelist_text }}</textarea>
+              <div class="form-text">非必填但希望 AI 填的字段</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-bold">固定值 (JSON)</label>
+              <textarea class="form-control" name="fixed_values" rows="8">{{ fixed_values_text }}</textarea>
+              <div class="form-text">必须是 JSON 对象，例如 {"Field": "Value"}</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">下拉选项阈值</label>
+              <input class="form-control" type="number" name="max_options_threshold" value="{{ max_options_threshold }}" min="1" max="500">
+              <div class="form-text">超过阈值则不发送选项列表给 AI</div>
+            </div>
+          </div>
+
+          <div class="d-grid gap-2 mt-4">
+            <button class="btn btn-primary btn-lg" type="button" id="startBtn" onclick="startJob()">
+              <i class="bi bi-play-fill"></i> 开始 AI 填表
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card" id="progressCard" style="display:none;">
+      <div class="card-header bg-white">
+        <h6 class="mb-0"><i class="bi bi-speedometer2"></i> 填表进度</h6>
+      </div>
+      <div class="card-body">
+        <div class="mb-2"><strong>状态:</strong> <span id="statusText">-</span></div>
+        <div class="mb-2"><strong>当前 SKU:</strong> <span id="currentSku">-</span></div>
+        <div class="progress mb-3" style="height: 20px;">
+          <div class="progress-bar" id="progressBar" role="progressbar" style="width:0%">0%</div>
+        </div>
+        <div class="d-flex gap-2 mb-3">
+          <button class="btn btn-outline-secondary" type="button" id="refreshBtn" onclick="pollProgress()">刷新</button>
+          <a class="btn btn-success" id="downloadBtn" style="display:none;" href="#">下载结果</a>
+        </div>
+
+        <div class="table-responsive" style="max-height: 360px; overflow:auto;">
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>Row</th>
+                <th>SKU</th>
+                <th>Status</th>
+                <th>Filled</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="logBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentJobId = null;
+  let pollTimer = null;
+
+  async function startJob() {
+    const btn = document.getElementById("startBtn");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 正在启动...';
+
+    const form = document.getElementById("aiFillForm");
+    const formData = new FormData(form);
+
+    try {
+      const res = await fetch("/ai-fill/start", { method: "POST", body: formData });
+      const payload = await res.json();
+      if (!payload.ok) {
+        alert(payload.error || "启动失败");
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-play-fill"></i> 开始 AI 填表';
+        return;
+      }
+
+      currentJobId = payload.job_id;
+      document.getElementById("progressCard").style.display = "block";
+      document.getElementById("downloadBtn").style.display = "none";
+      document.getElementById("logBody").innerHTML = "";
+
+      await pollProgress();
+      pollTimer = setInterval(pollProgress, 1000);
+    } catch (e) {
+      alert("启动失败: " + e);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-play-fill"></i> 开始 AI 填表';
+    }
+  }
+
+  async function pollProgress() {
+    if (!currentJobId) return;
+    const res = await fetch(`/ai-fill/progress/${currentJobId}`);
+    if (!res.ok) return;
+    const payload = await res.json();
+    if (!payload.ok) return;
+
+    const data = payload.data;
+    const total = data.total || 0;
+    const current = data.current || 0;
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+
+    document.getElementById("statusText").textContent = data.status || "-";
+    document.getElementById("currentSku").textContent = data.current_sku || "-";
+
+    const bar = document.getElementById("progressBar");
+    bar.style.width = `${percent}%`;
+    bar.textContent = `${percent}%`;
+
+    renderLog(data.rows || []);
+
+    if (data.status === "done" || data.status === "error") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      const btn = document.getElementById("startBtn");
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-play-fill"></i> 开始 AI 填表';
+
+      if (data.status === "done") {
+        const dl = document.getElementById("downloadBtn");
+        dl.href = `/ai-fill/download/${currentJobId}`;
+        dl.style.display = "inline-block";
+      } else if (data.error) {
+        alert("任务错误: " + data.error);
+      }
+    }
+  }
+
+  function renderLog(rows) {
+    const tbody = document.getElementById("logBody");
+    tbody.innerHTML = "";
+
+    rows.forEach(r => {
+      const tr = document.createElement("tr");
+      const filled = r.filled ? JSON.stringify(r.filled) : "";
+      tr.innerHTML = `
+        <td>${r.row}</td>
+        <td>${escapeHtml(r.sku)}</td>
+        <td>${escapeHtml(r.status)}</td>
+        <td><pre class="mb-0" style="white-space: pre-wrap;">${escapeHtml(filled)}</pre></td>
+        <td class="text-danger">${escapeHtml(r.error || "")}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(text) {
+    if (text === null || text === undefined) return "";
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% block title %}全平台手动发货 - ERP系统{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+        <div>
+            <h3 class="fw-light mb-1">全平台未发货订单</h3>
+            <div class="text-muted small">支持 Macy / Walmart / Bestbuy，按 CostwayOrder 更新 Tracking 并标记为已发货。</div>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="/orders/tracking" class="btn btn-outline-secondary">返回回传页</a>
+            <button class="btn btn-primary" onclick="submitSelected()">写入数据库</button>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <div>
+                <label class="form-label mb-1">平台筛选</label>
+                <select id="platformFilter" class="form-select form-select-sm" style="min-width:140px;" onchange="applyFilters()">
+                    <option value="all">全部</option>
+                    <option value="macy">Macy</option>
+                    <option value="walmart">Walmart</option>
+                    <option value="bestbuy">Bestbuy</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label mb-1">每页条数</label>
+                <select id="pageSize" class="form-select form-select-sm" style="min-width:120px;" onchange="applyFilters()">
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                </select>
+            </div>
+            <div class="ms-auto small text-muted" id="pageInfo"></div>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary" onclick="prevPage()">上一页</button>
+                <button class="btn btn-outline-secondary" onclick="nextPage()">下一页</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="mb-2 fw-semibold">批量粘贴（左=跟踪号，右=CostwayOrder）</div>
+            <div class="text-muted small mb-2">支持 TAB / 多空格 / 单空格分隔，粘贴后会自动填充并勾选匹配行。</div>
+            <textarea id="pasteArea" class="form-control mb-2" rows="5" placeholder="跟踪号[TAB]CostwayOrder"></textarea>
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-outline-primary btn-sm" onclick="parsePaste()">解析并填充</button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="selectAll(true)">全选</button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="selectAll(false)">全不选</button>
+                <span id="pasteInfo" class="small text-muted ms-2"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:40px;">选</th>
+                            <th>平台</th>
+                            <th>CostwayOrder</th>
+                            <th>订单号</th>
+                            <th>行ID</th>
+                            <th>SKU</th>
+                            <th>数量</th>
+                            <th>客户</th>
+                            <th>日期</th>
+                            <th style="min-width:180px;">Tracking</th>
+                            <th style="min-width:120px;">状态</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orderBody">
+                        {% for row in orders %}
+                        <tr data-platform="{{ row.platform }}" data-costway="{{ row.costway_order }}">
+                            <td><input type="checkbox" class="row-check"></td>
+                            <td>{{ row.platform_label }}</td>
+                            <td class="text-primary fw-semibold">{{ row.costway_order }}</td>
+                            <td>
+                                <div>{{ row.order_number }}</div>
+                                {% if row.po_number %}
+                                <div class="text-muted small">PO: {{ row.po_number }}</div>
+                                {% endif %}
+                            </td>
+                            <td>{{ row.order_line_no }}</td>
+                            <td>{{ row.sku }}</td>
+                            <td>{{ row.qty }}</td>
+                            <td>{{ row.customer_name }}</td>
+                            <td>{{ row.order_date }}</td>
+                            <td>
+                                <input class="form-control form-control-sm tracking-input" value="{{ row['Tracking'] or '' }}">
+                            </td>
+                            <td class="status-cell text-muted">{{ row['Status'] or '未发货' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="small text-muted mt-2">共 {{ orders|length }} 条未发货订单。</div>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentPage = 1;
+
+function selectAll(flag){
+    document.querySelectorAll(".row-check").forEach(chk => chk.checked = flag);
+}
+
+function parsePaste(){
+    const text = (document.getElementById("pasteArea").value || "").trim();
+    const info = document.getElementById("pasteInfo");
+    if(!text){
+        info.textContent = "没有可解析内容。";
+        return;
+    }
+
+    const rows = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const map = new Map();
+    document.querySelectorAll("#orderBody tr").forEach(tr => {
+        const key = (tr.dataset.costway || "").trim();
+        if(key){
+            map.set(key, tr);
+        }
+    });
+
+    let matched = 0;
+    let missing = 0;
+    const notFound = [];
+
+    rows.forEach(line => {
+        const parts = line.split(/\s+/);
+        if(parts.length < 2){
+            return;
+        }
+        const tracking = parts[0].trim();
+        const costway = parts[1].trim();
+        const tr = map.get(costway);
+        if(tr){
+            const input = tr.querySelector(".tracking-input");
+            const chk = tr.querySelector(".row-check");
+            if(input){
+                input.value = tracking;
+            }
+            if(chk){
+                chk.checked = true;
+            }
+            matched += 1;
+        }else{
+            missing += 1;
+            notFound.push(costway);
+        }
+    });
+
+    info.textContent = `已匹配 ${matched} 条，未匹配 ${missing} 条`;
+    if(notFound.length){
+        console.warn("未匹配 CostwayOrder:", notFound.slice(0, 20));
+    }
+}
+
+function collectRows(){
+    const rows = [];
+    document.querySelectorAll("#orderBody tr").forEach(tr => {
+        const chk = tr.querySelector(".row-check");
+        const input = tr.querySelector(".tracking-input");
+        if(!chk || !chk.checked){
+            return;
+        }
+        const platform = (tr.dataset.platform || "").trim();
+        const costway = (tr.dataset.costway || "").trim();
+        const tracking = input ? input.value.trim() : "";
+        rows.push({platform, costway_order: costway, tracking});
+    });
+    return rows;
+}
+
+async function submitSelected(){
+    const rows = collectRows();
+    if(!rows.length){
+        alert("请先勾选要写入的订单");
+        return;
+    }
+
+    const res = await fetch("/orders/manual-ship/submit", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({rows})
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success){
+        alert(data.msg || "提交失败");
+        return;
+    }
+
+    const resultMap = new Map();
+    data.results.forEach(r => {
+        const key = `${r.platform}__${r.costway_order}`;
+        resultMap.set(key, r);
+    });
+
+    document.querySelectorAll("#orderBody tr").forEach(tr => {
+        const platform = (tr.dataset.platform || "").trim();
+        const costway = (tr.dataset.costway || "").trim();
+        const key = `${platform}__${costway}`;
+        const result = resultMap.get(key);
+        const statusCell = tr.querySelector(".status-cell");
+        if(result){
+            if(result.ok){
+                statusCell.textContent = "已发货";
+                statusCell.classList.remove("text-danger");
+                statusCell.classList.add("text-success");
+            }else{
+                statusCell.textContent = result.msg || "失败";
+                statusCell.classList.remove("text-success");
+                statusCell.classList.add("text-danger");
+            }
+        }
+    });
+
+    alert(`写入完成：成功 ${data.stats.updated} 条，失败 ${data.stats.failed} 条`);
+}
+
+function getVisibleRows(){
+    const platform = document.getElementById("platformFilter").value;
+    const rows = Array.from(document.querySelectorAll("#orderBody tr"));
+    return rows.filter(r => {
+        if(platform === "all") return true;
+        return (r.dataset.platform || "") === platform;
+    });
+}
+
+function applyFilters(){
+    const pageSize = parseInt(document.getElementById("pageSize").value, 10) || 20;
+    const rows = getVisibleRows();
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if(currentPage > totalPages) currentPage = totalPages;
+
+    document.querySelectorAll("#orderBody tr").forEach(r => r.style.display = "none");
+
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    rows.slice(start, end).forEach(r => r.style.display = "");
+
+    const info = document.getElementById("pageInfo");
+    info.textContent = `第 ${currentPage} / ${totalPages} 页，共 ${total} 条`;
+}
+
+function nextPage(){
+    const pageSize = parseInt(document.getElementById("pageSize").value, 10) || 20;
+    const total = getVisibleRows().length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if(currentPage < totalPages){
+        currentPage += 1;
+        applyFilters();
+    }
+}
+
+function prevPage(){
+    if(currentPage > 1){
+        currentPage -= 1;
+        applyFilters();
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    applyFilters();
+});
+</script>
+{% endblock %}

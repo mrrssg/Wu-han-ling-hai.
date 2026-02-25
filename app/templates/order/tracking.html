@@ -1,0 +1,396 @@
+﻿{% extends "base.html" %}
+
+{% block title %}回传与导出跟踪号 - ERP系统{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h3 class="fw-light">回传跟踪号 / 导出跟踪号</h3>
+        <p class="text-muted">支持 Costway / Vevor / 大建 回传，并可导出不同渠道的跟踪号。</p>
+    </div>
+
+    <div class="row g-4">
+
+        <div class="col-lg-6">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body p-4">
+                    <h5 class="card-title mb-3">回传跟踪号</h5>
+
+                    <div class="mb-3">
+                        <label class="form-label">上传跟踪号 Excel</label>
+                        <input type="file" id="trackingFile" class="form-control">
+                        <small class="text-muted">Excel 必须包含：订单号 + TrackingNumber</small>
+                    </div>
+
+                    <button class="btn btn-primary w-100" onclick="uploadFile()">上传文件</button>
+                    <div id="uploadInfo" class="mt-3 small"></div>
+
+                    <hr class="my-4">
+
+                    <div class="mb-3">
+                        <label class="form-label">选择回传平台</label>
+                        <select class="form-select" id="platformSelect">
+                            <option value="costway">Costway 订单回传</option>
+                            <option value="vevor">Vevor 订单回传</option>
+                            <option value="dajian">大建订单回传</option>
+                        </select>
+                    </div>
+
+                    <button class="btn btn-success w-100" onclick="pushTracking()">开始回传</button>
+
+                    <div class="mt-3">
+                        <pre id="pushResult" class="bg-light p-3 rounded small" style="height: 200px; overflow:auto;"></pre>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <div class="mb-2 fw-semibold">表格回传（Vevor / 大建）</div>
+                    <div class="mb-2 text-muted small">从 Excel 复制两列（左=跟踪号，右=订单号），粘贴后解析为表格。</div>
+
+                    <textarea id="trackingPasteArea" class="form-control mb-2" rows="6" placeholder="跟踪号[TAB]订单号"></textarea>
+                    <div class="d-flex gap-2 mb-2">
+                        <button class="btn btn-outline-primary btn-sm" onclick="parsePaste()">解析为表格</button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="addRow()">新增一行</button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="deleteSelectedRows()">删除选中</button>
+                        <button class="btn btn-outline-primary btn-sm" onclick="pushTrackingGrid()">批量回传</button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width:40px;">选</th>
+                                    <th>跟踪号</th>
+                                    <th>订单号</th>
+                                    <th style="width:70px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trackingGridBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body p-4">
+                    <h5 class="card-title mb-3">导出跟踪号</h5>
+
+                    <p class="text-muted">选择渠道直接导出 Excel。</p>
+
+                    <div class="d-grid gap-3">
+                        <a href="/orders/shipping" class="btn btn-outline-primary">Macy订单发货</a>
+                        <a href="/orders/shipping/bestbuy" class="btn btn-outline-primary">Bestbuy订单发货</a>
+                        <a href="/orders/manual-ship" class="btn btn-outline-primary">全平台手动发货</a>
+
+                        <a href="/orders/tracking/export/bestbuy_top" class="btn btn-outline-success">导出 Bestbuy-Top 跟踪号</a>
+                        <a href="/orders/tracking/export/bestbuy_del" class="btn btn-outline-success">导出 Bestbuy-Del 跟踪号</a>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <div class="alert alert-info small">
+                        导出文件格式：订单号、SKU、TrackingNumber、Carrier、ShipDate
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+let uploadedPath = null;
+
+async function uploadFile(){
+    let file = document.getElementById("trackingFile").files[0];
+    let infoBox = document.getElementById("uploadInfo");
+
+    infoBox.innerHTML = "";
+
+    if(!file){
+        infoBox.innerHTML = `<span class="text-danger">请先选择 Excel 文件</span>`;
+        return;
+    }
+
+    let formData = new FormData();
+    formData.append("file", file);
+
+    try{
+        let res = await fetch("/orders/tracking/upload", {
+            method: "POST",
+            body: formData
+        });
+
+        let data = await res.json();
+
+        if(data.success){
+            infoBox.innerHTML = `
+                <div class="text-success">
+                    上传成功<br>
+                    共读取 <b>${data.rows}</b> 条数据
+                </div>
+            `;
+        }else{
+            infoBox.innerHTML = `<span class="text-danger">上传失败：${data.msg}</span>`;
+        }
+    }catch(err){
+        infoBox.innerHTML = `<span class="text-danger">请求失败：${err}</span>`;
+    }
+}
+
+async function pushTracking(){
+    let file = document.getElementById("trackingFile").files[0];
+    if(!file){
+        alert("???? Excel ??");
+        return;
+    }
+
+    let platform = document.getElementById("platformSelect").value;
+    let resultBox = document.getElementById("pushResult");
+    resultBox.textContent = "???????...";
+
+    let formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        let res = await fetch(`/orders/tracking/push/${platform}`, {
+            method: "POST",
+            body: formData
+        });
+
+        let data = await res.json();
+        if(!res.ok || !data.success){
+            const msg = data.msg || `HTTP ${res.status}`;
+            resultBox.textContent = `?????${msg}`;
+            return;
+        }
+
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultBox.textContent = `?????${err}`;
+    }
+}
+
+function escapeHtml(str){
+    return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+async function pushTrackingText(){
+    let platform = document.getElementById("platformSelect").value;
+    if(platform !== "vevor" && platform !== "dajian"){
+        alert("粘贴回传只支持 Vevor / 大建");
+        return;
+    }
+
+    const text = document.getElementById("trackingText").value || "";
+    let resultBox = document.getElementById("pushResult");
+    resultBox.textContent = "正在处理粘贴内容...";
+
+    try{
+        let res = await fetch(`/orders/tracking/push-text/${platform}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({text})
+        });
+        let data = await res.json();
+        if(!res.ok || !data.success){
+            const msg = data.msg || `HTTP ${res.status}`;
+            resultBox.textContent = `回传失败：${msg}`;
+            return;
+        }
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    }catch(err){
+        resultBox.textContent = `回传失败：${err}`;
+    }
+}
+
+function addRow(tracking = "", orderId = "", autoSelect = false, errorMsg = ""){
+    const tbody = document.getElementById("trackingGridBody");
+    const tr = document.createElement("tr");
+    if(errorMsg){
+        tr.classList.add("table-danger");
+    }
+    tr.innerHTML = `
+        <td><input type="checkbox" class="row-check" ${autoSelect ? "checked" : ""}></td>
+        <td><input class="form-control form-control-sm tracking-id" value="${escapeHtml(tracking)}"></td>
+        <td><input class="form-control form-control-sm order-id" value="${escapeHtml(orderId)}"></td>
+        <td><button class="btn btn-outline-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
+    `;
+    if(errorMsg){
+        const err = document.createElement("div");
+        err.className = "text-danger small mt-1";
+        err.textContent = errorMsg;
+        tr.cells[2].appendChild(err);
+    }
+    tbody.appendChild(tr);
+}
+
+function deleteSelectedRows(){
+    const rows = document.querySelectorAll("#trackingGridBody tr");
+    rows.forEach(r => {
+        const chk = r.querySelector(".row-check");
+        if(chk && chk.checked){
+            r.remove();
+        }
+    });
+}
+
+function gridToText(){
+    const rows = document.querySelectorAll("#trackingGridBody tr");
+    const lines = [];
+    rows.forEach(r => {
+        const tracking = (r.querySelector(".tracking-id")?.value || "").trim();
+        const orderId = (r.querySelector(".order-id")?.value || "").trim();
+        if(orderId && tracking){
+            lines.push(`${tracking}\t${orderId}`);
+        }
+    });
+    return lines.join("\n");
+}
+
+async function pushTrackingGrid(){
+    let platform = document.getElementById("platformSelect").value;
+    if(platform !== "vevor" && platform !== "dajian"){
+        alert("表格回传只支持 Vevor / 大建");
+        return;
+    }
+
+    const text = gridToText();
+    if(!text){
+        alert("请先填写订单号和跟踪号");
+        return;
+    }
+
+    let resultBox = document.getElementById("pushResult");
+    resultBox.textContent = "正在处理表格内容...";
+
+    try{
+        let res = await fetch(`/orders/tracking/push-text/${platform}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({text})
+        });
+        let data = await res.json();
+        if(!res.ok || !data.success){
+            const msg = data.msg || `HTTP ${res.status}`;
+            resultBox.textContent = `回传失败：${msg}`;
+            return;
+        }
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    }catch(err){
+        resultBox.textContent = `回传失败：${err}`;
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    const tbody = document.getElementById("trackingGridBody");
+    if(tbody){
+        addRow();
+    }
+});
+
+function looksLikeOrderId(val){
+    const v = String(val || "").trim();
+    if(!v) return false;
+    return v.includes("-") || /[A-Za-z]/.test(v);
+}
+
+function looksLikeTracking(val){
+    const v = String(val || "").trim().toUpperCase();
+    if(!v) return false;
+    return v.startsWith("1Z") || v.startsWith("D1") || /^\d+$/.test(v);
+}
+
+function parsePaste(){
+    const text = document.getElementById("trackingPasteArea").value || "";
+    const tbody = document.getElementById("trackingGridBody");
+    tbody.innerHTML = "";
+
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const seen = new Set();
+    let added = 0;
+
+    lines.forEach(line => {
+        let parts = line.split("\t");
+        if(parts.length < 2){
+            // fallback: split by 2+ spaces
+            parts = line.split(/\s{2,}/);
+        }
+        if(parts.length < 2){
+            // fallback: split by 1+ spaces
+            parts = line.split(/\s+/);
+        }
+        if(parts.length < 2){
+            return;
+        }
+
+        const rawLeft = (parts[0] || "").trim();
+        const rawRight = (parts[1] || "").trim();
+
+        // If the line contains multiple pairs (e.g., pasted without line breaks),
+        // try to auto-pair by detecting tracking/order tokens.
+        let tracking = rawLeft;
+        let orderId = rawRight;
+        if(parts.length > 2){
+            const tokens = parts.map(p => p.trim()).filter(Boolean);
+            const pairs = [];
+            let currentTracking = null;
+            for(const t of tokens){
+                if(looksLikeTracking(t)){
+                    currentTracking = t;
+                    continue;
+                }
+                if(currentTracking && looksLikeOrderId(t)){
+                    pairs.push([currentTracking, t]);
+                    currentTracking = null;
+                }
+            }
+            if(pairs.length){
+                pairs.forEach(([t, o]) => {
+                    if(!t || !o) return;
+                    const key = `${t}||${o}`;
+                    if(seen.has(key)) return;
+                    seen.add(key);
+                    const trackingOk = looksLikeTracking(t);
+                    const orderOk = looksLikeOrderId(o);
+                    const errorMsg = (!trackingOk || !orderOk) ? "格式可能不正确" : "";
+                    addRow(t, o, true, errorMsg);
+                    added += 1;
+                });
+                return;
+            }
+        }
+        if(!tracking || !orderId){
+            return;
+        }
+
+        const key = `${tracking}||${orderId}`;
+        if(seen.has(key)){
+            return;
+        }
+        seen.add(key);
+
+        const trackingOk = looksLikeTracking(tracking);
+        const orderOk = looksLikeOrderId(orderId);
+        const errorMsg = (!trackingOk || !orderOk) ? "格式可能不正确" : "";
+        addRow(tracking, orderId, true, errorMsg);
+        added += 1;
+    });
+
+    if(added === 0){
+        alert("没有解析到有效行，请确认是两列（跟踪号 + 订单号）并用 TAB 或多个空格分隔。");
+    }
+}
+
+</script>
+
+{% endblock %}

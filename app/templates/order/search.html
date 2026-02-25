@@ -1,0 +1,80 @@
+﻿{% extends "base.html" %}
+
+{% block title %}订单查询{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+            <h5 class="card-title mb-0">搜索订单</h5>
+            <form method="POST" action="/orders/costway-sku/backfill">
+                <button type="submit" class="btn btn-outline-secondary btn-sm">补全缺失 Costway_SKU</button>
+            </form>
+        </div>
+        <form method="POST" class="row g-3">
+            <div class="col-md-10">
+                <input type="text" class="form-control" name="keyword" placeholder="输入订单号 / SKU / 姓名 / 电话..." value="{{ request.form.get('keyword','') }}" required>
+            </div>
+            <div class="col-md-2">
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> 查询</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if results %}
+<div class="card">
+    <div class="card-header bg-light">
+        查询结果 (共 {{ results|length }} 条)
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover table-striped align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>供应商来源表</th>
+                    <th>平台来源</th>
+                    <th>供应商 SKU</th>
+                    <th>供应商单号</th>
+                    <th>PO单号</th>
+                    <th>姓名</th>
+                    <th>SKU</th>
+                    <th>数量</th>
+                    <th>日期</th>
+                    <th>状态</th>
+                    <th>跟踪号</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in results %}
+                <tr>
+                    <td><span class="badge bg-dark">{{ row.SupplierSource or '未知' }}</span></td>
+                    <td><span class="badge bg-secondary">{{ row.Source }}</span></td>
+                    <td class="fw-bold text-secondary">{{ row.CostwaySKU }}</td>
+                    <td><span class="badge bg-info text-dark">{{ row.CostwayOrder }}</span></td>
+                    <td>{{ row.OrderID }}</td>
+                    <td>{{ row.FullName }}</td>
+                    <td><code>{{ row.SKU }}</code></td>
+                    <td>{{ row.Qty }}</td>
+                    <td>{{ row.Date }}</td>
+                    <td>
+                        {% if row.Status == '已发货' %}
+                            <span class="badge bg-success">已发货</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">未发货</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ row.Tracking }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% elif request.method == 'POST' %}
+<div class="alert alert-warning text-center">
+    未找到相关订单信息。
+</div>
+{% endif %}
+{% endblock %}

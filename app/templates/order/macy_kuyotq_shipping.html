@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+
+{% block title %}Macy-kuyotq 订单发货{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h3 class="fw-light mb-1">Macy-kuyotq 订单发货</h3>
+            <div class="text-muted small">先拉取未发货订单，再匹配 Tracking，最后批量发货。</div>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary" onclick="loadShipments()">加载未发货订单</button>
+            <button class="btn btn-primary" onclick="submitShipments()">批量发货</button>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="fw-semibold mb-2">数据概览</div>
+                    <div class="small text-muted" id="statsBox">暂无数据</div>
+                    <div class="mt-3 d-flex flex-wrap gap-2">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="selectAll(true)">全选可发货</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="selectAll(false)">清空选择</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="addShipment()">添加 shipment</button>
+                    </div>
+                    <div class="mt-3 small text-muted">
+                        提示：Tracking 为空的行会被标记为不可发货，但仍可保留编辑。
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="fw-semibold mb-2">发货结果</div>
+                    <pre class="bg-light rounded p-3 small mb-0" style="height: 160px; overflow:auto;" id="resultBox">等待发货...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:40px;">选</th>
+                            <th>订单号</th>
+                            <th>行ID</th>
+                            <th>SKU</th>
+                            <th style="width:90px;">数量</th>
+                            <th>Tracking</th>
+                            <th style="width:130px;">承运商</th>
+                            <th style="width:120px;">状态</th>
+                            <th style="width:70px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shipmentsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let shipments = [];
+
+function detectCarrier(tracking){
+    if(!tracking) return "fedex";
+    const t = String(tracking).split(",")[0].trim().toUpperCase();
+    if(t.startsWith("D1")) return "Ontrac";
+    if(t.startsWith("1Z")) return "UPS";
+    return "fedex";
+}
+
+function renderTable(){
+    const tbody = document.getElementById("shipmentsBody");
+    tbody.innerHTML = "";
+
+    shipments.forEach((s, idx) => {
+        const canShip = !!(s.tracking && String(s.tracking).trim());
+        s.can_ship = canShip;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>
+                <input type="checkbox" ${s.selected ? "checked" : ""} ${canShip ? "" : "disabled"}
+                    onchange="toggleRow(${idx}, this.checked)">
+            </td>
+            <td><input class="form-control form-control-sm" value="${escapeHtml(s.order_id || "")}" oninput="updateField(${idx}, 'order_id', this.value)"></td>
+            <td><input class="form-control form-control-sm" value="${escapeHtml(s.line_id || "")}" oninput="updateField(${idx}, 'line_id', this.value)"></td>
+            <td><input class="form-control form-control-sm" value="${escapeHtml(s.sku || "")}" oninput="updateField(${idx}, 'sku', this.value)"></td>
+            <td><input type="number" min="1" class="form-control form-control-sm" value="${escapeHtml(String(s.qty || 0))}" oninput="updateField(${idx}, 'qty', this.value)"></td>
+            <td><input class="form-control form-control-sm" value="${escapeHtml(s.tracking || "")}" oninput="updateTracking(${idx}, this.value)"></td>
+            <td>
+                <select class="form-select form-select-sm" onchange="updateField(${idx}, 'carrier', this.value)">
+                    <option value="fedex" ${s.carrier === "fedex" ? "selected" : ""}>FedEx</option>
+                    <option value="UPS" ${s.carrier === "UPS" ? "selected" : ""}>UPS</option>
+                    <option value="Ontrac" ${s.carrier === "Ontrac" ? "selected" : ""}>Ontrac</option>
+                </select>
+            </td>
+            <td>
+                <span class="badge ${canShip ? "bg-success" : "bg-secondary"}">
+                    ${canShip ? "可发货" : "缺少Tracking"}
+                </span>
+                ${s.note ? `<div class="text-muted small">${escapeHtml(s.note)}</div>` : ""}
+                ${s.status_msg ? `<div class="small">${escapeHtml(s.status_msg)}</div>` : ""}
+            </td>
+            <td>
+                <button class="btn btn-sm btn-outline-danger" onclick="removeRow(${idx})">删除</button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    updateStats();
+}
+
+function updateStats(){
+    const total = shipments.length;
+    const shippable = shipments.filter(s => s.can_ship).length;
+    const selected = shipments.filter(s => s.selected).length;
+    const box = document.getElementById("statsBox");
+    box.textContent = `共 ${total} 条 | 可发货 ${shippable} 条 | 已选 ${selected} 条`;
+}
+
+function toggleRow(idx, checked){
+    shipments[idx].selected = checked;
+    updateStats();
+}
+
+function updateField(idx, field, value){
+    shipments[idx][field] = value;
+}
+
+function updateTracking(idx, value){
+    shipments[idx].tracking = value;
+    shipments[idx].carrier = detectCarrier(value);
+    renderTable();
+}
+
+function selectAll(flag){
+    shipments.forEach(s => {
+        if(flag){
+            s.selected = !!(s.tracking && String(s.tracking).trim());
+        }else{
+            s.selected = false;
+        }
+    });
+    renderTable();
+}
+
+function addShipment(){
+    shipments.unshift({
+        order_id: "",
+        line_id: "",
+        sku: "",
+        qty: 1,
+        tracking: "",
+        carrier: "fedex",
+        selected: false,
+        note: "手动添加"
+    });
+    renderTable();
+}
+
+function removeRow(idx){
+    shipments.splice(idx, 1);
+    renderTable();
+}
+
+function escapeHtml(str){
+    return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+async function loadShipments(){
+    const resultBox = document.getElementById("resultBox");
+    resultBox.textContent = "正在获取未发货订单...";
+
+    try{
+        const res = await fetch("/orders/shipping/macy_kuyotq/preview", {method: "POST"});
+        const data = await res.json();
+        if(!res.ok || !data.success){
+            resultBox.textContent = data.msg || `HTTP ${res.status}`;
+            return;
+        }
+        shipments = (data.data || []).map(s => ({
+            ...s,
+            selected: !!(s.tracking && String(s.tracking).trim()),
+        }));
+        renderTable();
+        resultBox.textContent = "已加载，可编辑后发货。";
+    }catch(err){
+        resultBox.textContent = String(err);
+    }
+}
+
+async function submitShipments(){
+    const resultBox = document.getElementById("resultBox");
+    const toSend = shipments
+        .filter(s => s.selected)
+        .map(s => ({
+            order_id: String(s.order_id || "").trim(),
+            line_id: String(s.line_id || "").trim(),
+            sku: String(s.sku || "").trim(),
+            qty: Number(s.qty || 0),
+            tracking: String(s.tracking || "").trim(),
+            carrier: String(s.carrier || "fedex").trim()
+        }))
+        .filter(s => s.order_id && s.line_id && s.sku && s.tracking && s.qty > 0);
+
+    if(!toSend.length){
+        resultBox.textContent = "没有可提交的 shipments（请检查勾选和 Tracking）。";
+        return;
+    }
+
+    resultBox.textContent = "正在提交发货...";
+    try{
+        const res = await fetch("/orders/shipping/macy_kuyotq/submit", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({shipments: toSend})
+        });
+        const data = await res.json();
+        if(!res.ok || !data.success){
+            resultBox.textContent = data.msg || `HTTP ${res.status}`;
+            return;
+        }
+
+        const success = data.result?.shipment_success || [];
+        const errors = data.result?.shipment_errors || [];
+
+        const successIds = new Set(success.map(s => String(s.order_id || "").trim()));
+        const errorMap = new Map();
+        errors.forEach(e => {
+            const k = String(e.order_id || "").trim();
+            errorMap.set(k, e.message || "发货失败");
+        });
+
+        shipments.forEach(s => {
+            if(!s.selected) return;
+            const oid = String(s.order_id || "").trim();
+            if(successIds.has(oid)){
+                s.status_msg = "发货成功";
+            }else if(errorMap.has(oid)){
+                s.status_msg = errorMap.get(oid);
+            }else{
+                s.status_msg = "已提交";
+            }
+        });
+        renderTable();
+        resultBox.textContent = JSON.stringify(data.result, null, 2);
+    }catch(err){
+        resultBox.textContent = String(err);
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,80 @@
+{
+  "excluded": [
+    "HW66483BK",
+    "HU10002-K",
+    "HU10002-Q",
+    "HU10850US-K",
+    "JV10555",
+    "HW65840",
+    "JV11239CF",
+    "JV11239WH",
+    "HZ10188WH-1",
+    "HZ10188WH-2",
+    "NP10486-4",
+    "HW66555-2",
+    "HW61553GR",
+    "HZ10278GD",
+    "ES10435US",
+    "HZ10199",
+    "JV10353DK",
+    "HV10425WH",
+    "HZ10060BK",
+    "BA8048",
+    "HW66077BK",
+    "JV10088WH",
+    "HW63090CF",
+    "HW63090WH",
+    "HW64484CF",
+    "HW63090BK",
+    "JV10584CF",
+    "JV10083",
+    "NP11320NY",
+    "NP11320GR",
+    "HZ10242",
+    "HW53949",
+    "HT1126PI",
+    "BC10064US-GR",
+    "HW56271US",
+    "HW66419WH",
+    "JV10556",
+    "JV10081CF",
+    "JV11195DK",
+    "JV10553",
+    "HZ10278GD",
+    "KC52022",
+    "ES10271US-DK",
+    "TL33853",
+    "EP24664RE",
+    "EP24664WH",
+    "ES10373US-BL",
+    "JV10888",
+    "EP24664BK",
+    "KC52022",
+    "EP24897US-BK"
+  ],
+  "threshold": 50,
+  "qty_high": 20,
+  "qty_low": 0,
+  "supplier_rules": {
+    "haoya": {
+      "threshold": 50,
+      "qty_high": 20,
+      "qty_low": 0
+    },
+    "sishun": {
+      "threshold": 50,
+      "qty_high": 10,
+      "qty_low": 0
+    },
+    "dajian": {
+      "threshold": 20,
+      "qty_high": 10,
+      "qty_low": 0
+    },
+    "songmics": {
+      "threshold": 50,
+      "qty_high": 20,
+      "qty_low": 0
+    }
+  }
+}

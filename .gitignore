@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime / logs / exports
+logs/
+exports/
+*.log
+temp_download.zip
+uploads/
+
+# Local secrets
+.env
+instance/local_secrets.json
+instance/*_key.txt
+instance/*_url.txt
+instance/openai_key.txt
+instance/hd_api_token.txt
+
+# Local data / generated files
+instance/uploads/
+instance/ai_fill/jobs/
+instance/ai_fill/outputs/
+instance/ai_fill/uploads/

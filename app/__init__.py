@@ -1,0 +1,36 @@
+from flask import Flask, session, redirect, url_for, request
+# 引入配置文件（假设你根目录下有 config.py）
+from config import config
+
+
+def create_app(config_name='default'):
+    app = Flask(__name__)
+
+    # 加载配置 (密钥、数据库密码等)
+    app.config.from_object(config.get(config_name))
+
+    # --- 注册蓝图 ---
+    from app.routes.auth import auth_bp
+    app.register_blueprint(auth_bp)
+
+    from app.routes.main import main_bp
+    from app.routes.orders import orders_bp  # 假设你之前写好了 orders.py
+
+    app.register_blueprint(main_bp)
+    app.register_blueprint(orders_bp, url_prefix='/orders')  # 访问订单功能前缀是 /orders
+
+    from app.routes.stock import stock_bp
+    app.register_blueprint(stock_bp, url_prefix='/stock')
+
+    from app.routes.ai_fill import ai_fill_bp
+    app.register_blueprint(ai_fill_bp, url_prefix='/ai-fill')
+
+    @app.before_request
+    def require_login():
+        endpoint = request.endpoint or ""
+        if endpoint.startswith("static") or endpoint.startswith("auth."):
+            return
+        if not session.get("logged_in"):
+            return redirect(url_for("auth.login"))
+
+    return app
