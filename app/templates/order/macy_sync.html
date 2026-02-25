@@ -99,6 +99,27 @@ function currentStoreKey(){
     return document.getElementById("storeSelect").value;
 }
 
+async function safeJson(res){
+    const raw = await res.text();
+    if(!raw || !raw.trim()){
+        return {
+            success: false,
+            msg: `绌哄搷搴旓紙HTTP ${res.status}锛夛紝鍙兘鏄姹備腑鏂?`,
+            http_status: res.status,
+        };
+    }
+    try{
+        return JSON.parse(raw);
+    }catch(_err){
+        return {
+            success: false,
+            msg: `鍝嶅簲涓嶆槸 JSON锛圚TTP ${res.status}锛?`,
+            raw: raw.slice(0, 300),
+            http_status: res.status,
+        };
+    }
+}
+
 function renderStatus(data){
     const cooldown = data.cooldown || {};
     const box = document.getElementById("statusBox");
@@ -137,7 +158,7 @@ async function loadStatus(){
     const store = currentStoreKey();
     try{
         const res = await fetch(`/orders/sync/macy/status?store=${encodeURIComponent(store)}`);
-        const data = await res.json();
+        const data = await safeJson(res);
         if(!res.ok || !data.success){
             resultBox.textContent = data.msg || `HTTP ${res.status}`;
             return;
@@ -166,7 +187,7 @@ async function runManualSync(){
                 max: maxValue
             })
         });
-        const data = await res.json();
+        const data = await safeJson(res);
         resultBox.textContent = JSON.stringify(data, null, 2);
         await loadStatus();
     }catch(err){
