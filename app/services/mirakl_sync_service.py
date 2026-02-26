@@ -41,8 +41,10 @@ MAX_MIN = 1
 MAX_MAX = 100
 
 SYNC_COOLDOWN_API_NAME = "orders_api"
-SYNC_COOLDOWN_SCOPE = "__global__"
-COOLDOWN_SECONDS = 600
+SYNC_COOLDOWN_SECONDS_BY_ACTION: Dict[str, int] = {
+    "sync": 600,
+    "preview": 60,
+}
 
 SYNC_LOOKBACK_MINUTES = 10
 AUTO_FALLBACK_HOURS = 24
@@ -172,28 +174,33 @@ def _load_shop_row(store_key: str) -> Dict[str, Any]:
     return row
 
 
-def _ensure_global_lock_row(cursor) -> None:
+def _cooldown_seconds_for_action(action_key: str) -> int:
+    return int(SYNC_COOLDOWN_SECONDS_BY_ACTION.get(action_key) or 600)
+
+
+def _ensure_store_lock_row(cursor, store_key: str) -> None:
     cursor.execute(
         """
         INSERT INTO order_system.api_call_lock (shop_key, api_name, cooldown_seconds)
         VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE cooldown_seconds = VALUES(cooldown_seconds)
+        ON DUPLICATE KEY UPDATE shop_key = VALUES(shop_key)
         """,
-        (SYNC_COOLDOWN_SCOPE, SYNC_COOLDOWN_API_NAME, COOLDOWN_SECONDS),
+        (store_key, SYNC_COOLDOWN_API_NAME, _cooldown_seconds_for_action("sync")),
     )
 
 
 def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, Any]:
-    _validate_sync_store(store_key)
+    key = _validate_sync_store(store_key)
     action_key = _norm(action)
     if action_key not in {"sync", "preview"}:
         raise ValueError("action must be sync or preview")
+    cooldown_seconds = _cooldown_seconds_for_action(action_key)
 
     now_utc = _utc_now()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            _ensure_global_lock_row(cursor)
+            _ensure_store_lock_row(cursor, key)
             cursor.execute(
                 """
                 SELECT cooldown_seconds, last_action, last_called_at_utc, next_allowed_at_utc
@@ -201,11 +208,10 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
                 WHERE shop_key = %s AND api_name = %s
                 FOR UPDATE
                 """,
-                (SYNC_COOLDOWN_SCOPE, SYNC_COOLDOWN_API_NAME),
+                (key, SYNC_COOLDOWN_API_NAME),
             )
             row = cursor.fetchone() or {}
 
-            cooldown_seconds = int(row.get("cooldown_seconds") or COOLDOWN_SECONDS)
             next_allowed = _parse_utc_value(row.get("next_allowed_at_utc"))
 
             if next_allowed and now_utc < next_allowed:
@@ -222,17 +228,19 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
             cursor.execute(
                 """
                 UPDATE order_system.api_call_lock
-                SET last_action = %s,
+                SET cooldown_seconds = %s,
+                    last_action = %s,
                     last_called_at_utc = %s,
                     next_allowed_at_utc = %s,
                     lock_version = lock_version + 1
                 WHERE shop_key = %s AND api_name = %s
                 """,
                 (
+                    cooldown_seconds,
                     action_key,
                     _to_mysql_utc(now_utc),
                     _to_mysql_utc(next_allowed_new),
-                    SYNC_COOLDOWN_SCOPE,
+                    key,
                     SYNC_COOLDOWN_API_NAME,
                 ),
             )
@@ -250,12 +258,13 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
         conn.close()
 
 
-def get_orders_api_cooldown_status() -> Dict[str, Any]:
+def get_orders_api_cooldown_status(store_key: str) -> Dict[str, Any]:
+    key = _validate_sync_store(store_key)
     now_utc = _utc_now()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            _ensure_global_lock_row(cursor)
+            _ensure_store_lock_row(cursor, key)
             cursor.execute(
                 """
                 SELECT cooldown_seconds, last_action, last_called_at_utc, next_allowed_at_utc
@@ -263,7 +272,7 @@ def get_orders_api_cooldown_status() -> Dict[str, Any]:
                 WHERE shop_key = %s AND api_name = %s
                 LIMIT 1
                 """,
-                (SYNC_COOLDOWN_SCOPE, SYNC_COOLDOWN_API_NAME),
+                (key, SYNC_COOLDOWN_API_NAME),
             )
             row = cursor.fetchone() or {}
         conn.commit()
@@ -280,7 +289,7 @@ def get_orders_api_cooldown_status() -> Dict[str, Any]:
         remaining = int((next_allowed - now_utc).total_seconds())
 
     return {
-        "cooldown_seconds": int(row.get("cooldown_seconds") or COOLDOWN_SECONDS),
+        "cooldown_seconds": int(row.get("cooldown_seconds") or _cooldown_seconds_for_action("sync")),
         "last_action": row.get("last_action") or "",
         "last_called_at_utc": _to_iso_utc(last_called),
         "next_allowed_at_utc": _to_iso_utc(next_allowed),
@@ -794,7 +803,7 @@ def get_sync_dashboard(store_key: str, log_limit: int = 20) -> Dict[str, Any]:
     key = _validate_sync_store(store_key)
     shop_row = _load_shop_row(key)
     last_sync_utc = _parse_utc_value(shop_row.get("last_sync_time"))
-    cooldown = get_orders_api_cooldown_status()
+    cooldown = get_orders_api_cooldown_status(key)
 
     conn = DBManager.get_connection()
     try:

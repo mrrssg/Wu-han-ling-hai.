@@ -197,6 +197,27 @@ function escapeHtml(str){
         .replaceAll("'", "&#039;");
 }
 
+async function safeJson(res){
+    const raw = await res.text();
+    if(!raw || !raw.trim()){
+        return {
+            success: false,
+            msg: `空响应（HTTP ${res.status}）`,
+            http_status: res.status,
+        };
+    }
+    try{
+        return JSON.parse(raw);
+    }catch(_err){
+        return {
+            success: false,
+            msg: `响应不是JSON（HTTP ${res.status}）`,
+            raw: raw.slice(0, 300),
+            http_status: res.status,
+        };
+    }
+}
+
 async function loadShipments(){
     const resultBox = document.getElementById("resultBox");
     const store = document.getElementById("storeSelect").value;
@@ -204,7 +225,7 @@ async function loadShipments(){
 
     try{
         const res = await fetch(`/orders/shipping/preview?store=${encodeURIComponent(store)}`, {method: "POST"});
-        const data = await res.json();
+        const data = await safeJson(res);
         if(!res.ok || !data.success){
             resultBox.textContent = data.msg || `HTTP ${res.status}`;
             return;
@@ -251,7 +272,7 @@ async function submitShipments(){
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({shipments: toSend, batch_size: batchSize}),
         });
-        const data = await res.json();
+        const data = await safeJson(res);
         if(!res.ok || !data.success){
             resultBox.textContent = data.msg || `HTTP ${res.status}`;
             return;
