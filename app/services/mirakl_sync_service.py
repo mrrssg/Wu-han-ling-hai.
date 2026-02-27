@@ -40,7 +40,6 @@ DEFAULT_MAX = 100
 MAX_MIN = 1
 MAX_MAX = 100
 
-SYNC_COOLDOWN_API_NAME = "orders_api"
 SYNC_COOLDOWN_SECONDS_BY_ACTION: Dict[str, int] = {
     "sync": 600,
     "preview": 60,
@@ -178,14 +177,18 @@ def _cooldown_seconds_for_action(action_key: str) -> int:
     return int(SYNC_COOLDOWN_SECONDS_BY_ACTION.get(action_key) or 600)
 
 
-def _ensure_store_lock_row(cursor, store_key: str) -> None:
+def _api_name_for_action(action_key: str) -> str:
+    return f"orders_api_{action_key}"
+
+
+def _ensure_store_lock_row(cursor, store_key: str, action_key: str) -> None:
     cursor.execute(
         """
         INSERT INTO order_system.api_call_lock (shop_key, api_name, cooldown_seconds)
         VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE shop_key = VALUES(shop_key)
         """,
-        (store_key, SYNC_COOLDOWN_API_NAME, _cooldown_seconds_for_action("sync")),
+        (store_key, _api_name_for_action(action_key), _cooldown_seconds_for_action(action_key)),
     )
 
 
@@ -195,12 +198,13 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
     if action_key not in {"sync", "preview"}:
         raise ValueError("action must be sync or preview")
     cooldown_seconds = _cooldown_seconds_for_action(action_key)
+    api_name = _api_name_for_action(action_key)
 
     now_utc = _utc_now()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            _ensure_store_lock_row(cursor, key)
+            _ensure_store_lock_row(cursor, key, action_key)
             cursor.execute(
                 """
                 SELECT cooldown_seconds, last_action, last_called_at_utc, next_allowed_at_utc
@@ -208,7 +212,7 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
                 WHERE shop_key = %s AND api_name = %s
                 FOR UPDATE
                 """,
-                (key, SYNC_COOLDOWN_API_NAME),
+                (key, api_name),
             )
             row = cursor.fetchone() or {}
 
@@ -241,7 +245,7 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
                     _to_mysql_utc(now_utc),
                     _to_mysql_utc(next_allowed_new),
                     key,
-                    SYNC_COOLDOWN_API_NAME,
+                    api_name,
                 ),
             )
         conn.commit()
@@ -258,13 +262,17 @@ def try_acquire_orders_api_cooldown(store_key: str, action: str) -> Dict[str, An
         conn.close()
 
 
-def get_orders_api_cooldown_status(store_key: str) -> Dict[str, Any]:
+def get_orders_api_cooldown_status(store_key: str, action: str = "sync") -> Dict[str, Any]:
     key = _validate_sync_store(store_key)
+    action_key = _norm(action)
+    if action_key not in {"sync", "preview"}:
+        raise ValueError("action must be sync or preview")
+    api_name = _api_name_for_action(action_key)
     now_utc = _utc_now()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            _ensure_store_lock_row(cursor, key)
+            _ensure_store_lock_row(cursor, key, action_key)
             cursor.execute(
                 """
                 SELECT cooldown_seconds, last_action, last_called_at_utc, next_allowed_at_utc
@@ -272,7 +280,7 @@ def get_orders_api_cooldown_status(store_key: str) -> Dict[str, Any]:
                 WHERE shop_key = %s AND api_name = %s
                 LIMIT 1
                 """,
-                (key, SYNC_COOLDOWN_API_NAME),
+                (key, api_name),
             )
             row = cursor.fetchone() or {}
         conn.commit()
@@ -289,7 +297,7 @@ def get_orders_api_cooldown_status(store_key: str) -> Dict[str, Any]:
         remaining = int((next_allowed - now_utc).total_seconds())
 
     return {
-        "cooldown_seconds": int(row.get("cooldown_seconds") or _cooldown_seconds_for_action("sync")),
+        "cooldown_seconds": int(row.get("cooldown_seconds") or _cooldown_seconds_for_action(action_key)),
         "last_action": row.get("last_action") or "",
         "last_called_at_utc": _to_iso_utc(last_called),
         "next_allowed_at_utc": _to_iso_utc(next_allowed),
