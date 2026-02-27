@@ -1,6 +1,5 @@
 import csv
 import os
-import random
 import time
 from typing import Dict, List, Tuple
 from urllib.parse import quote
@@ -25,6 +24,11 @@ STORE_ORDER_TABLES = {
     "macy_wopet": "macyorder",
     "bestbuy_delphi": "bestbuyorder",
 }
+
+# Preview is user-facing and should return quickly.
+PREVIEW_PAGE_DELAY_SECONDS = 0.2
+PREVIEW_REQUEST_TIMEOUT_SECONDS = 30
+PREVIEW_REQUEST_RETRIES = 1
 
 
 def _read_text(path: str) -> str:
@@ -141,13 +145,15 @@ def fetch_unshipped_orders(api_url: str, api_key: str, store_key: str) -> List[D
     }
 
     while True:
-        jitter = random.randint(10, 60)
-        time.sleep(jitter)
+        # Keep a tiny page gap to avoid burst, but do not block UI for tens of seconds.
+        if offset > 0 and PREVIEW_PAGE_DELAY_SECONDS > 0:
+            time.sleep(PREVIEW_PAGE_DELAY_SECONDS)
 
         params = {
             "order_state_codes": "WAITING_ACCEPTANCE,SHIPPING",
             "max": limit,
             "offset": offset,
+            "paginate": "true",
         }
 
         resp = _request_with_retry(
@@ -156,12 +162,17 @@ def fetch_unshipped_orders(api_url: str, api_key: str, store_key: str) -> List[D
             headers=headers,
             params=params,
             proxies=network_profile["proxies"],
-            timeout=30,
+            timeout=PREVIEW_REQUEST_TIMEOUT_SECONDS,
+            retries=PREVIEW_REQUEST_RETRIES,
+            backoff=0.5,
         )
         if resp.status_code != 200:
             raise RuntimeError(f"Mirakl request failed: {resp.status_code} {resp.text}")
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Mirakl returned non-JSON response: {exc}") from exc
         orders = data.get("orders", [])
         total_count = data.get("total_count", 0)
         if not orders:
