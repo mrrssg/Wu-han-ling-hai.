@@ -16,15 +16,15 @@ class OrderService:
             # 2. 格式化日期
             df["Date created"] = pd.to_datetime(df["Date created"], errors='coerce').dt.strftime('%Y-%m-%d')
 
-            # 3. 处理重复单号后缀 (-1, -2)
-            # 只要单号出现多次，就给重复的加上后缀
-            df['Order number'] = df['Order number'].astype(str)
-            counts = df.groupby('Order number').cumcount()
-            # 只有当计数 > 0 (即第二次出现) 时才加后缀，或者只要有重复就全加？
-            # 照你原来的逻辑，只要有重复，第二个开始变成 -1？这里简化为只要是重复行就加后缀
-            mask = df.duplicated(subset=['Order number'], keep=False)
-            if mask.any():
-                df.loc[mask, 'Order number'] += '-' + (counts[mask] + 1).astype(str)
+            # 3. 按【Order number + Order line no.】统一分配 Order number
+            df["Order number"] = (
+                df["Order number"].where(df["Order number"].notna(), "").astype(str).str.strip()
+            )
+            df["Order line no."] = (
+                df["Order line no."].where(df["Order line no."].notna(), "").astype(str).str.strip()
+            )
+            order_line_pairs = list(zip(df["Order number"].tolist(), df["Order line no."].tolist()))
+            df["Order number"] = DBManager.assign_macy_order_numbers(order_line_pairs)
 
             # 4. 生成 CostwayOrder
             start_seq = DBManager.get_macy_max_sequence()

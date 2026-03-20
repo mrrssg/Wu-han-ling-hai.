@@ -2,6 +2,7 @@ import pymysql
 from flask import current_app
 from datetime import datetime
 import time
+import re
 
 
 class DBManager:
@@ -68,6 +69,108 @@ class DBManager:
         today_str = datetime.now().strftime("%y%m%d")
         prefix = f"WHLHWM{today_str}-"
         return DBManager._get_max_sequence_for_table("walmartorder", prefix)
+
+    @staticmethod
+    def _line_no_sort_key(line_no: str):
+        text = str(line_no or "").strip()
+        m = re.search(r"-(\d+)$", text)
+        if m:
+            return (0, int(m.group(1)), text)
+        nums = re.findall(r"\d+", text)
+        if nums:
+            return (1, int(nums[-1]), text)
+        return (2, 0, text)
+
+    @staticmethod
+    def _parse_macy_order_suffix(base_order_no: str, order_no: str):
+        base = str(base_order_no or "").strip()
+        val = str(order_no or "").strip()
+        if not base or not val or not val.startswith(f"{base}-"):
+            return None
+        tail = val[len(base) + 1 :].strip()
+        return int(tail) if tail.isdigit() else None
+
+    @staticmethod
+    def _fetch_existing_macy_order_map(cursor, base_order_no: str):
+        base = str(base_order_no or "").strip()
+        line_to_order = {}
+        used_suffixes = set()
+        if not base:
+            return line_to_order, used_suffixes
+
+        cursor.execute(
+            """
+            SELECT `Order number` AS order_no, `Order line no.` AS line_no
+            FROM macyorder
+            WHERE `Order number` = %s
+               OR `Order number` LIKE CONCAT(%s, '-%%')
+            ORDER BY `Order number` ASC
+            """,
+            (base, base),
+        )
+        rows = cursor.fetchall() or []
+
+        for row in rows:
+            order_no = str(row.get("order_no") or "").strip()
+            line_no = str(row.get("line_no") or "").strip()
+            suffix = DBManager._parse_macy_order_suffix(base, order_no)
+            if suffix is not None:
+                used_suffixes.add(suffix)
+            if line_no and line_no not in line_to_order:
+                line_to_order[line_no] = order_no
+
+        return line_to_order, used_suffixes
+
+    @staticmethod
+    def _assign_macy_order_numbers_with_cursor(cursor, order_line_pairs):
+        if not order_line_pairs:
+            return []
+
+        outputs = ["" for _ in order_line_pairs]
+        grouped = {}
+        for idx, pair in enumerate(order_line_pairs):
+            base_order_no = str((pair[0] if len(pair) > 0 else "") or "").strip()
+            line_no = str((pair[1] if len(pair) > 1 else "") or "").strip()
+            if not base_order_no:
+                outputs[idx] = ""
+                continue
+            if not line_no:
+                outputs[idx] = base_order_no
+                continue
+            grouped.setdefault(base_order_no, []).append((idx, line_no))
+
+        for base_order_no, idx_lines in grouped.items():
+            line_to_order, used_suffixes = DBManager._fetch_existing_macy_order_map(cursor, base_order_no)
+
+            pending_lines = []
+            for _, line_no in idx_lines:
+                if line_no not in line_to_order and line_no not in pending_lines:
+                    pending_lines.append(line_no)
+            pending_lines.sort(key=DBManager._line_no_sort_key)
+
+            next_suffix = 1
+            pending_map = {}
+            for line_no in pending_lines:
+                while next_suffix in used_suffixes:
+                    next_suffix += 1
+                assigned = f"{base_order_no}-{next_suffix}"
+                pending_map[line_no] = assigned
+                used_suffixes.add(next_suffix)
+                next_suffix += 1
+
+            for idx, line_no in idx_lines:
+                outputs[idx] = line_to_order.get(line_no) or pending_map.get(line_no) or base_order_no
+
+        return outputs
+
+    @staticmethod
+    def assign_macy_order_numbers(order_line_pairs):
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                return DBManager._assign_macy_order_numbers_with_cursor(cursor, order_line_pairs)
+        finally:
+            conn.close()
 
     @staticmethod
     def insert_macy_orders(data_tuples):
@@ -674,6 +777,24 @@ class DBManager:
                 today_str = datetime.now().strftime("%y%m%d")
                 seq = start_seq
 
+                valid_rows = []
+                order_line_pairs = []
+                for row in missing_rows:
+                    base_order_no = str(row.get("order_id") or "").strip()
+                    line_no = str(row.get("order_line_id") or "").strip()
+                    offer_sku = str(row.get("offer_sku") or "").strip()
+                    if not base_order_no or not line_no or not offer_sku:
+                        continue
+                    valid_rows.append(row)
+                    order_line_pairs.append((base_order_no, line_no))
+
+                if not valid_rows:
+                    return 0
+
+                assigned_order_numbers = DBManager._assign_macy_order_numbers_with_cursor(
+                    cursor, order_line_pairs
+                )
+
                 insert_sql = """
                     INSERT INTO macyorder (
                         `Order number`, `Order line no.`, `Date created`, `Shipping address first name`,
@@ -684,14 +805,9 @@ class DBManager:
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '未发货')
                 """
 
-                for row in missing_rows:
-                    base_order_no = str(row.get("order_id") or "").strip()
+                for row, order_no in zip(valid_rows, assigned_order_numbers):
                     line_no = str(row.get("order_line_id") or "").strip()
                     offer_sku = str(row.get("offer_sku") or "").strip()
-                    if not base_order_no or not line_no or not offer_sku:
-                        continue
-
-                    order_no = DBManager._build_unique_macy_order_number(cursor, base_order_no)
                     seq += 1
                     costway_order = f"WHLH{today_str}-{seq}"
 
