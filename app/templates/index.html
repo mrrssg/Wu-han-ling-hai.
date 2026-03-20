@@ -88,5 +88,18 @@
             </div>
         </div>
     </div>
+
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-body text-center p-5">
+                <div class="display-4 text-secondary mb-3">
+                    <i class="bi bi-file-earmark-arrow-up"></i>
+                </div>
+                <h4 class="card-title">交易流水导入</h4>
+                <p class="card-text text-muted">按店铺上传交易流水 CSV，自动校验店铺字段并去重入库。</p>
+                <a href="{{ url_for('orders.transaction_logs_page') }}" class="btn btn-outline-secondary mt-3">去导入</a>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

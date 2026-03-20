@@ -4,7 +4,8 @@
 # ============================================================
 
 import os
-from flask import Blueprint, render_template, request, flash, current_app, redirect, jsonify
+import time
+from flask import Blueprint, render_template, request, flash, current_app, redirect, jsonify, url_for, session
 from werkzeug.utils import secure_filename
 import pandas as pd
 from app.services.ImportMacyOrder import OrderService
@@ -38,6 +39,11 @@ from app.services.mirakl_sync_service import (
     get_sync_dashboard,
     run_order_sync_job,
     try_acquire_orders_api_cooldown,
+)
+from app.services.transaction_log_import_service import (
+    get_transaction_store_options,
+    import_transaction_log_csv,
+    list_recent_import_jobs,
 )
 
 
@@ -468,3 +474,78 @@ def macy_sync_run_manual():
         return jsonify(result), http_status
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)}), 500
+
+
+@orders_bp.route("/transaction-logs", methods=["GET"])
+def transaction_logs_page():
+    stores = get_transaction_store_options()
+    store_key = (request.args.get("store") or "").strip().lower()
+    if store_key not in stores:
+        store_key = next(iter(stores.keys()), "")
+
+    logs = []
+    try:
+        logs = list_recent_import_jobs(limit=100)
+    except Exception as e:
+        flash(f"加载导入日志失败：{e}", "warning")
+
+    return render_template(
+        "order/transaction_logs_import.html",
+        stores=stores,
+        store_key=store_key,
+        logs=logs,
+    )
+
+
+@orders_bp.route("/transaction-logs/import", methods=["POST"])
+def transaction_logs_import():
+    stores = get_transaction_store_options()
+    store_key = (request.form.get("store_key") or "").strip().lower()
+    if store_key not in stores:
+        flash("无效店铺", "danger")
+        return redirect(url_for("orders.transaction_logs_page"))
+
+    file = request.files.get("transaction_file")
+    if not file or not file.filename:
+        flash("请选择交易流水 CSV 文件", "warning")
+        return redirect(url_for("orders.transaction_logs_page", store=store_key))
+
+    filename = secure_filename(file.filename)
+    if not filename.lower().endswith(".csv"):
+        flash("仅支持 CSV 文件", "danger")
+        return redirect(url_for("orders.transaction_logs_page", store=store_key))
+
+    upload_dir = current_app.config.get("UPLOAD_FOLDER") or os.path.join(
+        current_app.root_path, "..", "instance", "uploads"
+    )
+    os.makedirs(upload_dir, exist_ok=True)
+
+    saved_name = f"txn_{store_key}_{int(time.time())}_{filename}"
+    saved_path = os.path.join(upload_dir, saved_name)
+    file.save(saved_path)
+
+    try:
+        created_by = (session.get("username") or "").strip()
+        stats = import_transaction_log_csv(
+            store_key=store_key,
+            file_path=saved_path,
+            source_filename=filename,
+            created_by=created_by,
+        )
+        flash(
+            (
+                f"[{stats.store_label}] 导入完成: 新增 {stats.inserted_rows}, "
+                f"重复跳过 {stats.duplicate_rows}, 店铺不匹配 {stats.mismatch_rows}, "
+                f"错误 {stats.error_rows}, 总行 {stats.total_rows}"
+            ),
+            "success" if stats.status in ("success", "partial") else "warning",
+        )
+    except Exception as e:
+        flash(f"导入失败：{e}", "danger")
+    finally:
+        try:
+            os.remove(saved_path)
+        except Exception:
+            pass
+
+    return redirect(url_for("orders.transaction_logs_page", store=store_key))

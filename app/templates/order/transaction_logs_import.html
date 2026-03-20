@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}交易流水导入{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+        <div>
+            <h3 class="fw-light mb-1">交易流水导入</h3>
+            <div class="text-muted small">
+                仅支持 CSV。必须先选店铺，系统会校验店铺字段并自动去重，避免混店和重复导入。
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-5">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <div class="fw-semibold mb-3">上传导入</div>
+                    <form method="post" action="{{ url_for('orders.transaction_logs_import') }}" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label class="form-label">店铺</label>
+                            <select name="store_key" class="form-select" required>
+                                {% for key, label in stores.items() %}
+                                <option value="{{ key }}" {% if key == store_key %}selected{% endif %}>
+                                    {{ label }} ({{ key }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">交易流水文件（CSV）</label>
+                            <input type="file" class="form-control" name="transaction_file" accept=".csv,text/csv" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">开始导入</button>
+                    </form>
+                    <div class="small text-muted mt-3">
+                        校验规则：<br>
+                        1) macy 文件使用 Seller 列；bestbuy 文件使用 Store 列（自动映射为 Seller）<br>
+                        2) 店铺值必须与所选店铺一致，不一致行会被拒绝并记录错误<br>
+                        3) 使用 row_fingerprint 去重，同一行不会重复写入
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="fw-semibold mb-2">最近导入日志</div>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>ID</th>
+                                    <th>店铺</th>
+                                    <th>文件</th>
+                                    <th>状态</th>
+                                    <th>总行</th>
+                                    <th>新增</th>
+                                    <th>重复</th>
+                                    <th>混店</th>
+                                    <th>错误</th>
+                                    <th>耗时(ms)</th>
+                                    <th>开始时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in logs %}
+                                <tr>
+                                    <td>{{ row.id }}</td>
+                                    <td>{{ row.store_key }}</td>
+                                    <td class="text-truncate" style="max-width: 220px;" title="{{ row.source_filename }}">
+                                        {{ row.source_filename }}
+                                    </td>
+                                    <td>
+                                        {% if row.status == 'success' %}
+                                        <span class="badge bg-success">success</span>
+                                        {% elif row.status == 'partial' %}
+                                        <span class="badge bg-warning text-dark">partial</span>
+                                        {% else %}
+                                        <span class="badge bg-danger">{{ row.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ row.total_rows }}</td>
+                                    <td>{{ row.inserted_rows }}</td>
+                                    <td>{{ row.duplicate_rows }}</td>
+                                    <td>{{ row.mismatch_rows }}</td>
+                                    <td>{{ row.error_rows }}</td>
+                                    <td>{{ row.duration_ms }}</td>
+                                    <td>{{ row.started_at }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="11" class="text-muted text-center py-3">暂无导入记录</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
