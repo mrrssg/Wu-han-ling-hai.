@@ -308,6 +308,7 @@ class ExportService:
             sku = (o.get("sku") or "").strip()
             qty = o.get("qty") or 1
             amount = calc_amount(sku)
+            store_key = (o.get("store_key") or "").strip().lower()
 
             full_name = (o.get("first_name") or "").strip()
             if o.get("last_name"):
@@ -338,7 +339,11 @@ class ExportService:
             ws[f"G{row}"] = o.get("phone") or "0000000000"
 
             # H 收货国家代码
-            ws[f"H{row}"] = "kuyotqmc@hotmail.com"
+            ship_email_map = {
+                "macy_kuyotq": "kuyotqmc@hotmail.com",
+                "macy_wopet": "wopetmc@hotmail.com",
+            }
+            ws[f"H{row}"] = ship_email_map.get(store_key, "kuyotqmc@hotmail.com")
 
             # I 收货人
             ws[f"I{row}"] = o.get("postcode") or ""

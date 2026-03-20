@@ -622,7 +622,126 @@ class DBManager:
 
 
     @staticmethod
-    def fetch_unshipped_orders():
+    def _build_unique_macy_order_number(cursor, base_order_no: str) -> str:
+        candidate = base_order_no
+        suffix = 1
+        while True:
+            cursor.execute(
+                "SELECT 1 FROM macyorder WHERE `Order number` = %s LIMIT 1",
+                (candidate,),
+            )
+            if not cursor.fetchone():
+                return candidate
+            candidate = f"{base_order_no}-{suffix}"
+            suffix += 1
+
+    @staticmethod
+    def backfill_macy_orders_from_sync_shipping() -> int:
+        conn = DBManager.get_connection()
+        inserted = 0
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        md.order_id,
+                        md.order_line_id,
+                        md.created_date,
+                        md.offer_sku,
+                        md.quantity,
+                        md.price_unit,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.firstname')) AS first_name,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.lastname')) AS last_name,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.street_1')) AS street1,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.street_2')) AS street2,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.country')) AS country,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.city')) AS city,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.state')) AS state,
+                        JSON_UNQUOTE(JSON_EXTRACT(md.raw_json, '$.customer.shipping_address.zip_code')) AS zip_code
+                    FROM order_system.macy_order_data md
+                    LEFT JOIN macyorder mo
+                      ON mo.`Order line no.` = md.order_line_id
+                    WHERE UPPER(TRIM(md.order_state)) = 'SHIPPING'
+                      AND mo.`Order line no.` IS NULL
+                    ORDER BY md.created_date ASC, md.id ASC
+                    """
+                )
+                missing_rows = cursor.fetchall() or []
+                if not missing_rows:
+                    return 0
+
+                start_seq = DBManager.get_macy_max_sequence()
+                today_str = datetime.now().strftime("%y%m%d")
+                seq = start_seq
+
+                insert_sql = """
+                    INSERT INTO macyorder (
+                        `Order number`, `Order line no.`, `Date created`, `Shipping address first name`,
+                        `Shipping address last name`, `Shipping address street 1`, `Shipping address street 2`,
+                        `Shipping address country`, `Shipping address city`, `Shipping address state`,
+                        `Shipping address zip`, `Quantity`, `Offer SKU`, `Unit price`, `CostwayOrder`, `Status`
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '未发货')
+                """
+
+                for row in missing_rows:
+                    base_order_no = str(row.get("order_id") or "").strip()
+                    line_no = str(row.get("order_line_id") or "").strip()
+                    offer_sku = str(row.get("offer_sku") or "").strip()
+                    if not base_order_no or not line_no or not offer_sku:
+                        continue
+
+                    order_no = DBManager._build_unique_macy_order_number(cursor, base_order_no)
+                    seq += 1
+                    costway_order = f"WHLH{today_str}-{seq}"
+
+                    created_date = row.get("created_date") or datetime.now()
+                    first_name = str(row.get("first_name") or "UNKNOWN").strip()
+                    last_name = str(row.get("last_name") or "UNKNOWN").strip()
+                    street1 = str(row.get("street1") or "UNKNOWN").strip()
+                    street2 = str(row.get("street2") or "").strip()
+                    country = str(row.get("country") or "US").strip()
+                    city = str(row.get("city") or "UNKNOWN").strip()
+                    state = str(row.get("state") or "UNKNOWN").strip()
+                    zip_code = str(row.get("zip_code") or "00000").strip()
+                    qty = int(row.get("quantity") or 1)
+                    unit_price = row.get("price_unit")
+                    unit_price = float(unit_price) if unit_price is not None else 0.0
+
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            order_no,
+                            line_no,
+                            created_date,
+                            first_name,
+                            last_name,
+                            street1,
+                            street2,
+                            country,
+                            city,
+                            state,
+                            zip_code,
+                            qty,
+                            offer_sku,
+                            unit_price,
+                            costway_order,
+                        ),
+                    )
+                    inserted += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        if inserted:
+            DBManager.update_costwaymacy_sku()
+        return inserted
+
+    @staticmethod
+    def _fetch_unshipped_orders_legacy_unused():
         conn = DBManager.get_connection()
         cursor = conn.cursor()  # 推荐 dictionary=True，这样 fetchall 返回 dict
         # **查询 walmartorder 未发货订单**
@@ -712,6 +831,141 @@ class DBManager:
         conn.close()
 
         # 合并两个查询结果
+        return walmart_data + macy_data + bestbuy_data
+
+    @staticmethod
+    def fetch_unshipped_orders():
+        DBManager.backfill_macy_orders_from_sync_shipping()
+
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT MAX(STR_TO_DATE(REGEXP_SUBSTR(`CostwayOrder`, '[0-9]{6}'), '%y%m%d')) AS latest_costway_date
+                    FROM walmartorder
+                    WHERE Status = '未发货'
+                    """
+                )
+                latest_wm = cursor.fetchone() or {}
+                latest_wm_date = latest_wm.get("latest_costway_date")
+                cursor.execute(
+                    """
+                    SELECT MAX(STR_TO_DATE(REGEXP_SUBSTR(`CostwayOrder`, '[0-9]{6}'), '%y%m%d')) AS latest_costway_date
+                    FROM bestbuyorder
+                    WHERE Status = '未发货'
+                    """
+                )
+                latest_bb = cursor.fetchone() or {}
+                latest_bb_date = latest_bb.get("latest_costway_date")
+
+                walmart_query = """
+                SELECT
+                    'sskyn36@outlook.com' AS customer_email,
+                    Costway_SKU AS sku,
+                    Qty AS qty,
+                    CASE
+                        WHEN Ship_to_Address2 IS NULL OR Ship_to_Address2 = '' THEN Ship_to_Address1
+                        ELSE CONCAT(Ship_to_Address1, ', ', Ship_to_Address2)
+                    END AS street,
+                    `City` AS city,
+                    `State` AS region,
+                    `Zip` AS postcode,
+                    `First_Name` AS first_name,
+                    `Last_Name` AS last_name,
+                    `Order_Number` AS order_number,
+                    `CostwayOrder` AS costway_number,
+                    '' AS line_item_number,
+                    `Order_Date` AS order_date,
+                    `SKU` AS platform_sku,
+                    '' AS store_key
+                FROM walmartorder
+                WHERE Status = '未发货'
+                  AND `CostwayOrder` IS NOT NULL
+                  AND TRIM(`CostwayOrder`) <> ''
+                """
+                walmart_params = []
+                if latest_wm_date:
+                    walmart_query += " AND STR_TO_DATE(REGEXP_SUBSTR(`CostwayOrder`, '[0-9]{6}'), '%%y%%m%%d') >= DATE_SUB(%s, INTERVAL 5 DAY)"
+                    walmart_params.append(latest_wm_date)
+                else:
+                    walmart_query += " AND 1 = 0"
+                cursor.execute(walmart_query, tuple(walmart_params))
+                walmart_data = cursor.fetchall()
+
+                macy_query = """
+                SELECT
+                    'sskyn36@outlook.com' AS customer_email,
+                    mo.Costway_SKU AS sku,
+                    mo.Quantity AS qty,
+                    CASE
+                        WHEN mo.`Shipping address street 2` IS NULL OR mo.`Shipping address street 2` = ''
+                        THEN mo.`Shipping address street 1`
+                        ELSE CONCAT(mo.`Shipping address street 1`, ', ', mo.`Shipping address street 2`)
+                    END AS street,
+                    mo.`Shipping address city` AS city,
+                    mo.`Shipping address state` AS region,
+                    mo.`Shipping address zip` AS postcode,
+                    mo.`Shipping address first name` AS first_name,
+                    mo.`Shipping address last name` AS last_name,
+                    mo.`Order number` AS order_number,
+                    mo.`CostwayOrder` AS costway_number,
+                    mo.`Order line no.` AS line_item_number,
+                    mo.`Date created` AS order_date,
+                    mo.`Offer SKU` AS platform_sku,
+                    CASE
+                        WHEN md.shop_id = 2 OR LOWER(md.platform) LIKE '%wopet%' THEN 'macy_wopet'
+                        WHEN md.shop_id = 1 OR LOWER(md.platform) LIKE '%kuyotq%' THEN 'macy_kuyotq'
+                        ELSE 'macy_kuyotq'
+                    END AS store_key
+                FROM macyorder mo
+                JOIN order_system.macy_order_data md
+                  ON md.order_line_id = mo.`Order line no.`
+                WHERE mo.Status = '未发货'
+                  AND mo.`CostwayOrder` IS NOT NULL
+                  AND TRIM(mo.`CostwayOrder`) <> ''
+                  AND UPPER(TRIM(md.order_state)) = 'SHIPPING'
+                """
+                cursor.execute(macy_query)
+                macy_data = cursor.fetchall()
+
+                bestbuy_query = """
+                SELECT
+                    'sskyn36@outlook.com' AS customer_email,
+                    Costway_SKU AS sku,
+                    Quantity AS qty,
+                    CASE
+                        WHEN `Shipping address street 2` IS NULL OR `Shipping address street 2` = ''
+                        THEN `Shipping address street 1`
+                        ELSE CONCAT(`Shipping address street 1`, ', ', `Shipping address street 2`)
+                    END AS street,
+                    `Shipping address city` AS city,
+                    `Shipping address state` AS region,
+                    `Shipping address zip` AS postcode,
+                    `Shipping address first name` AS first_name,
+                    `Shipping address last name` AS last_name,
+                    `Order number` AS order_number,
+                    `CostwayOrder` AS costway_number,
+                    `Order line no.` AS line_item_number,
+                    `Date created` AS order_date,
+                    `Offer SKU` AS platform_sku,
+                    '' AS store_key
+                FROM bestbuyorder
+                WHERE Status = '未发货'
+                  AND `CostwayOrder` IS NOT NULL
+                  AND TRIM(`CostwayOrder`) <> ''
+                """
+                bestbuy_params = []
+                if latest_bb_date:
+                    bestbuy_query += " AND STR_TO_DATE(REGEXP_SUBSTR(`CostwayOrder`, '[0-9]{6}'), '%%y%%m%%d') >= DATE_SUB(%s, INTERVAL 5 DAY)"
+                    bestbuy_params.append(latest_bb_date)
+                else:
+                    bestbuy_query += " AND 1 = 0"
+                cursor.execute(bestbuy_query, tuple(bestbuy_params))
+                bestbuy_data = cursor.fetchall()
+        finally:
+            conn.close()
+
         return walmart_data + macy_data + bestbuy_data
 
     @staticmethod
