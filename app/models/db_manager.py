@@ -142,21 +142,34 @@ class DBManager:
         for base_order_no, idx_lines in grouped.items():
             line_to_order, used_suffixes = DBManager._fetch_existing_macy_order_map(cursor, base_order_no)
 
-            pending_lines = []
+            incoming_unique_lines = []
             for _, line_no in idx_lines:
-                if line_no not in line_to_order and line_no not in pending_lines:
+                if line_no not in incoming_unique_lines:
+                    incoming_unique_lines.append(line_no)
+
+            existing_lines = set(line_to_order.keys())
+            total_unique_lines = len(existing_lines.union(incoming_unique_lines))
+            suffix_mode = total_unique_lines > 1 or bool(used_suffixes)
+
+            pending_lines = []
+            for line_no in incoming_unique_lines:
+                if line_no not in line_to_order:
                     pending_lines.append(line_no)
             pending_lines.sort(key=DBManager._line_no_sort_key)
 
-            next_suffix = 1
             pending_map = {}
-            for line_no in pending_lines:
-                while next_suffix in used_suffixes:
+            if suffix_mode:
+                next_suffix = 1
+                for line_no in pending_lines:
+                    while next_suffix in used_suffixes:
+                        next_suffix += 1
+                    assigned = f"{base_order_no}-{next_suffix}"
+                    pending_map[line_no] = assigned
+                    used_suffixes.add(next_suffix)
                     next_suffix += 1
-                assigned = f"{base_order_no}-{next_suffix}"
-                pending_map[line_no] = assigned
-                used_suffixes.add(next_suffix)
-                next_suffix += 1
+            else:
+                for line_no in pending_lines:
+                    pending_map[line_no] = base_order_no
 
             for idx, line_no in idx_lines:
                 outputs[idx] = line_to_order.get(line_no) or pending_map.get(line_no) or base_order_no
