@@ -27,7 +27,7 @@ STORE_CONFIGS: Dict[str, Dict[str, str]] = {
         "label": "Macy-Wopet",
         "table": "macy_wopet_transaction_logs",
         "seller": "Wopet",
-        "seller_id": "",
+        "seller_id": "3896",
     },
 }
 
