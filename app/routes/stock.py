@@ -53,6 +53,7 @@ def index():
         hd_qty_high=cfg.get('qty_high', 20),
         hd_qty_low=cfg.get('qty_low', 0),
         supplier_rules=supplier_rules,
+        costway_zip_password=cfg.get('costway_zip_password', ''),
         hd_log=None,
         hd_message=None,
         hd_success=None,
@@ -152,6 +153,24 @@ def save_hd_rules():
     supplier_rules = _parse_supplier_rules(request)
     StockService.save_hd_config(base_dir, excluded_list, threshold, qty_high, qty_low, supplier_rules)
     flash('规则已保存。', 'success')
+    return redirect(url_for('stock.index'))
+
+
+@stock_bp.route('/save-costway-pwd', methods=['POST'])
+def save_costway_pwd():
+    base_dir = current_app.config['BASE_DIR']
+    pwd = request.form.get('costway_zip_password', '').strip()
+    cfg = StockService.load_hd_config(base_dir)
+    StockService.save_hd_config(
+        base_dir,
+        cfg.get('excluded', []),
+        cfg.get('threshold', 50),
+        cfg.get('qty_high', 20),
+        cfg.get('qty_low', 0),
+        cfg.get('supplier_rules', {}),
+        costway_zip_password=pwd,
+    )
+    flash(f'Costway 解压密码已保存。', 'success')
     return redirect(url_for('stock.index'))
 
 

@@ -86,6 +86,16 @@ class StockService:
 
 
 
+        # load costway zip password from config
+        try:
+            from flask import current_app
+            base_dir = current_app.config.get('BASE_DIR', os.getcwd())
+        except Exception:
+            base_dir = os.getcwd()
+        _cfg = StockService.load_hd_config(base_dir)
+        _costway_pwd = _cfg.get("costway_zip_password", "")
+        _costway_passwords = [_costway_pwd] if _costway_pwd else None
+
         # 1. 更新 Costway
 
         try:
@@ -94,7 +104,7 @@ class StockService:
 
             print("==[1] COSTWAY start==")
 
-            csv_text = StockService.download_csv(StockService.URL_COSTWAY)
+            csv_text = StockService.download_csv(StockService.URL_COSTWAY, passwords=_costway_passwords)
 
             print(f"==[1] COSTWAY download done, {time.time() - t0:.2f}s ==")
 
@@ -1238,6 +1248,7 @@ class StockService:
             "qty_high": 20,
             "qty_low": 0,
             "supplier_rules": default_rules,
+            "costway_zip_password": "",
         }
         if os.path.exists(config_path):
             try:
@@ -1252,6 +1263,7 @@ class StockService:
                             "qty_high": data.get("qty_high", 20),
                             "qty_low": data.get("qty_low", 0),
                             "supplier_rules": data.get("supplier_rules", default_rules),
+                            "costway_zip_password": data.get("costway_zip_password", ""),
                         }
                     )
             except Exception:
@@ -1259,16 +1271,21 @@ class StockService:
         return default_cfg
 
     @staticmethod
-    def save_hd_config(base_dir: str, excluded_list, threshold=50, qty_high=20, qty_low=0, supplier_rules=None):
+    def save_hd_config(base_dir: str, excluded_list, threshold=50, qty_high=20, qty_low=0, supplier_rules=None, costway_zip_password=None):
         config_path = os.path.join(base_dir, "instance", "hd_config.json")
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         rules = supplier_rules or {}
+        # preserve existing password if not explicitly provided
+        if costway_zip_password is None:
+            existing = StockService.load_hd_config(base_dir)
+            costway_zip_password = existing.get("costway_zip_password", "")
         data = {
             "excluded": list(excluded_list),
             "threshold": int(threshold),
             "qty_high": int(qty_high),
             "qty_low": int(qty_low),
             "supplier_rules": rules,
+            "costway_zip_password": costway_zip_password,
         }
         import json
         print(f"[HD_CONFIG][WRITE] {datetime.now().isoformat(timespec='seconds')} -> {config_path}")
