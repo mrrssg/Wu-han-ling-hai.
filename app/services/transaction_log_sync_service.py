@@ -251,7 +251,8 @@ def _insert_batch(conn, table: str, items: List[Dict[str, Any]], store_cfg: Dict
     # Check query: skip if same Order number + Type + Amount + Date created already exists
     check_sql = f"""
         SELECT 1 FROM order_system.`{table}`
-        WHERE `Order number` = %s AND `Type` = %s AND `Amount` = %s AND `Date created` = %s
+        WHERE (`Order number` = %s OR (%s IS NULL AND (`Order number` IS NULL OR `Order number` = '')))
+        AND `Type` = %s AND `Amount` = %s AND `Date created` = %s
         LIMIT 1
     """
 
@@ -263,8 +264,10 @@ def _insert_batch(conn, table: str, items: List[Dict[str, Any]], store_cfg: Dict
             transaction_id = item.get("id")
 
             # Skip if a matching record already exists (CSV or previous API)
+            order_num = db_row.get("Order number")
             cursor.execute(check_sql, (
-                db_row.get("Order number"),
+                order_num,
+                order_num,
                 db_row.get("Type"),
                 db_row.get("Amount"),
                 db_row.get("Date created"),
