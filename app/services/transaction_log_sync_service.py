@@ -2,6 +2,7 @@ import hashlib
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from flask import current_app
 
@@ -14,6 +15,7 @@ from app.services.mirakl_shipping_service import (
 
 
 UTC = timezone.utc
+ET = ZoneInfo("America/New_York")
 
 STORE_CONFIGS: Dict[str, Dict[str, str]] = {
     "macy_kuyotq": {
@@ -101,12 +103,14 @@ def _iso_utc(dt: datetime) -> str:
 
 
 def _api_dt_to_csv_format(iso_str: Optional[str]) -> Optional[str]:
+    """Convert UTC ISO string to ET formatted string matching CSV export format."""
     if not iso_str:
         return None
     try:
         text = iso_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(text)
-        return dt.strftime("%m/%d/%Y %I:%M:%S %p")
+        dt_utc = datetime.fromisoformat(text)
+        dt_et = dt_utc.astimezone(ET)
+        return dt_et.strftime("%m/%d/%Y %I:%M:%S %p")
     except Exception:
         return iso_str
 
