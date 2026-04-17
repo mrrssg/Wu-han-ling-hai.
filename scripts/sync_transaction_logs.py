@@ -10,7 +10,7 @@ from app.services.transaction_log_sync_service import STORE_CONFIGS, MAX_PAGES_P
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync Mirakl transaction logs for a store.")
     parser.add_argument("--store", required=True, help="store key, e.g. macy_kuyotq")
-    parser.add_argument("--max-pages", type=int, default=MAX_PAGES_PER_RUN, help="max pages per run")
+    parser.add_argument("--max-pages", type=int, default=MAX_PAGES_PER_RUN, help="max API calls per run (default 5)")
     args = parser.parse_args()
 
     store_key = str(args.store or "").strip().lower()
