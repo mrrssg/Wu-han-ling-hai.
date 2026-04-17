@@ -1679,3 +1679,56 @@ class StockService:
 
             return False, str(e)
 
+    @staticmethod
+    def process_lowes_stock(file_path, output_path, base_dir=None):
+        """处理 Lowes 库存逻辑，规则与 Macy 相同"""
+        try:
+            stock_map = DBManager.get_shop_stock_max_map()
+            cfg = StockService.load_hd_config(base_dir or os.getcwd())
+
+            wb = load_workbook(file_path)
+            ws = wb["offers-import"] if "offers-import" in wb.sheetnames else wb.active
+
+            sku_col_idx = None
+            qty_col_idx = None
+            for cell in ws[1]:
+                if not cell.value:
+                    continue
+                header = str(cell.value).strip().lower()
+                if header == 'sku':
+                    sku_col_idx = cell.column
+                elif header == 'quantity':
+                    qty_col_idx = cell.column
+
+            if not sku_col_idx or not qty_col_idx:
+                return False, "表头错误：未找到 'sku' 或 'quantity' 列。请检查模板。"
+
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                sku_cell = row[sku_col_idx - 1]
+                qty_cell = row[qty_col_idx - 1]
+                shop_sku = str(sku_cell.value).strip() if sku_cell.value else ""
+                if not shop_sku:
+                    continue
+
+                stock_info = stock_map.get(shop_sku)
+                if stock_info is None:
+                    stock_info = stock_map.get(shop_sku.upper())
+                if stock_info is None:
+                    real_stock, supplier_key = 0, None
+                else:
+                    real_stock, supplier_key = stock_info
+
+                new_qty, _reason = StockService._apply_supplier_rule(
+                    real_stock, supplier_key, cfg,
+                    default_threshold=50, default_high=20, default_low=0,
+                )
+                qty_cell.value = new_qty
+
+            wb.save(output_path)
+            wb.close()
+            return True, "Lowes 库存更新完成 (格式已保留)"
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False, str(e)
+

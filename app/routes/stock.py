@@ -37,6 +37,13 @@ def index():
                     return send_file(output_path, as_attachment=True, download_name=output_filename)
                 else:
                     flash(f'Macy failed: {msg}', 'danger')
+            elif platform == 'lowes':
+                success, msg = StockService.process_lowes_stock(upload_path, output_path, current_app.config['BASE_DIR'])
+                if success:
+                    flash(f'Lowes processed: {msg}', 'success')
+                    return send_file(output_path, as_attachment=True, download_name=output_filename)
+                else:
+                    flash(f'Lowes failed: {msg}', 'danger')
             elif platform == 'walmart':
                 flash('Walmart not implemented.', 'info')
 
