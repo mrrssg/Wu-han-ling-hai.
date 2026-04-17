@@ -56,6 +56,8 @@ TYPE_MAP = {
     "PAYMENT": "Payment",
     "SELLER_RESERVE_FUND": "Seller reserve fund",
     "SELLER_RESERVE_SETTLEMENT": "Seller reserve settlement",
+    "RESERVE_FUNDING": "Seller reserve fund",
+    "RESERVE_SETTLEMENT": "Seller reserve settlement",
 }
 
 CANONICAL_COLUMNS = [
@@ -240,23 +242,41 @@ def _save_last_synced_at(store_key: str, last_synced_at: str):
 def _insert_batch(conn, table: str, items: List[Dict[str, Any]], store_cfg: Dict[str, str]) -> int:
     if not items:
         return 0
+
     col_expr = ", ".join(f"`{col}`" for col in CANONICAL_COLUMNS)
     col_expr += ", `row_fingerprint`, `transaction_id`"
     placeholders = ", ".join(["%s"] * (len(CANONICAL_COLUMNS) + 2))
     insert_sql = f"INSERT IGNORE INTO order_system.`{table}` ({col_expr}) VALUES ({placeholders})"
 
-    batch = []
-    for item in items:
-        db_row = _api_record_to_db_row(item, store_cfg)
-        fingerprint = _row_fingerprint(db_row)
-        transaction_id = item.get("id")
-        values = tuple((db_row.get(col) or "") if db_row.get(col) else None for col in CANONICAL_COLUMNS)
-        values += (fingerprint, transaction_id)
-        batch.append(values)
+    # Check query: skip if same Order number + Type + Amount + Date created already exists
+    check_sql = f"""
+        SELECT 1 FROM order_system.`{table}`
+        WHERE `Order number` = %s AND `Type` = %s AND `Amount` = %s AND `Date created` = %s
+        LIMIT 1
+    """
 
+    inserted = 0
     with conn.cursor() as cursor:
-        cursor.executemany(insert_sql, batch)
-        inserted = cursor.rowcount or 0
+        for item in items:
+            db_row = _api_record_to_db_row(item, store_cfg)
+            fingerprint = _row_fingerprint(db_row)
+            transaction_id = item.get("id")
+
+            # Skip if a matching record already exists (CSV or previous API)
+            cursor.execute(check_sql, (
+                db_row.get("Order number"),
+                db_row.get("Type"),
+                db_row.get("Amount"),
+                db_row.get("Date created"),
+            ))
+            if cursor.fetchone():
+                continue
+
+            values = tuple((db_row.get(col) or "") if db_row.get(col) else None for col in CANONICAL_COLUMNS)
+            values += (fingerprint, transaction_id)
+            cursor.execute(insert_sql, values)
+            inserted += cursor.rowcount or 0
+
     conn.commit()
     return inserted
 
