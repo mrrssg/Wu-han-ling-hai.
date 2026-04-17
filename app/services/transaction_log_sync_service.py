@@ -1,8 +1,8 @@
 import hashlib
 import random
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from flask import current_app
 
@@ -88,20 +88,16 @@ CANONICAL_COLUMNS = [
 ]
 
 JITTER_MIN = 10
-JITTER_MAX = 60
-OVERLAP_HOURS = 24
+JITTER_MAX = 30
+MAX_PAGES_PER_RUN = 50
+PAGE_LIMIT = 100
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _iso_utc(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _api_dt_to_csv_format(iso_str: Optional[str]) -> Optional[str]:
-    """Convert '2024-12-23T12:43:55.666Z' -> '12/23/2024 07:43:55 AM' (ET-like, but we keep UTC)"""
     if not iso_str:
         return None
     try:
@@ -118,7 +114,6 @@ def _payment_state_to_csv(state: Optional[str]) -> Optional[str]:
 
 
 def _amount_or_none(val) -> Optional[str]:
-    """Return formatted amount string, or None if 0."""
     if val is None:
         return None
     try:
@@ -145,7 +140,6 @@ def _row_fingerprint(row: Dict[str, str]) -> str:
 
 
 def _api_record_to_db_row(item: Dict[str, Any], store_cfg: Dict[str, str]) -> Dict[str, str]:
-    """Map one API JSON record to a DB row dict matching CANONICAL_COLUMNS."""
     entities = item.get("entities") or {}
     order = entities.get("order") or {}
     order_line = entities.get("order_line") or {}
@@ -189,36 +183,11 @@ def _api_record_to_db_row(item: Dict[str, Any], store_cfg: Dict[str, str]) -> Di
     return row
 
 
-def _get_latest_date_in_db(table: str) -> Optional[datetime]:
-    """Find the latest Date created in the table, return as UTC datetime."""
+def _ensure_schema(table: str):
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(f"""
-                SELECT `Date created` FROM order_system.`{table}`
-                WHERE `Date created` IS NOT NULL AND `Date created` != ''
-                ORDER BY
-                    CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(`Date created`, '/', 3), '/', -1) AS UNSIGNED) DESC,
-                    CAST(SUBSTRING_INDEX(`Date created`, '/', 1) AS UNSIGNED) DESC,
-                    CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(`Date created`, '/', 2), '/', -1) AS UNSIGNED) DESC
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-            if not row or not row.get("Date created"):
-                return None
-            text = row["Date created"]
-            try:
-                return datetime.strptime(text, "%m/%d/%Y %I:%M:%S %p").replace(tzinfo=UTC)
-            except ValueError:
-                return None
-    finally:
-        conn.close()
-
-
-def _ensure_transaction_id_column(table: str):
-    conn = DBManager.get_connection()
-    try:
-        with conn.cursor() as cursor:
+            # ensure transaction_id column
             cursor.execute("""
                 SELECT 1 FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA='order_system' AND TABLE_NAME=%s AND COLUMN_NAME='transaction_id'
@@ -226,6 +195,45 @@ def _ensure_transaction_id_column(table: str):
             if not cursor.fetchone():
                 cursor.execute(f"ALTER TABLE order_system.`{table}` ADD COLUMN `transaction_id` CHAR(36) NULL")
                 cursor.execute(f"CREATE UNIQUE INDEX `uq_transaction_id` ON order_system.`{table}` (`transaction_id`)")
+
+            # ensure sync_cursor table for storing page_token
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS order_system.txn_sync_cursor (
+                    store_key VARCHAR(64) PRIMARY KEY,
+                    page_token TEXT NULL,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_cursor(store_key: str) -> Optional[str]:
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT page_token FROM order_system.txn_sync_cursor WHERE store_key = %s",
+                (store_key,),
+            )
+            row = cursor.fetchone()
+            if row and row.get("page_token"):
+                return row["page_token"]
+            return None
+    finally:
+        conn.close()
+
+
+def _save_cursor(store_key: str, page_token: Optional[str]):
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO order_system.txn_sync_cursor (store_key, page_token)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE page_token = VALUES(page_token)
+            """, (store_key, page_token))
         conn.commit()
     finally:
         conn.close()
@@ -233,7 +241,7 @@ def _ensure_transaction_id_column(table: str):
 
 def run_transaction_log_sync(
     store_key: str,
-    max_per_page: int = 100,
+    max_pages: int = MAX_PAGES_PER_RUN,
 ) -> Dict[str, Any]:
     if store_key not in STORE_CONFIGS:
         return {"success": False, "msg": f"unsupported store: {store_key}"}
@@ -241,7 +249,7 @@ def run_transaction_log_sync(
     store_cfg = STORE_CONFIGS[store_key]
     table = store_cfg["table"]
 
-    _ensure_transaction_id_column(table)
+    _ensure_schema(table)
 
     base_dir = current_app.config.get("BASE_DIR", current_app.root_path)
     api_cfg = load_store_config(base_dir, store_key)
@@ -258,21 +266,14 @@ def run_transaction_log_sync(
         "Connection": "close",
     }
 
-    # Determine start_date: latest in DB minus overlap
-    latest_in_db = _get_latest_date_in_db(table)
-    if latest_in_db:
-        start_date = latest_in_db - timedelta(hours=OVERLAP_HOURS)
-    else:
-        start_date = datetime(2024, 1, 1, tzinfo=UTC)
-
-    start_iso = _iso_utc(start_date)
-    print(f"[TXN_SYNC][{store_key}] start_date={start_iso}, latest_in_db={latest_in_db}")
+    # Load saved cursor (page_token) from last run
+    saved_token = _load_cursor(store_key)
+    reached_end = False
 
     pages_fetched = 0
     records_fetched = 0
     records_inserted = 0
     records_duplicate = 0
-    page_token = None
     error_msg = ""
 
     col_expr = ", ".join(f"`{col}`" for col in CANONICAL_COLUMNS)
@@ -281,14 +282,17 @@ def run_transaction_log_sync(
     insert_sql = f"INSERT IGNORE INTO order_system.`{table}` ({col_expr}) VALUES ({placeholders})"
 
     conn = DBManager.get_connection()
+    current_token = saved_token
     try:
-        while True:
+        while pages_fetched < max_pages:
             jitter = random.randint(JITTER_MIN, JITTER_MAX)
             time.sleep(jitter)
 
-            params = {"max": max_per_page, "start_date": start_iso}
-            if page_token:
-                params["page_token"] = page_token
+            if current_token:
+                params = {"page_token": current_token}
+            else:
+                # First page: ASC from oldest
+                params = {"limit": PAGE_LIMIT, "sort": "dateCreated,ASC"}
 
             try:
                 resp = _request_with_retry(
@@ -314,6 +318,7 @@ def run_transaction_log_sync(
                 break
 
             data = payload.get("data") or []
+            next_token = payload.get("next_page_token")
             pages_fetched += 1
             records_fetched += len(data)
 
@@ -334,11 +339,17 @@ def run_transaction_log_sync(
                 records_inserted += inserted
                 records_duplicate += len(batch) - inserted
 
-            print(f"[TXN_SYNC][{store_key}] page={pages_fetched}, fetched={len(data)}, inserted_total={records_inserted}")
+            first_date = data[0].get("date_created", "")[:10] if data else "-"
+            last_date = data[-1].get("date_created", "")[:10] if data else "-"
+            print(f"[TXN_SYNC][{store_key}] page={pages_fetched}, fetched={len(data)}, inserted={records_inserted}, dup={records_duplicate}, range={first_date}~{last_date}")
 
-            page_token = payload.get("next_page_token")
-            if not page_token or not data:
+            if not next_token or not data:
+                # Reached the end of all data, reset cursor for next round
+                reached_end = True
+                current_token = None
                 break
+
+            current_token = next_token
 
     except Exception as e:
         conn.rollback()
@@ -346,13 +357,16 @@ def run_transaction_log_sync(
     finally:
         conn.close()
 
+    # Save cursor for next cron run
+    _save_cursor(store_key, current_token)
+
     success = not error_msg
-    msg = error_msg if error_msg else "sync completed"
+    msg = error_msg if error_msg else ("sync completed - reached end, cursor reset" if reached_end else f"sync completed - paused at page {pages_fetched}")
     result = {
         "success": success,
         "store_key": store_key,
         "msg": msg,
-        "start_date": start_iso,
+        "reached_end": reached_end,
         "pages_fetched": pages_fetched,
         "records_fetched": records_fetched,
         "records_inserted": records_inserted,

@@ -4,13 +4,13 @@ import os
 import sys
 
 from app import create_app
-from app.services.transaction_log_sync_service import STORE_CONFIGS, run_transaction_log_sync
+from app.services.transaction_log_sync_service import STORE_CONFIGS, MAX_PAGES_PER_RUN, run_transaction_log_sync
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync Mirakl transaction logs for a store.")
     parser.add_argument("--store", required=True, help="store key, e.g. macy_kuyotq")
-    parser.add_argument("--max", type=int, default=100, help="page size (1-100)")
+    parser.add_argument("--max-pages", type=int, default=MAX_PAGES_PER_RUN, help="max pages per run")
     args = parser.parse_args()
 
     store_key = str(args.store or "").strip().lower()
@@ -27,7 +27,7 @@ def main() -> int:
     with app.app_context():
         result = run_transaction_log_sync(
             store_key=store_key,
-            max_per_page=min(max(1, args.max), 100),
+            max_pages=args.max_pages,
         )
 
     print(json.dumps(result, ensure_ascii=False))
