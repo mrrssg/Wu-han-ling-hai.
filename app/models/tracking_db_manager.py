@@ -385,8 +385,8 @@ class Tracking_DBManager:
                     row = cursor.fetchone()
                     if row:
                         price = float(row["Price"])
-                        # ⚠️ 这里暂时先用 0.25，你后续告诉我规则再改
-                        discount_map[sku] = round(price * 0.9, 4)
+                        # 司顺成本 = 原价 × 0.8 × 1.07
+                        discount_map[sku] = round(price * 0.8 * 1.07, 4)
                         continue
 
                 # ✅ 批量更新 macyorder 的 CostwayDiscount
