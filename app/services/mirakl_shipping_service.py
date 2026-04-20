@@ -17,12 +17,14 @@ STORE_NETWORK_RULES = {
     "macy_kuyotq": {"platform": "macys-kuyotq", "shop_name": "kuyotq"},
     "macy_wopet": {"platform": "macys-wopet", "shop_name": "wopet"},
     "bestbuy_delphi": {"platform": "bestbuy-delphi", "shop_name": "delphi"},
+    "lowes_autool": {"platform": "lowes-autool", "shop_name": "autool"},
 }
 
 STORE_ORDER_TABLES = {
     "macy_kuyotq": "macyorder",
     "macy_wopet": "macyorder",
     "bestbuy_delphi": "bestbuyorder",
+    "lowes_autool": "lowesorder",
 }
 
 # Preview is user-facing and should return quickly.

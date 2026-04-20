@@ -105,6 +105,9 @@ def _match_and_update(df, data, platform):
         elif platform == "bestbuy":
             Tracking_DBManager.update_bestbuyorder(match)
             updated_orders.append(order_number)
+        elif platform == "lowes":
+            Tracking_DBManager.update_lowesorder(match)
+            updated_orders.append(order_number)
         else:
             fail += 1
             continue
@@ -119,6 +122,8 @@ def _match_and_update(df, data, platform):
             Tracking_DBManager.estimated_profit(all_match_df)
         elif platform == "walmart":
             Tracking_DBManager.walmart_estimated_profit(all_match_df)
+        elif platform == "lowes":
+            Tracking_DBManager.lowes_estimated_profit(all_match_df)
 
     return success, fail
 
@@ -391,16 +396,36 @@ def _fetch_bestbuy_sku_map(order_ids):
         conn.close()
 
 
+def _fetch_lowes_sku_map(order_ids):
+    if not order_ids:
+        return {}
+    conn = Tracking_DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            placeholders = ",".join(["%s"] * len(order_ids))
+            sql = (
+                "SELECT `Order number` AS order_id, Costway_SKU AS sku "
+                f"FROM lowesorder WHERE `Order number` IN ({placeholders})"
+            )
+            cursor.execute(sql, order_ids)
+            rows = cursor.fetchall()
+            return {str(r["order_id"]).strip(): (r.get("sku") or "") for r in rows}
+    finally:
+        conn.close()
+
+
 def _push_tracking_all_platforms_by_order_id_df(df):
     order_ids = df["order_id"].dropna().astype(str).str.strip().unique().tolist()
 
     macy_sku_map = _fetch_macy_sku_map(order_ids)
     walmart_sku_map = _fetch_walmart_sku_map(order_ids)
     bestbuy_sku_map = _fetch_bestbuy_sku_map(order_ids)
+    lowes_sku_map = _fetch_lowes_sku_map(order_ids)
 
     macy_rows = []
     walmart_rows = []
     bestbuy_rows = []
+    lowes_rows = []
 
     for _, row in df.iterrows():
         oid = str(row["order_id"]).strip()
@@ -418,10 +443,15 @@ def _push_tracking_all_platforms_by_order_id_df(df):
             bestbuy_rows.append(
                 {"order_number": oid, "tracking": tracking, "sku": bestbuy_sku_map.get(oid, "")}
             )
+        if oid in lowes_sku_map:
+            lowes_rows.append(
+                {"order_number": oid, "tracking": tracking, "sku": lowes_sku_map.get(oid, "")}
+            )
 
     macy_success = 0
     walmart_success = 0
     bestbuy_success = 0
+    lowes_success = 0
     if macy_rows:
         macy_df = pd.DataFrame(macy_rows)
         Tracking_DBManager.update_macyorder(macy_df)
@@ -439,6 +469,12 @@ def _push_tracking_all_platforms_by_order_id_df(df):
         Tracking_DBManager.update_bestbuyorder(bestbuy_df)
         bestbuy_success = len(bestbuy_rows)
 
+    if lowes_rows:
+        lowes_df = pd.DataFrame(lowes_rows)
+        Tracking_DBManager.update_lowesorder(lowes_df)
+        Tracking_DBManager.lowes_estimated_profit(lowes_df)
+        lowes_success = len(lowes_rows)
+
     return {
         "macy_success": macy_success,
         "macy_fail": max(len(df) - macy_success, 0),
@@ -446,6 +482,8 @@ def _push_tracking_all_platforms_by_order_id_df(df):
         "walmart_fail": max(len(df) - walmart_success, 0),
         "bestbuy_success": bestbuy_success,
         "bestbuy_fail": max(len(df) - bestbuy_success, 0),
+        "lowes_success": lowes_success,
+        "lowes_fail": max(len(df) - lowes_success, 0),
     }
 
 
@@ -473,10 +511,12 @@ def push_tracking_costway_file(file):
     macy_data = Tracking_DBManager.research_macyorder()
     walmart_data = Tracking_DBManager.research_walmartorder()
     bestbuy_data = Tracking_DBManager.research_bestbuyorder()
+    lowes_data = Tracking_DBManager.research_lowesorder()
 
     macy_success, macy_fail = _match_and_update(df, macy_data, "macy")
     wm_success, wm_fail = _match_and_update(df, walmart_data, "walmart")
     bb_success, bb_fail = _match_and_update(df, bestbuy_data, "bestbuy")
+    lw_success, lw_fail = _match_and_update(df, lowes_data or [], "lowes")
 
     return {
         "costway": True,
@@ -486,6 +526,8 @@ def push_tracking_costway_file(file):
         "walmart_fail": wm_fail,
         "bestbuy_success": bb_success,
         "bestbuy_fail": bb_fail,
+        "lowes_success": lw_success,
+        "lowes_fail": lw_fail,
     }
 
 

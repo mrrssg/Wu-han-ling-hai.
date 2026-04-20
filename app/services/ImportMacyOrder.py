@@ -269,5 +269,39 @@ class OrderService:
         except Exception as e:
             return False, str(e)
     @staticmethod
-    def process_lowes_orders(file_path: str):
-        return False, "Lowes 导入逻辑未实现（先占位）"
+    def process_lowes_orders(file_path):
+        try:
+            try:
+                df = pd.read_excel(file_path, sheet_name="orders", dtype={"Shipping address zip": str})
+            except Exception:
+                df = pd.read_excel(file_path, sheet_name=0, dtype={"Shipping address zip": str})
+
+            df["Date created"] = pd.to_datetime(df["Date created"], errors='coerce').dt.strftime('%Y-%m-%d')
+
+            df["Order number"] = (
+                df["Order number"].where(df["Order number"].notna(), "").astype(str).str.strip()
+            )
+            df["Order line no."] = (
+                df["Order line no."].where(df["Order line no."].notna(), "").astype(str).str.strip()
+            )
+            order_line_pairs = list(zip(df["Order number"].tolist(), df["Order line no."].tolist()))
+            df["Order number"] = DBManager.assign_lowes_order_numbers(order_line_pairs)
+
+            start_seq = DBManager.get_lowes_max_sequence()
+            date_str = datetime.now().strftime("%y%m%d")
+            df['CostwayOrder'] = [f"WHLHLW{date_str}-{start_seq + i + 1}" for i in range(len(df))]
+
+            cols = ['Order number', 'Order line no.', 'Date created', 'Shipping address first name',
+                    'Shipping address last name', 'Shipping address street 1', 'Shipping address street 2',
+                    'Shipping address country', 'Shipping address city', 'Shipping address state',
+                    'Shipping address zip', 'Quantity', 'Offer SKU', 'Unit price', 'CostwayOrder']
+
+            df = df.fillna('')
+            data = [tuple(x) for x in df[cols].to_numpy()]
+
+            DBManager.insert_lowes_orders(data)
+            DBManager.update_costwaylowes_sku()
+            return True, f"成功导入 {len(data)} 条 Lowes 订单"
+
+        except Exception as e:
+            return False, str(e)

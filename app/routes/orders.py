@@ -309,7 +309,11 @@ MIRAKL_BESTBUY_STORES = {
     "bestbuy_delphi": "Bestbuy-Delphi",
 }
 
-MIRAKL_STORES = {**MIRAKL_MACY_STORES, **MIRAKL_BESTBUY_STORES}
+MIRAKL_LOWES_STORES = {
+    "lowes_autool": "Lowes-Autool",
+}
+
+MIRAKL_STORES = {**MIRAKL_MACY_STORES, **MIRAKL_BESTBUY_STORES, **MIRAKL_LOWES_STORES}
 
 
 @orders_bp.route("/shipping", methods=["GET"])
@@ -330,6 +334,17 @@ def bestbuy_shipping():
         stores=MIRAKL_BESTBUY_STORES,
         page_title="Bestbuy 订单发货",
         page_heading="Bestbuy 订单发货",
+        page_subtitle="选择店铺后拉取未发货订单，匹配 Tracking，最后批量发货。",
+    )
+
+
+@orders_bp.route("/shipping/lowes", methods=["GET"])
+def lowes_shipping():
+    return render_template(
+        "order/mirakl_shipping.html",
+        stores=MIRAKL_LOWES_STORES,
+        page_title="Lowes 订单发货",
+        page_heading="Lowes 订单发货",
         page_subtitle="选择店铺后拉取未发货订单，匹配 Tracking，最后批量发货。",
     )
 

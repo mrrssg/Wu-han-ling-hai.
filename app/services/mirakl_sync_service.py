@@ -34,6 +34,12 @@ SYNC_STORE_CONFIGS: Dict[str, Dict[str, str]] = {
         "shop_name": "delphi",
         "target_table": "order_system.bestbuy_order_data",
     },
+    "lowes_autool": {
+        "label": "Lowes-Autool",
+        "platform": "lowes-autool",
+        "shop_name": "autool",
+        "target_table": "order_system.lowes_order_data",
+    },
 }
 
 DEFAULT_MAX = 100
@@ -422,6 +428,7 @@ def _upsert_order_lines(
     allowed_tables = {
         "order_system.macy_order_data",
         "order_system.bestbuy_order_data",
+        "order_system.lowes_order_data",
     }
     if target_table not in allowed_tables:
         raise RuntimeError(f"unsupported target table: {target_table}")

@@ -90,6 +90,40 @@ class Tracking_DBManager:
             conn.close()
 
     @staticmethod
+    def research_lowesorder():
+        try:
+            conn = Tracking_DBManager.get_connection()
+            cursor = conn.cursor()
+
+            query = """
+                SELECT
+                    `Order number`,
+                    `Order line no.`,
+                    `Costway_SKU`,
+                    `Shipping address first name`,
+                    `Shipping address last name`,
+                    `Shipping address street 1`,
+                    `Shipping address street 2`,
+                    `Shipping address city`,
+                    `Shipping address state`,
+                    `CostwayOrder`
+                FROM `lowesorder`
+                WHERE `Status` = '未发货'
+            """
+
+            cursor.execute(query)
+            data = cursor.fetchall()
+            print("Lowes未发货数据查询完成！")
+            return data
+
+        except Exception as e:
+            print(f"数据库查询失败: {e}")
+            return None
+
+        finally:
+            conn.close()
+
+    @staticmethod
     def research_bestbuyorder():
         try:
             conn = Tracking_DBManager.get_connection()
@@ -240,6 +274,65 @@ class Tracking_DBManager:
             if conn:
                 conn.rollback()
             print(f"❌ 更新数据库失败: {e}")
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    @staticmethod
+    def update_lowesorder(match_data):
+        import pandas as pd
+        conn = None
+        cursor = None
+        try:
+            conn = Tracking_DBManager.get_connection()
+            cursor = conn.cursor()
+
+            if isinstance(match_data, list):
+                df = pd.DataFrame(match_data)
+            else:
+                df = match_data.copy()
+
+            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+            for _, row in df.iterrows():
+                order_number = str(row["order_number"]).strip()
+
+                tracking = row.get("tracking", "")
+                tracking = "" if pd.isna(tracking) else str(tracking).strip()
+
+                special_offer = None
+                if "special_offer" in df.columns and pd.notna(row.get("special_offer")):
+                    special_offer = float(row["special_offer"])
+
+                status = "已发货" if tracking else None
+
+                if status:
+                    query = """
+                        UPDATE lowesorder
+                        SET Tracking=%s, CostwayDiscount=%s, Status=%s
+                        WHERE `Order number`=%s
+                    """
+                    values = (tracking, special_offer, status, order_number)
+                else:
+                    query = """
+                        UPDATE lowesorder
+                        SET Tracking=%s, CostwayDiscount=%s
+                        WHERE `Order number`=%s
+                    """
+                    values = (tracking, special_offer, order_number)
+
+                cursor.execute(query, values)
+
+            conn.commit()
+            print("Lowes订单状态更新完成（未更新CostwayOrder）")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            print(f"更新数据库失败: {e}")
 
         finally:
             if cursor:
@@ -471,6 +564,80 @@ class Tracking_DBManager:
     @staticmethod
     def walmart_estimated_profit(match):
         return _walmart_estimated_profit(match)
+
+    @staticmethod
+    def lowes_estimated_profit(match):
+        import pandas as pd
+        try:
+            conn = Tracking_DBManager.get_connection()
+            cursor = conn.cursor()
+
+            if isinstance(match, list):
+                order_numbers = tuple(match)
+                df = None
+            else:
+                df = match.copy()
+                df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+                order_numbers = tuple(df["order_number"].unique())
+
+            if not order_numbers:
+                return
+
+            if df is not None and "sku" in df.columns:
+                sku_list = df["sku"].dropna().astype(str).str.strip().unique().tolist()
+                discount_map = {}
+
+                for sku in sku_list:
+                    cursor.execute("SELECT Price FROM newestdropship WHERE SKU=%s LIMIT 1", (sku,))
+                    row = cursor.fetchone()
+                    if row:
+                        price = float(row["Price"])
+                        discount_map[sku] = round(price * 0.75, 4)
+                        continue
+
+                    cursor.execute("SELECT Price FROM newestdropship_vevor WHERE SKU=%s LIMIT 1", (sku,))
+                    row = cursor.fetchone()
+                    if row:
+                        price = float(row["Price"])
+                        discount_map[sku] = round(price * 0.8 * 1.07 * 1.05, 4)
+                        continue
+
+                for _, r in df.iterrows():
+                    sku = str(r.get("sku", "")).strip()
+                    order_number = str(r.get("order_number", "")).strip()
+
+                    if not sku or not order_number:
+                        continue
+
+                    if sku in discount_map:
+                        cursor.execute("""
+                            UPDATE lowesorder
+                            SET CostwayDiscount=%s
+                            WHERE `Order number`=%s
+                        """, (discount_map[sku], order_number))
+
+                conn.commit()
+
+            query = """
+                UPDATE lowesorder
+                SET
+                    EstimatedProfit = (CAST(`Unit price` AS DECIMAL(10,2)) * Quantity * 0.85 - CostwayDiscount),
+                    `Estimated rate of profit` = CASE
+                        WHEN `Unit price` > 0 THEN EstimatedProfit / (`Unit price` * Quantity)
+                        ELSE NULL
+                    END
+                WHERE `Order number` IN ({})
+            """.format(','.join(['%s'] * len(order_numbers)))
+
+            cursor.execute(query, order_numbers)
+            conn.commit()
+
+        except Exception as e:
+            print(f"Error updating Lowes EstimatedProfit: {e}")
+            return None
+
+        finally:
+            conn.close()
 
 @staticmethod
 def _walmart_estimated_profit(match):

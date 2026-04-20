@@ -67,6 +67,11 @@ STORE_CONFIG = {
         "table": "bestbuy_delphi_transaction_logs",
         "seller": "Ecooso",
     },
+    "lowes_autool": {
+        "label": "Lowes-Autool",
+        "table": "lowes_autool_transaction_logs",
+        "seller": "Autool",
+    },
 }
 
 

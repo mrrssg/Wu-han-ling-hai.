@@ -23,7 +23,7 @@ class DBManager:
 
     @staticmethod
     def _get_max_sequence_for_table(table_name: str, prefix: str) -> int:
-        if table_name not in {"macyorder", "bestbuyorder", "walmartorder"}:
+        if table_name not in {"macyorder", "bestbuyorder", "walmartorder", "lowesorder"}:
             return 0
 
         conn = DBManager.get_connection()
@@ -69,6 +69,12 @@ class DBManager:
         today_str = datetime.now().strftime("%y%m%d")
         prefix = f"WHLHWM{today_str}-"
         return DBManager._get_max_sequence_for_table("walmartorder", prefix)
+
+    @staticmethod
+    def get_lowes_max_sequence():
+        today_str = datetime.now().strftime("%y%m%d")
+        prefix = f"WHLHLW{today_str}-"
+        return DBManager._get_max_sequence_for_table("lowesorder", prefix)
 
     @staticmethod
     def _line_no_sort_key(line_no: str):
@@ -182,6 +188,101 @@ class DBManager:
         try:
             with conn.cursor() as cursor:
                 return DBManager._assign_macy_order_numbers_with_cursor(cursor, order_line_pairs)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _fetch_existing_lowes_order_map(cursor, base_order_no: str):
+        base = str(base_order_no or "").strip()
+        line_to_order = {}
+        used_suffixes = set()
+        if not base:
+            return line_to_order, used_suffixes
+
+        cursor.execute(
+            """
+            SELECT `Order number` AS order_no, `Order line no.` AS line_no
+            FROM lowesorder
+            WHERE `Order number` = %s
+               OR `Order number` LIKE CONCAT(%s, '-%%')
+            ORDER BY `Order number` ASC
+            """,
+            (base, base),
+        )
+        rows = cursor.fetchall() or []
+
+        for row in rows:
+            order_no = str(row.get("order_no") or "").strip()
+            line_no = str(row.get("line_no") or "").strip()
+            suffix = DBManager._parse_macy_order_suffix(base, order_no)
+            if suffix is not None:
+                used_suffixes.add(suffix)
+            if line_no and line_no not in line_to_order:
+                line_to_order[line_no] = order_no
+
+        return line_to_order, used_suffixes
+
+    @staticmethod
+    def _assign_lowes_order_numbers_with_cursor(cursor, order_line_pairs):
+        if not order_line_pairs:
+            return []
+
+        outputs = ["" for _ in order_line_pairs]
+        grouped = {}
+        for idx, pair in enumerate(order_line_pairs):
+            base_order_no = str((pair[0] if len(pair) > 0 else "") or "").strip()
+            line_no = str((pair[1] if len(pair) > 1 else "") or "").strip()
+            if not base_order_no:
+                outputs[idx] = ""
+                continue
+            if not line_no:
+                outputs[idx] = base_order_no
+                continue
+            grouped.setdefault(base_order_no, []).append((idx, line_no))
+
+        for base_order_no, idx_lines in grouped.items():
+            line_to_order, used_suffixes = DBManager._fetch_existing_lowes_order_map(cursor, base_order_no)
+
+            incoming_unique_lines = []
+            for _, line_no in idx_lines:
+                if line_no not in incoming_unique_lines:
+                    incoming_unique_lines.append(line_no)
+
+            existing_lines = set(line_to_order.keys())
+            total_unique_lines = len(existing_lines.union(incoming_unique_lines))
+            suffix_mode = total_unique_lines > 1 or bool(used_suffixes)
+
+            pending_lines = []
+            for line_no in incoming_unique_lines:
+                if line_no not in line_to_order:
+                    pending_lines.append(line_no)
+            pending_lines.sort(key=DBManager._line_no_sort_key)
+
+            pending_map = {}
+            if suffix_mode:
+                next_suffix = 1
+                for line_no in pending_lines:
+                    while next_suffix in used_suffixes:
+                        next_suffix += 1
+                    assigned = f"{base_order_no}-{next_suffix}"
+                    pending_map[line_no] = assigned
+                    used_suffixes.add(next_suffix)
+                    next_suffix += 1
+            else:
+                for line_no in pending_lines:
+                    pending_map[line_no] = base_order_no
+
+            for idx, line_no in idx_lines:
+                outputs[idx] = line_to_order.get(line_no) or pending_map.get(line_no) or base_order_no
+
+        return outputs
+
+    @staticmethod
+    def assign_lowes_order_numbers(order_line_pairs):
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                return DBManager._assign_lowes_order_numbers_with_cursor(cursor, order_line_pairs)
         finally:
             conn.close()
 
@@ -315,22 +416,58 @@ class DBManager:
                        Status,
                        Tracking
                    FROM bestbuyorder
-                   LEFT JOIN newestdropship t1 
+                   LEFT JOIN newestdropship t1
                       ON t1.SKU COLLATE utf8mb4_unicode_ci = bestbuyorder.Costway_SKU COLLATE utf8mb4_unicode_ci
-                   LEFT JOIN newestdropship_vevor t2 
+                   LEFT JOIN newestdropship_vevor t2
                       ON t2.SKU COLLATE utf8mb4_unicode_ci = bestbuyorder.Costway_SKU COLLATE utf8mb4_unicode_ci
-                   LEFT JOIN newestdropship_dajian t3 
+                   LEFT JOIN newestdropship_dajian t3
                       ON t3.SKU COLLATE utf8mb4_unicode_ci = bestbuyorder.Costway_SKU COLLATE utf8mb4_unicode_ci
-                   LEFT JOIN newestdropship_songmics t4 
+                   LEFT JOIN newestdropship_songmics t4
                       ON t4.SKU COLLATE utf8mb4_unicode_ci = bestbuyorder.Costway_SKU COLLATE utf8mb4_unicode_ci
-                   WHERE `Shipping address first name` REGEXP %s 
-                      OR `Shipping address last name` REGEXP %s 
-                      OR `Order number` REGEXP %s 
-                      OR bestbuyorder.`Offer SKU` REGEXP %s 
-                      OR bestbuyorder.Costway_SKU REGEXP %s 
+                   WHERE `Shipping address first name` REGEXP %s
+                      OR `Shipping address last name` REGEXP %s
+                      OR `Order number` REGEXP %s
+                      OR bestbuyorder.`Offer SKU` REGEXP %s
+                      OR bestbuyorder.Costway_SKU REGEXP %s
+                      OR CostwayOrder REGEXP %s
+
+                   UNION ALL
+
+                   SELECT
+                       'Lowes' AS Source,
+                       CASE
+                           WHEN t1.SKU IS NOT NULL THEN '豪雅'
+                           WHEN t2.SKU IS NOT NULL THEN '司顺'
+                           WHEN t3.SKU IS NOT NULL THEN '大建'
+                           WHEN t4.SKU IS NOT NULL THEN '致欧'
+                           ELSE ''
+                       END AS SupplierSource,
+                       `Order number` AS OrderID,
+                       CostwayOrder,
+                       Costway_SKU AS CostwaySKU,
+                       CONCAT(`Shipping address first name`, ' ', `Shipping address last name`) AS FullName,
+                       lowesorder.`Offer SKU` AS SKU,
+                       Quantity AS Qty,
+                       `Date created` AS Date,
+                       Status,
+                       Tracking
+                   FROM lowesorder
+                   LEFT JOIN newestdropship t1
+                      ON t1.SKU COLLATE utf8mb4_unicode_ci = lowesorder.Costway_SKU COLLATE utf8mb4_unicode_ci
+                   LEFT JOIN newestdropship_vevor t2
+                      ON t2.SKU COLLATE utf8mb4_unicode_ci = lowesorder.Costway_SKU COLLATE utf8mb4_unicode_ci
+                   LEFT JOIN newestdropship_dajian t3
+                      ON t3.SKU COLLATE utf8mb4_unicode_ci = lowesorder.Costway_SKU COLLATE utf8mb4_unicode_ci
+                   LEFT JOIN newestdropship_songmics t4
+                      ON t4.SKU COLLATE utf8mb4_unicode_ci = lowesorder.Costway_SKU COLLATE utf8mb4_unicode_ci
+                   WHERE `Shipping address first name` REGEXP %s
+                      OR `Shipping address last name` REGEXP %s
+                      OR `Order number` REGEXP %s
+                      OR lowesorder.`Offer SKU` REGEXP %s
+                      OR lowesorder.Costway_SKU REGEXP %s
                       OR CostwayOrder REGEXP %s
                 """
-                params = [regex_pattern] * 18
+                params = [regex_pattern] * 24
                 cursor.execute(query, params)
                 return cursor.fetchall()
         finally:
@@ -520,6 +657,32 @@ class DBManager:
                     Order_Date = VALUES(Order_Date),
                     Qty = VALUES(Qty),
                     Status = `Status`
+                """
+                cursor.executemany(sql, data_tuples)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
+    def insert_lowes_orders(data_tuples):
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                INSERT INTO lowesorder (
+                    `Order number`, `Order line no.`, `Date created`, `Shipping address first name`,
+                    `Shipping address last name`, `Shipping address street 1`, `Shipping address street 2`,
+                    `Shipping address country`, `Shipping address city`, `Shipping address state`,
+                    `Shipping address zip`, `Quantity`, `Offer SKU`, `Unit price`, `CostwayOrder`, `Status`
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '未发货')
+                ON DUPLICATE KEY UPDATE
+                    `Order line no.` = VALUES(`Order line no.`),
+                    `Date created` = VALUES(`Date created`),
+                    `Status` = `Status`
                 """
                 cursor.executemany(sql, data_tuples)
             conn.commit()
@@ -870,6 +1033,124 @@ class DBManager:
         return inserted
 
     @staticmethod
+    def backfill_lowes_orders_from_sync_shipping() -> int:
+        conn = DBManager.get_connection()
+        inserted = 0
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        ld.order_id,
+                        ld.order_line_id,
+                        ld.created_date,
+                        ld.offer_sku,
+                        ld.quantity,
+                        ld.price_unit,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.firstname')) AS first_name,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.lastname')) AS last_name,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.street_1')) AS street1,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.street_2')) AS street2,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.country')) AS country,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.city')) AS city,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.state')) AS state,
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.zip_code')) AS zip_code
+                    FROM order_system.lowes_order_data ld
+                    LEFT JOIN lowesorder lo
+                      ON lo.`Order line no.` = ld.order_line_id
+                    WHERE UPPER(TRIM(ld.order_state)) = 'SHIPPING'
+                      AND lo.`Order line no.` IS NULL
+                    ORDER BY ld.created_date ASC, ld.id ASC
+                    """
+                )
+                missing_rows = cursor.fetchall() or []
+                if not missing_rows:
+                    return 0
+
+                start_seq = DBManager.get_lowes_max_sequence()
+                today_str = datetime.now().strftime("%y%m%d")
+                seq = start_seq
+
+                valid_rows = []
+                order_line_pairs = []
+                for row in missing_rows:
+                    base_order_no = str(row.get("order_id") or "").strip()
+                    line_no = str(row.get("order_line_id") or "").strip()
+                    offer_sku = str(row.get("offer_sku") or "").strip()
+                    if not base_order_no or not line_no or not offer_sku:
+                        continue
+                    valid_rows.append(row)
+                    order_line_pairs.append((base_order_no, line_no))
+
+                if not valid_rows:
+                    return 0
+
+                assigned_order_numbers = DBManager._assign_lowes_order_numbers_with_cursor(
+                    cursor, order_line_pairs
+                )
+
+                insert_sql = """
+                    INSERT INTO lowesorder (
+                        `Order number`, `Order line no.`, `Date created`, `Shipping address first name`,
+                        `Shipping address last name`, `Shipping address street 1`, `Shipping address street 2`,
+                        `Shipping address country`, `Shipping address city`, `Shipping address state`,
+                        `Shipping address zip`, `Quantity`, `Offer SKU`, `Unit price`, `CostwayOrder`, `Status`
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '未发货')
+                """
+
+                for row, order_no in zip(valid_rows, assigned_order_numbers):
+                    line_no = str(row.get("order_line_id") or "").strip()
+                    offer_sku = str(row.get("offer_sku") or "").strip()
+                    seq += 1
+                    costway_order = f"WHLHLW{today_str}-{seq}"
+
+                    created_date = row.get("created_date") or datetime.now()
+                    first_name = str(row.get("first_name") or "UNKNOWN").strip()
+                    last_name = str(row.get("last_name") or "UNKNOWN").strip()
+                    street1 = str(row.get("street1") or "UNKNOWN").strip()
+                    street2 = str(row.get("street2") or "").strip()
+                    country = str(row.get("country") or "US").strip()
+                    city = str(row.get("city") or "UNKNOWN").strip()
+                    state = str(row.get("state") or "UNKNOWN").strip()
+                    zip_code = str(row.get("zip_code") or "00000").strip()
+                    qty = int(row.get("quantity") or 1)
+                    unit_price = row.get("price_unit")
+                    unit_price = float(unit_price) if unit_price is not None else 0.0
+
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            order_no,
+                            line_no,
+                            created_date,
+                            first_name,
+                            last_name,
+                            street1,
+                            street2,
+                            country,
+                            city,
+                            state,
+                            zip_code,
+                            qty,
+                            offer_sku,
+                            unit_price,
+                            costway_order,
+                        ),
+                    )
+                    inserted += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        if inserted:
+            DBManager.update_costwaylowes_sku()
+        return inserted
+
+    @staticmethod
     def _fetch_unshipped_orders_legacy_unused():
         conn = DBManager.get_connection()
         cursor = conn.cursor()  # 推荐 dictionary=True，这样 fetchall 返回 dict
@@ -965,6 +1246,7 @@ class DBManager:
     @staticmethod
     def fetch_unshipped_orders():
         DBManager.backfill_macy_orders_from_sync_shipping()
+        DBManager.backfill_lowes_orders_from_sync_shipping()
 
         conn = DBManager.get_connection()
         try:
@@ -1092,10 +1374,42 @@ class DBManager:
                     bestbuy_query += " AND 1 = 0"
                 cursor.execute(bestbuy_query, tuple(bestbuy_params))
                 bestbuy_data = cursor.fetchall()
+
+                lowes_query = """
+                SELECT
+                    'sskyn36@outlook.com' AS customer_email,
+                    lo.Costway_SKU AS sku,
+                    lo.Quantity AS qty,
+                    CASE
+                        WHEN lo.`Shipping address street 2` IS NULL OR lo.`Shipping address street 2` = ''
+                        THEN lo.`Shipping address street 1`
+                        ELSE CONCAT(lo.`Shipping address street 1`, ', ', lo.`Shipping address street 2`)
+                    END AS street,
+                    lo.`Shipping address city` AS city,
+                    lo.`Shipping address state` AS region,
+                    lo.`Shipping address zip` AS postcode,
+                    lo.`Shipping address first name` AS first_name,
+                    lo.`Shipping address last name` AS last_name,
+                    lo.`Order number` AS order_number,
+                    lo.`CostwayOrder` AS costway_number,
+                    lo.`Order line no.` AS line_item_number,
+                    lo.`Date created` AS order_date,
+                    lo.`Offer SKU` AS platform_sku,
+                    'lowes_autool' AS store_key
+                FROM lowesorder lo
+                JOIN order_system.lowes_order_data ld
+                  ON ld.order_line_id = lo.`Order line no.`
+                WHERE lo.Status = '未发货'
+                  AND lo.`CostwayOrder` IS NOT NULL
+                  AND TRIM(lo.`CostwayOrder`) <> ''
+                  AND UPPER(TRIM(ld.order_state)) = 'SHIPPING'
+                """
+                cursor.execute(lowes_query)
+                lowes_data = cursor.fetchall()
         finally:
             conn.close()
 
-        return walmart_data + macy_data + bestbuy_data
+        return walmart_data + macy_data + bestbuy_data + lowes_data
 
     @staticmethod
     def fetch_unshipped_orders_for_manual():
@@ -1166,7 +1480,27 @@ class DBManager:
                 cursor.execute(bestbuy_query, (unshipped_status, unshipped_status_alt))
                 bestbuy_data = cursor.fetchall()
 
-                return walmart_data + macy_data + bestbuy_data
+                lowes_query = """
+                SELECT
+                    'lowes' AS platform,
+                    'Lowes' AS platform_label,
+                    '' AS po_number,
+                    `Order number` AS order_number,
+                    `Order line no.` AS order_line_no,
+                    CostwayOrder AS costway_order,
+                    `Offer SKU` AS sku,
+                    Quantity AS qty,
+                    CONCAT(`Shipping address first name`, ' ', `Shipping address last name`) AS customer_name,
+                    `Date created` AS order_date,
+                    Tracking,
+                    Status
+                FROM lowesorder
+                WHERE Status IS NULL OR Status = '' OR Status = %s OR Status = %s
+                """
+                cursor.execute(lowes_query, (unshipped_status, unshipped_status_alt))
+                lowes_data = cursor.fetchall()
+
+                return walmart_data + macy_data + bestbuy_data + lowes_data
         finally:
             conn.close()
 
@@ -1179,6 +1513,7 @@ class DBManager:
             "macy": "macyorder",
             "walmart": "walmartorder",
             "bestbuy": "bestbuyorder",
+            "lowes": "lowesorder",
         }
 
         conn = DBManager.get_connection()
@@ -1320,6 +1655,25 @@ class DBManager:
         conn.close()
 
         print("Costway_SKU (walmartorder) updated")
+
+    @staticmethod
+    def update_costwaylowes_sku():
+        conn = DBManager.get_connection()
+        cursor = conn.cursor()
+
+        update_query = """
+            UPDATE lowesorder lo
+            JOIN mapping_table m ON lo.`Offer SKU` = m.SKU
+            SET lo.Costway_SKU = m.warehouse_SKU
+            WHERE lo.Costway_SKU IS NULL OR lo.Costway_SKU = '';
+            """
+
+        cursor.execute(update_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print("Costway_SKU (lowesorder) updated")
 
     @staticmethod
     def upsert_mapping_table(data_tuples):
