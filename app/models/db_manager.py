@@ -1397,12 +1397,12 @@ class DBManager:
                     lo.`Offer SKU` AS platform_sku,
                     'lowes_autool' AS store_key
                 FROM lowesorder lo
-                JOIN order_system.lowes_order_data ld
+                LEFT JOIN order_system.lowes_order_data ld
                   ON ld.order_line_id = lo.`Order line no.`
                 WHERE lo.Status = '未发货'
                   AND lo.`CostwayOrder` IS NOT NULL
                   AND TRIM(lo.`CostwayOrder`) <> ''
-                  AND UPPER(TRIM(ld.order_state)) = 'SHIPPING'
+                  AND (ld.order_line_id IS NULL OR UPPER(TRIM(ld.order_state)) = 'SHIPPING')
                 """
                 cursor.execute(lowes_query)
                 lowes_data = cursor.fetchall()
