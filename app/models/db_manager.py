@@ -1409,7 +1409,7 @@ class DBManager:
         finally:
             conn.close()
 
-        return walmart_data + macy_data + bestbuy_data + lowes_data
+        return list(walmart_data) + list(macy_data) + list(bestbuy_data) + list(lowes_data)
 
     @staticmethod
     def fetch_unshipped_orders_for_manual():
