@@ -67,7 +67,9 @@ def _fetch_affected_orders(store_key: str) -> List[str]:
 
     Includes: qty>=2 orders (known to be truncated) + orders missing from
     autooperate.macyorder (unknown qty, handled conservatively).
-    Excludes: qty=1 orders from macyorder (CSV single row is already correct).
+    Excludes: qty=1 orders from macyorder (CSV single row is already correct),
+    and Mirakl manual-invoice placeholders ("NA", empty) which don't have real
+    order_ids to query TL02 with. Real order_ids always start with a digit.
     """
     store_cfg = STORE_CONFIGS[store_key]
     table = store_cfg["table"]
@@ -84,6 +86,7 @@ def _fetch_affected_orders(store_key: str) -> List[str]:
                   AND SUBSTRING(t.`Date created`, 7, 4) = %s
                   AND t.`Order number` IS NOT NULL
                   AND t.`Order number` <> ''
+                  AND t.`Order number` REGEXP '^[0-9]'
                   AND (o.Quantity >= 2 OR o.`Order number` IS NULL)
                 ORDER BY t.`Order number`
                 """,
