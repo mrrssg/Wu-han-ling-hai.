@@ -249,18 +249,20 @@ def _insert_batch(conn, table: str, items: List[Dict[str, Any]], store_cfg: Dict
     if not items:
         return 0
 
+    # API sync relies on transaction_id (UUID) for dedup, not row_fingerprint.
+    # Leaving row_fingerprint NULL avoids false dedup against fingerprint-collision
+    # CSV rows (qty>=2 line items have identical CSV fields but distinct API UUIDs).
     col_expr = ", ".join(f"`{col}`" for col in CANONICAL_COLUMNS)
-    col_expr += ", `row_fingerprint`, `transaction_id`"
-    placeholders = ", ".join(["%s"] * (len(CANONICAL_COLUMNS) + 2))
+    col_expr += ", `transaction_id`"
+    placeholders = ", ".join(["%s"] * (len(CANONICAL_COLUMNS) + 1))
     insert_sql = f"INSERT IGNORE INTO order_system.`{table}` ({col_expr}) VALUES ({placeholders})"
 
     batch = []
     for item in items:
         db_row = _api_record_to_db_row(item, store_cfg)
-        fingerprint = _row_fingerprint(db_row)
         transaction_id = item.get("id")
         values = tuple((db_row.get(col) or "") if db_row.get(col) else None for col in CANONICAL_COLUMNS)
-        values += (fingerprint, transaction_id)
+        values += (transaction_id,)
         batch.append(values)
 
     with conn.cursor() as cursor:

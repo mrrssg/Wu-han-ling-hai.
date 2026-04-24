@@ -147,8 +147,14 @@ def _is_effective_empty_row(row: Dict[str, str]) -> bool:
     return True
 
 
-def _row_fingerprint(row: Dict[str, str]) -> str:
+def _row_fingerprint(row: Dict[str, str], occurrence_idx: int = 0) -> str:
+    # Mirakl CSV exports can contain multiple truly identical rows for qty>=2 line items
+    # (same Type/Amount/Balance/Date). occurrence_idx disambiguates the N-th occurrence
+    # within a (Order number, Order line ID, Type, Amount, Date created) group.
+    # occurrence_idx=0 keeps the legacy payload so historical fingerprints remain valid.
     payload = "\x1f".join(_normalize_text(row.get(col)) for col in CANONICAL_COLUMNS)
+    if occurrence_idx > 0:
+        payload += f"\x1f#{occurrence_idx}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -236,8 +242,16 @@ def _ensure_import_schema(cursor):
 
 
 def _backfill_row_fingerprints(cursor, table_name: str):
+    # Only backfill CSV-origin rows (transaction_id IS NULL). API rows deliberately
+    # leave row_fingerprint NULL so qty>=2 line items with identical CSV-visible fields
+    # but different UUIDs all coexist under the uq_row_fingerprint UNIQUE index
+    # (MySQL UNIQUE allows multiple NULLs).
     cursor.execute(
-        f"SELECT COUNT(1) AS c FROM {_fqtn(table_name)} WHERE `row_fingerprint` IS NULL OR `row_fingerprint` = ''"
+        f"""
+        SELECT COUNT(1) AS c FROM {_fqtn(table_name)}
+        WHERE (`row_fingerprint` IS NULL OR `row_fingerprint` = '')
+          AND `transaction_id` IS NULL
+        """
     )
     row = cursor.fetchone() or {}
     remain = int(row.get("c") or 0)
@@ -249,7 +263,8 @@ def _backfill_row_fingerprints(cursor, table_name: str):
         f"""
         UPDATE {_fqtn(table_name)}
         SET `row_fingerprint` = SHA2(CONCAT_WS(CHAR(31), {concat_parts}), 256)
-        WHERE `row_fingerprint` IS NULL OR `row_fingerprint` = ''
+        WHERE (`row_fingerprint` IS NULL OR `row_fingerprint` = '')
+          AND `transaction_id` IS NULL
         """
     )
 
@@ -450,6 +465,11 @@ def import_transaction_log_csv(
 
         rows_to_insert: List[tuple] = []
         seen_fingerprints = set()
+        # Tracks the next occurrence_idx for each
+        # (Order number, Order line ID, Type, Amount, Date created) group.
+        # qty>=2 line items produce identical CSV rows whose occurrence_idx=0/1/2/...
+        # yield distinct fingerprints so they all survive dedup.
+        group_counter: Dict[tuple, int] = {}
         expected_seller = cfg["seller"].strip().lower()
 
         for i, raw in enumerate(reader, start=2):
@@ -473,7 +493,17 @@ def import_transaction_log_csv(
                 )
                 continue
 
-            fingerprint = _row_fingerprint(canonical)
+            group_key = (
+                canonical.get("Order number") or "",
+                canonical.get("Order line ID") or "",
+                canonical.get("Type") or "",
+                canonical.get("Amount") or "",
+                canonical.get("Date created") or "",
+            )
+            occurrence_idx = group_counter.get(group_key, 0)
+            group_counter[group_key] = occurrence_idx + 1
+
+            fingerprint = _row_fingerprint(canonical, occurrence_idx)
             if fingerprint in seen_fingerprints:
                 stats.duplicate_rows_file += 1
                 continue
