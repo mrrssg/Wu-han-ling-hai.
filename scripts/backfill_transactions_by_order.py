@@ -47,7 +47,10 @@ from app.services.transaction_log_sync_service import (
 
 
 DEFAULT_BATCH_SIZE = 50       # order_id per TL02 call; URL ≈ 550B for 10-char IDs
-REQUEST_INTERVAL = 10         # seconds between TL02 calls (well under 20/min)
+# Mirakl TL02 hard limits: 20/min AND 60/hour. The 60/hour (= 1/min sustained) is
+# the binding constraint for long-running backfills. Staying at 60s between calls
+# keeps us at exactly the hourly ceiling; bumped to 65s for a small safety margin.
+REQUEST_INTERVAL = 65
 PAGE_LIMIT = 2000             # TL02 max
 TARGET_YEAR = "2026"          # scope
 REQUEST_TIMEOUT = 60
