@@ -12,7 +12,7 @@ from app.services.mirakl_shipping_service import (
 )
 
 PAGE_SIZE = 100
-PAGE_DELAY_SECONDS = 1.5
+PAGE_DELAY_SECONDS = 10
 REQUEST_TIMEOUT = 60
 REQUEST_RETRIES = 3
 
