@@ -86,12 +86,12 @@ def _lookup_supplier_skus(shop_skus: List[str]) -> Dict[str, str]:
         with conn.cursor() as cursor:
             placeholders = ",".join(["%s"] * len(shop_skus))
             sql = f"""
-                SELECT offer_sku, warehouse_SKU
+                SELECT SKU, warehouse_SKU
                 FROM autooperate.mapping_table
-                WHERE offer_sku IN ({placeholders})
+                WHERE SKU IN ({placeholders})
             """
             cursor.execute(sql, shop_skus)
-            return {row["offer_sku"]: row["warehouse_SKU"] for row in cursor.fetchall()}
+            return {row["SKU"]: row["warehouse_SKU"] for row in cursor.fetchall()}
     finally:
         conn.close()
 
