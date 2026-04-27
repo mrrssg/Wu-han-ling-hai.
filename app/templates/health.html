@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}系统健康 - ERP 管理系统{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col">
+        <h3>
+            <i class="bi bi-heart-pulse"></i> 交易日志同步状态
+            {% if overall_ok %}
+                <span class="badge bg-success">全部正常</span>
+            {% else %}
+                <span class="badge bg-danger">需要关注</span>
+            {% endif %}
+        </h3>
+        <p class="text-muted small mb-0">
+            判定阈值：lowes_autool 7 天，其它店 6 小时。超过阈值显示红色 = 游标卡住,需人工排查。
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>店铺</th>
+                    <th>最后同步时间 (last_synced_at)</th>
+                    <th>游标更新时间 (updated_at)</th>
+                    <th>距今</th>
+                    <th>阈值</th>
+                    <th>状态</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td><code>{{ r.store_key }}</code></td>
+                    <td>{{ r.last_synced_at }}</td>
+                    <td>{{ r.updated_at }}</td>
+                    <td>{{ r.hours_stale }} 小时</td>
+                    <td>{{ r.threshold_hours }} 小时</td>
+                    <td>
+                        {% if r.is_stale %}
+                            <span class="badge bg-danger">🔴 卡住</span>
+                        {% else %}
+                            <span class="badge bg-success">🟢 正常</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">没有 cursor 记录</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="mt-3 text-muted small">
+    <strong>红色 = 卡住</strong> 怎么处理：
+    <ol class="mb-0">
+        <li>SSH 登服务器看 <code>logs/cron_txn_&lt;store&gt;.log</code> 最近输出，确认是不是连续 dup 不前进</li>
+        <li>登 Mirakl Seller Portal 核对该店那段时间真有交易吗</li>
+        <li>必要时手动改 <code>order_system.txn_sync_cursor.last_synced_at</code> 推一下游标（注意:不可回退</li>
+    </ol>
+</div>
+{% endblock %}

@@ -148,17 +148,19 @@ def mapping_upload():
         col_map = {c.lower(): c for c in df.columns}
         sku_col = col_map.get("sku")
         wh_col = col_map.get("warehouse_sku") or col_map.get("warehouse sku")
+        owner_col = col_map.get("owner")
 
-        if not sku_col or not wh_col:
-            flash("表头必须包含：SKU, warehouse_SKU", "danger")
+        if not sku_col or not wh_col or not owner_col:
+            flash("表头必须包含：SKU, warehouse_SKU, owner", "danger")
             return redirect(request.url)
 
-        df = df[[sku_col, wh_col]].fillna("")
+        df = df[[sku_col, wh_col, owner_col]].fillna("")
         df[sku_col] = df[sku_col].astype(str).str.strip()
         df[wh_col] = df[wh_col].astype(str).str.strip()
+        df[owner_col] = df[owner_col].astype(str).str.strip()
         df = df[(df[sku_col] != "") & (df[wh_col] != "")]
 
-        data = [tuple(x) for x in df[[sku_col, wh_col]].to_numpy()]
+        data = [tuple(x) for x in df[[sku_col, wh_col, owner_col]].to_numpy()]
         try:
             count = DBManager.upsert_mapping_table(data)
             flash(f"已导入 {count} 条映射关系", "success")

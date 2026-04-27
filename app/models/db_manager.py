@@ -1683,10 +1683,11 @@ class DBManager:
         try:
             with conn.cursor() as cursor:
                 sql = """
-                    INSERT INTO mapping_table (SKU, warehouse_SKU)
-                    VALUES (%s, %s)
+                    INSERT INTO mapping_table (SKU, warehouse_SKU, owner)
+                    VALUES (%s, %s, %s)
                     ON DUPLICATE KEY UPDATE
-                        warehouse_SKU = VALUES(warehouse_SKU);
+                        warehouse_SKU = VALUES(warehouse_SKU),
+                        owner = VALUES(owner);
                 """
                 cursor.executemany(sql, data_tuples)
             conn.commit()
