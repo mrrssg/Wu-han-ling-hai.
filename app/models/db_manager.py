@@ -714,6 +714,34 @@ class DBManager:
             conn.close()
 
     @staticmethod
+    def rewrite_hyl_stock(data_tuples, batch_size=2000):
+        conn = DBManager.get_connection()
+        total = len(data_tuples)
+        if total == 0:
+            return
+
+        now = datetime.now()
+        data_with_time = [(sku, stock, now) for (sku, stock) in data_tuples]
+
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    INSERT INTO newestdropship_hyl (SKU, Stock, Updated_At)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        Stock = VALUES(Stock),
+                        Updated_At = VALUES(Updated_At);
+                """
+                for i in range(0, total, batch_size):
+                    cursor.executemany(sql, data_with_time[i:i + batch_size])
+                    conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    @staticmethod
     def get_supplier_max_stock(sku: str) -> int:
         conn = DBManager.get_connection()
         try:
@@ -728,9 +756,11 @@ class DBManager:
                     SELECT Stock AS stock_val FROM newestdropship_dajian WHERE SKU = %s
                     UNION ALL
                     SELECT Stock AS stock_val FROM newestdropship_songmics WHERE SKU = %s
+                    UNION ALL
+                    SELECT Stock AS stock_val FROM newestdropship_hyl WHERE SKU = %s
                 ) t
                 '''
-                cursor.execute(sql, (sku, sku, sku, sku))
+                cursor.execute(sql, (sku, sku, sku, sku, sku))
                 row = cursor.fetchone()
                 if not row:
                     return 0
@@ -754,11 +784,13 @@ class DBManager:
                     SELECT Stock AS stock_val, 'dajian' AS source FROM newestdropship_dajian WHERE SKU = %s
                     UNION ALL
                     SELECT Stock AS stock_val, 'songmics' AS source FROM newestdropship_songmics WHERE SKU = %s
+                    UNION ALL
+                    SELECT Stock AS stock_val, 'hyl' AS source FROM newestdropship_hyl WHERE SKU = %s
                 ) t
                 ORDER BY stock_val DESC
                 LIMIT 1
                 """
-                cursor.execute(sql, (sku, sku, sku, sku))
+                cursor.execute(sql, (sku, sku, sku, sku, sku))
                 row = cursor.fetchone()
                 if not row:
                     return 0, None
@@ -809,6 +841,7 @@ class DBManager:
                 ("sishun", "newestdropship_vevor"),
                 ("dajian", "newestdropship_dajian"),
                 ("songmics", "newestdropship_songmics"),
+                ("hyl", "newestdropship_hyl"),
             ]
 
             supplier_map = {}

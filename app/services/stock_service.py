@@ -975,6 +975,68 @@ class StockService:
 
 
     @staticmethod
+    def process_hyl_data(file_path) -> Tuple[bool, str]:
+        """
+        手动上传的 HYL 库存表 (xlsx)。
+        Sheet: 库存
+        列: SKU | 小计 | GA | CA | NJ | TX | AT
+        第2行是合计（SKU空），跳过。"-" 视为 0，只取 SKU 和 小计。
+        """
+        try:
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            ws = wb["库存"] if "库存" in wb.sheetnames else wb.active
+
+            rows = ws.iter_rows(values_only=True)
+            header = next(rows, None)
+            if not header:
+                return False, "HYL Excel 表头为空"
+
+            def norm(x):
+                return str(x).strip().lower() if x is not None else ""
+
+            header_map = {norm(h): i for i, h in enumerate(header)}
+            sku_idx = header_map.get("sku")
+            sub_idx = header_map.get("小计")
+            if sku_idx is None or sub_idx is None:
+                return False, f"缺少必要列(SKU/小计)，当前表头: {list(header_map.keys())}"
+
+            data_tuples = []
+            seen = set()
+            for r in rows:
+                sku = r[sku_idx]
+                if not sku:
+                    continue
+                sku = str(sku).strip()
+                if not sku or sku.lower() == "nan":
+                    continue
+                if sku in seen:
+                    continue
+                seen.add(sku)
+
+                stock_raw = r[sub_idx]
+                if stock_raw is None or (isinstance(stock_raw, str) and stock_raw.strip() in ("", "-")):
+                    stock = 0
+                else:
+                    try:
+                        stock = int(stock_raw)
+                    except Exception:
+                        stock = 0
+
+                data_tuples.append((sku, stock))
+
+            if not data_tuples:
+                return False, "无有效数据"
+
+            DBManager.rewrite_hyl_stock(data_tuples)
+            return True, f"成功重写 {len(data_tuples)} 条"
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False, f"HYL处理异常: {str(e)}"
+
+
+
+    @staticmethod
 
     def sync_giga_stock():
 
@@ -1241,6 +1303,7 @@ class StockService:
             "sishun": {"threshold": 50, "qty_high": 20, "qty_low": 0},
             "dajian": {"threshold": 50, "qty_high": 20, "qty_low": 0},
             "songmics": {"threshold": 50, "qty_high": 20, "qty_low": 0},
+            "hyl": {"threshold": 50, "qty_high": 20, "qty_low": 0},
         }
         default_cfg = {
             "excluded": [],

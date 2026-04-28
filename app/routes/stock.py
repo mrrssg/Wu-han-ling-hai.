@@ -163,6 +163,29 @@ def save_hd_rules():
     return redirect(url_for('stock.index'))
 
 
+@stock_bp.route('/upload-hyl', methods=['POST'])
+def upload_hyl():
+    file = request.files.get('hyl_file')
+    if not file or not file.filename:
+        flash('请选择 HYL 库存文件 (.xlsx)', 'warning')
+        return redirect(url_for('stock.index'))
+
+    filename = secure_filename(file.filename)
+    upload_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+    file.save(upload_path)
+
+    try:
+        success, msg = StockService.process_hyl_data(upload_path)
+        if success:
+            flash(f'HYL 库存更新成功: {msg}', 'success')
+        else:
+            flash(f'HYL 库存更新失败: {msg}', 'danger')
+    except Exception as e:
+        flash(f'HYL 系统异常: {str(e)}', 'danger')
+
+    return redirect(url_for('stock.index'))
+
+
 @stock_bp.route('/save-costway-pwd', methods=['POST'])
 def save_costway_pwd():
     base_dir = current_app.config['BASE_DIR']
@@ -188,7 +211,7 @@ def _parse_supplier_rules(req):
         except Exception:
             return default
 
-    keys = ["haoya", "sishun", "dajian", "songmics"]
+    keys = ["haoya", "sishun", "dajian", "songmics", "hyl"]
     rules = {}
     for key in keys:
         rules[key] = {
