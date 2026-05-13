@@ -137,9 +137,18 @@ def _parse_date_only(v) -> Optional[str]:
     return s.split("T")[0][:10]
 
 
-def _extract_retail(prices: Any) -> Dict[str, Any]:
-    """Pick origin_price/discount_price/discount_dates from the first
-    retail_prices entry (= default channel).
+def _extract_pricing(offer: Dict) -> Dict[str, Any]:
+    """Pick origin_price/discount_price/discount_dates out of one Mirakl offer
+    record. The shape differs by mode:
+
+    - Non-Dropship marketplace (e.g. Macy-kuyotq): the customer-facing price
+      lives at `prices[0].origin_price` and any volume tiering lives in
+      `prices[0].volume_prices`. There is no retail_prices block.
+    - Dropship marketplace: `retail_prices[0].unit_origin_price` is the
+      customer-facing selling price; `prices` holds the wholesale cost. We
+      prefer retail_prices when present.
+
+    Discount fields are read in the same priority order.
     """
     out = {
         "origin_price": None,
@@ -147,22 +156,30 @@ def _extract_retail(prices: Any) -> Dict[str, Any]:
         "discount_start": None,
         "discount_end": None,
     }
-    if not isinstance(prices, list) or not prices:
-        return out
-    first = prices[0]
-    if not isinstance(first, dict):
-        return out
-    out["origin_price"] = _to_float(first.get("unit_origin_price"))
-    out["discount_price"] = _to_float(first.get("unit_discount_price"))
-    out["discount_start"] = _parse_date_only(first.get("discount_start_date"))
-    out["discount_end"] = _parse_date_only(first.get("discount_end_date"))
+
+    prices = offer.get("prices")
+    if isinstance(prices, list) and prices and isinstance(prices[0], dict):
+        p0 = prices[0]
+        out["origin_price"] = _to_float(p0.get("origin_price"))
+        out["discount_price"] = _to_float(p0.get("unit_discount_price"))
+        out["discount_start"] = _parse_date_only(p0.get("discount_start_date"))
+        out["discount_end"] = _parse_date_only(p0.get("discount_end_date"))
+
+    retail = offer.get("retail_prices")
+    if isinstance(retail, list) and retail and isinstance(retail[0], dict):
+        r0 = retail[0]
+        out["origin_price"] = _to_float(r0.get("unit_origin_price")) or out["origin_price"]
+        out["discount_price"] = _to_float(r0.get("unit_discount_price")) or out["discount_price"]
+        out["discount_start"] = _parse_date_only(r0.get("discount_start_date")) or out["discount_start"]
+        out["discount_end"] = _parse_date_only(r0.get("discount_end_date")) or out["discount_end"]
+
     return out
 
 
 def _build_row(offer: Dict, store_cfg: Dict[str, str], warehouse_sku: Optional[str],
                source_export_id: str, now_str: str) -> tuple:
     shop_sku = _norm(offer.get("shop_sku"))
-    retail = _extract_retail(offer.get("retail_prices"))
+    retail = _extract_pricing(offer)
     title = _norm(offer.get("product_title"))
     category = _norm(offer.get("category_label") or offer.get("category_code"))
     listed_at = None
