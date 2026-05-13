@@ -328,18 +328,22 @@ def download_export_chunks(
 ) -> List[Any]:
     """Download every chunk URL and concatenate the JSON `offers` arrays.
 
-    Per docs, OF52 chunk URLs are signed and do not need the
-    Authorization header. We still send through the store proxy so the source
-    IP stays consistent.
+    OF52 chunks are gated on the same Mirakl Authorization header as the
+    rest of the API. We send through the store proxy so the source IP stays
+    consistent.
     """
-    net = _proxy_session_headers(store_key, api_key="")
+    api = _resolve_api(store_key)
+    net = _proxy_session_headers(store_key, api["api_key"])
     all_offers: List[Any] = []
     for url in urls:
-        # signed URLs - some Miraklinst clusters reject Auth header on them, so
-        # we drop the header but keep the proxy.
         resp = requests.get(
             url,
-            headers={"User-Agent": net["headers"]["User-Agent"], "Connection": "close"},
+            headers={
+                "Authorization": api["api_key"],
+                "Accept": "application/json",
+                "User-Agent": net["headers"]["User-Agent"],
+                "Connection": "close",
+            },
             proxies=net["proxies"],
             timeout=120,
         )
