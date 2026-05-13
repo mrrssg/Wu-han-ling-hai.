@@ -2,10 +2,13 @@
 {% block title %}待改价 - macy_kuyotq{% endblock %}
 
 {% block content %}
+<!-- Push result banner (persists until closed) -->
+<div id="push-banner-container"></div>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3><i class="bi bi-fire text-danger"></i> 待改价 (latest dry-run)</h3>
-        <small class="text-muted">利润 &lt; 5% 的 active offer，按当前利润率升序排列（最亏的在最上）</small>
+        <small class="text-muted">利润 &lt; 5% 的 active offer，按当前利润率升序排列（最亏的在最上）。<strong class="text-success">已推送的会自动从列表移除。</strong></small>
     </div>
     <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
 </div>
@@ -124,6 +127,39 @@ if (checkAllBtn) {
     });
 }
 
+function showBanner(kind, html) {
+    const container = document.getElementById('push-banner-container');
+    if (!container) return;
+    const div = document.createElement('div');
+    div.className = `alert alert-${kind} alert-dismissible fade show`;
+    div.innerHTML = html + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+    container.appendChild(div);
+}
+
+// Persistent UI cooldown across the page: once you push, the batch button is
+// disabled with a live countdown so you can't double-click. 75s = 65s OF24
+// cap + 10s safety. The actual rate gate lives on the server too.
+const PUSH_COOLDOWN_SECONDS = 75;
+let cooldownTimer = null;
+function startCooldown(button, originalHtml) {
+    let left = PUSH_COOLDOWN_SECONDS;
+    button.disabled = true;
+    button.innerHTML = `<span class="spinner-border spinner-border-sm"></span> 冷却中 ${left}s`;
+    if (cooldownTimer) clearInterval(cooldownTimer);
+    cooldownTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+            clearInterval(cooldownTimer);
+            cooldownTimer = null;
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+            refreshSelectionUI();
+        } else {
+            button.innerHTML = `<span class="spinner-border spinner-border-sm"></span> 冷却中 ${left}s`;
+        }
+    }, 1000);
+}
+
 if (batchBtn) {
     batchBtn.addEventListener('click', async () => {
         const skus = getSelected();
@@ -132,7 +168,8 @@ if (batchBtn) {
             alert('每批最多 50 个，请减少选中数量。');
             return;
         }
-        if (!confirm(`批量推送 ${skus.length} 个 SKU 到 Mirakl?\n大约 ${Math.ceil(2 + 1.1)} 分钟一次性推完，比单推快 30 倍以上。`)) return;
+        if (!confirm(`批量推送 ${skus.length} 个 SKU 到 Mirakl?\n约 ${Math.ceil(2 * skus.length / 60 + 1.1)} 分钟。推送完后按钮会冷却 ${PUSH_COOLDOWN_SECONDS} 秒防止重复点。`)) return;
+
         batchBtn.disabled = true;
         batchBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
         try {
@@ -143,26 +180,41 @@ if (batchBtn) {
             });
             const data = await r.json();
             if (data.success) {
-                alert(`✅ 批量推送成功\n推送了 ${data.pushed} 个 SKU\nimport_id=${data.import_id}\nrun_id=${data.run_id}\n\n刷新页面看最新状态，明天 OF52 会自动对账。`);
-                location.reload();
+                showBanner('success',
+                    `<strong>✅ 推送成功 ${data.pushed} 个 SKU</strong>` +
+                    ` (import_id=<code>${data.import_id}</code>` +
+                    ` run_id=<code>${data.run_id}</code>` +
+                    ` IP=<code>${data.ip_used || '-'}</code>)` +
+                    `<br><small class="text-muted">已推送的 SKU 会从列表移除；刷新页面看最新状态。</small>`
+                );
+                // Mark pushed rows visually before reload
+                for (const sku of data.skus_pushed || []) {
+                    document.querySelectorAll(`tr.row-${CSS.escape(sku)}`).forEach(tr => {
+                        tr.style.opacity = '0.4';
+                        tr.style.textDecoration = 'line-through';
+                    });
+                }
+                startCooldown(batchBtn, '<i class="bi bi-arrow-up-circle"></i> 批量推送选中 (0)');
+                // Auto-reload after the cooldown so server filter takes effect
+                setTimeout(() => location.reload(), (PUSH_COOLDOWN_SECONDS + 2) * 1000);
             } else {
-                let msg = '❌ 批量推送失败\n';
-                if (data.msg) msg += data.msg + '\n';
-                if (data.error_message) msg += '错误: ' + data.error_message + '\n';
-                if (data.rejections && data.rejections.length) msg += '拒绝 ' + data.rejections.length + ' 个: ' + JSON.stringify(data.rejections.slice(0, 5));
-                alert(msg);
+                let msg = '<strong>❌ 推送失败</strong> ';
+                if (data.msg) msg += data.msg;
+                if (data.error_message) msg += ' / ' + data.error_message;
+                if (data.rejections && data.rejections.length) msg += '<br>拒绝 ' + data.rejections.length + ' 个: ' + JSON.stringify(data.rejections.slice(0, 5));
+                showBanner('danger', msg);
                 batchBtn.disabled = false;
                 refreshSelectionUI();
             }
         } catch (err) {
-            alert('JS 错误: ' + err.message);
+            showBanner('danger', '<strong>JS 错误:</strong> ' + err.message);
             batchBtn.disabled = false;
             refreshSelectionUI();
         }
     });
 }
 
-// 单推按钮 (保留)
+// 单推按钮
 document.querySelectorAll('.push-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         const sku = btn.dataset.sku;
@@ -176,14 +228,22 @@ document.querySelectorAll('.push-btn').forEach(btn => {
                 btn.classList.remove('btn-outline-danger');
                 btn.classList.add('btn-success');
                 btn.innerHTML = '<i class="bi bi-check-circle"></i> 已推';
-                alert(`✅ ${sku}: $${data.old_origin_price} → $${data.new_origin_price}\nimport_id=${data.import_id}`);
+                showBanner('success',
+                    `<strong>✅ ${sku}</strong>: $${data.old_origin_price} → $${data.new_origin_price}` +
+                    ` (import_id=<code>${data.import_id}</code>)`
+                );
+                // Fade the row
+                document.querySelectorAll(`tr.row-${CSS.escape(sku)}`).forEach(tr => {
+                    tr.style.opacity = '0.4';
+                    tr.style.textDecoration = 'line-through';
+                });
             } else {
-                alert('❌ ' + (data.msg || JSON.stringify(data)));
+                showBanner('danger', '<strong>❌ ' + sku + ':</strong> ' + (data.msg || JSON.stringify(data)));
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 单推';
             }
         } catch (e) {
-            alert('错误: ' + e.message);
+            showBanner('danger', '<strong>JS 错误:</strong> ' + e.message);
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 单推';
         }

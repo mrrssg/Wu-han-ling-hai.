@@ -126,9 +126,13 @@ def _summary_counts() -> Dict[str, int]:
     }
 
 
+CANDIDATE_HIDE_AFTER_PUSH_STATUSES = ("success", "pending_verify")
+
+
 def _top_candidates(limit: int = 10) -> List[Dict]:
-    """SKUs that the latest run flagged as dry_run (= would trigger). Sorted by
-    margin_before ascending so the most-loss SKUs surface first.
+    """SKUs flagged dry_run in the latest monitor run, MINUS any that have
+    since been pushed (status success / pending_verify after the dry_run
+    decision). Sorted by margin_before asc.
     """
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
@@ -139,19 +143,27 @@ def _top_candidates(limit: int = 10) -> List[Dict]:
         return []
     latest_run_id = latest[0]["run_id"]
     return _query(
-        """SELECT shop_sku, warehouse_sku, supplier,
-                  old_origin_price, new_origin_price, new_cost,
-                  profit_margin_before, return_shipping_base, supplier_price_db
-             FROM order_system.offer_price_change_log
-            WHERE run_id=%s AND status='dry_run'
-            ORDER BY profit_margin_before ASC
+        """SELECT log.shop_sku, log.warehouse_sku, log.supplier,
+                  log.old_origin_price, log.new_origin_price, log.new_cost,
+                  log.profit_margin_before, log.return_shipping_base,
+                  log.supplier_price_db
+             FROM order_system.offer_price_change_log log
+            WHERE log.run_id=%s AND log.status='dry_run'
+              AND NOT EXISTS (
+                  SELECT 1 FROM order_system.offer_price_change_log later
+                   WHERE later.shop_sku = log.shop_sku
+                     AND later.store_key = 'macy_kuyotq'
+                     AND later.triggered_at > log.triggered_at
+                     AND later.status IN ('success','pending_verify')
+              )
+            ORDER BY log.profit_margin_before ASC
             LIMIT %s""",
         (latest_run_id, limit),
     )
 
 
 def _all_candidates() -> List[Dict]:
-    """Every dry_run row from the latest run, for the candidates page."""
+    """Every dry_run row from the latest run not yet pushed."""
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
            WHERE run_id LIKE 'mon-macy_kuyotq-%' AND status='dry_run'
@@ -161,9 +173,16 @@ def _all_candidates() -> List[Dict]:
         return []
     latest_run_id = latest[0]["run_id"]
     return _query(
-        """SELECT * FROM order_system.offer_price_change_log
-            WHERE run_id=%s AND status='dry_run'
-            ORDER BY profit_margin_before ASC""",
+        """SELECT log.* FROM order_system.offer_price_change_log log
+            WHERE log.run_id=%s AND log.status='dry_run'
+              AND NOT EXISTS (
+                  SELECT 1 FROM order_system.offer_price_change_log later
+                   WHERE later.shop_sku = log.shop_sku
+                     AND later.store_key = 'macy_kuyotq'
+                     AND later.triggered_at > log.triggered_at
+                     AND later.status IN ('success','pending_verify')
+              )
+            ORDER BY log.profit_margin_before ASC""",
         (latest_run_id,),
     )
 
@@ -390,8 +409,8 @@ def push_one(shop_sku):
             "mirakl_http_status": resp.get("http_status"),
             "mirakl_response_body": resp.get("response_body"),
             "ip_used": resp.get("ip_used"),
-            "status": "pending_verify" if ok else "failed",
-            "decision_reason": "manual web push",
+            "status": "success" if ok else "failed",
+            "decision_reason": "manual web push (OF24 HTTP 2xx = success; next-day OF52 cron will catch the rare async-import failure)",
             "error_message": resp.get("error"),
         })
 
@@ -659,8 +678,8 @@ def push_batch():
             "mirakl_http_status": http_status,
             "mirakl_response_body": resp.get("response_body"),
             "ip_used": resp.get("ip_used"),
-            "status": "pending_verify" if ok else "failed",
-            "decision_reason": f"batch_push run_id={run_id}",
+            "status": "success" if ok else "failed",
+            "decision_reason": f"batch_push run_id={run_id} (OF24 HTTP 2xx = success)",
             "error_message": resp.get("error"),
         })
 

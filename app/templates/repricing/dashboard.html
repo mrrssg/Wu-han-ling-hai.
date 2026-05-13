@@ -2,6 +2,9 @@
 {% block title %}价格监控 - macy_kuyotq{% endblock %}
 
 {% block content %}
+<!-- Push result banner (persists until closed) -->
+<div id="push-banner-container"></div>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3 class="mb-0"><i class="bi bi-currency-dollar"></i> 价格监控仪表盘</h3>
@@ -234,25 +237,37 @@
 </div>
 
 <script>
+function showBanner(kind, html) {
+    const container = document.getElementById('push-banner-container');
+    if (!container) return;
+    const div = document.createElement('div');
+    div.className = `alert alert-${kind} alert-dismissible fade show`;
+    div.innerHTML = html + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+    container.appendChild(div);
+}
+
 document.querySelectorAll('.push-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         const sku = btn.dataset.sku;
-        if (!confirm(`确认推送 ${sku} 到 Mirakl? (约 130 秒)`)) return;
+        if (!confirm(`确认推送 ${sku}? (约 67 秒)`)) return;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
         try {
             const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
             const data = await r.json();
             if (data.success) {
-                alert(`✅ 已推送 ${sku}\n原价 $${data.old_origin_price} → 新价 $${data.new_origin_price}\nimport_id=${data.import_id}\n稍后刷新页面看明天 OF52 对账结果。`);
-                location.reload();
+                showBanner('success',
+                    `<strong>✅ ${sku}</strong> 已推送 $${data.old_origin_price} → $${data.new_origin_price}` +
+                    ` (import_id=<code>${data.import_id}</code>)`
+                );
+                setTimeout(() => location.reload(), 3000);
             } else {
-                alert('❌ 推送失败: ' + (data.msg || JSON.stringify(data)));
+                showBanner('danger', '<strong>❌</strong> ' + (data.msg || JSON.stringify(data)));
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
             }
         } catch (e) {
-            alert('错误: ' + e.message);
+            showBanner('danger', '<strong>JS 错误:</strong> ' + e.message);
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
         }
