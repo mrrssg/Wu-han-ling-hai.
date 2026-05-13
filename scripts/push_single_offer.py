@@ -300,6 +300,45 @@ def push_one(store_key: str, shop_sku: str, confirm_live: bool) -> dict:
     }
 
 
+def post_verify(store_key: str, shop_sku: str, offer_id: int,
+                expected_price: float, wait_seconds: int) -> dict:
+    """Sleep `wait_seconds`, then call OF22 again to see if Mirakl applied the
+    new price. Returns {match: bool, current_price: float, ...}.
+
+    OF22 takes a cooldown slot too (65s); we still wait the full wait_seconds
+    because Mirakl needs time to actually process the import.
+    """
+    if wait_seconds > 0:
+        print(f"\n  Sleeping {wait_seconds}s before post-verify ...")
+        time.sleep(wait_seconds)
+
+    print(f"\n=== Post-verify OF22 (offer_id={offer_id}) ===")
+    t0 = time.time()
+    of22 = get_offer(store_key, int(offer_id))
+    print(f"  OF22 returned in {time.time() - t0:.1f}s")
+
+    current_price = of22.get("price")
+    prices_block = of22.get("applicable_pricing") or {}
+    pricing_price = prices_block.get("price")
+
+    matched = (
+        current_price is not None
+        and abs(float(current_price) - float(expected_price)) < 0.01
+    )
+    return {
+        "shop_sku": of22.get("shop_sku"),
+        "current_price": current_price,
+        "applicable_pricing_price": pricing_price,
+        "expected_price": expected_price,
+        "matched": matched,
+        "state_code": of22.get("state_code"),
+        "active": of22.get("active"),
+        "quantity": of22.get("quantity"),
+        "description_still_present": bool(of22.get("description")),
+        "leadtime_to_ship_still": of22.get("leadtime_to_ship"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Single-SKU OF24 push for verification.")
     parser.add_argument("--store", default="macy_kuyotq")
@@ -308,6 +347,12 @@ def main() -> int:
         "--confirm-live",
         action="store_true",
         help="REAL OF24 push. Without this flag the script runs in dry-run.",
+    )
+    parser.add_argument(
+        "--post-verify-seconds",
+        type=int,
+        default=0,
+        help="If >0 and live, wait N seconds after OF24 then call OF22 to verify.",
     )
     args = parser.parse_args()
 
@@ -318,6 +363,45 @@ def main() -> int:
             result = push_one(args.store, args.shop_sku, args.confirm_live)
         except Exception as exc:
             result = {"success": False, "error": str(exc)}
+
+        # Post-verify only if push succeeded and user asked for it
+        if (
+            args.confirm_live
+            and args.post_verify_seconds > 0
+            and result.get("success")
+            and result.get("status") == "pending_verify"
+        ):
+            try:
+                # Need the offer_id for OF22
+                offers = fetch_active_offers(args.store)
+                ctx = next((o for o in offers if o.shop_sku == args.shop_sku), None)
+                if ctx and ctx.raw_json:
+                    of_id = json.loads(ctx.raw_json).get("offer_id")
+                    if of_id:
+                        verify = post_verify(
+                            args.store, args.shop_sku, int(of_id),
+                            result["new_origin_price"], args.post_verify_seconds,
+                        )
+                        result["post_verify"] = verify
+
+                        # If matched, flip log status to success and clear pending_verify
+                        if verify.get("matched"):
+                            conn = DBManager.get_connection()
+                            try:
+                                with conn.cursor() as cursor:
+                                    cursor.execute(
+                                        """UPDATE order_system.offer_price_change_log
+                                              SET status='success',
+                                                  verify_attempted_at=NOW(),
+                                                  verify_result='post_verify_matched'
+                                            WHERE run_id=%s""",
+                                        (result["run_id"],),
+                                    )
+                                conn.commit()
+                            finally:
+                                conn.close()
+            except Exception as exc:
+                result["post_verify_error"] = str(exc)
 
     print("\n=== Result ===")
     print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
