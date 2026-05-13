@@ -318,10 +318,10 @@ def blacklist_page():
 
 @repricing_bp.route("/push/<shop_sku>", methods=["POST"])
 def push_one(shop_sku):
-    """Manual single-SKU OF24 push. Synchronous; blocks for 2 cooldown windows
-    (= ~130 seconds). Returns JSON.
+    """Manual single-SKU push using OF21 (fetch) + OF24 (write).
+    Synchronous; blocks for ~67 seconds (OF21 ~2s + OF24 cooldown 65s).
     """
-    from app.services.mirakl_offer_api_service import get_offer, update_offers
+    from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers
     from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
     from app.services.repricing_monitor_service import _log
 
@@ -363,12 +363,8 @@ def push_one(shop_sku):
         )
         target = round(float(bd.origin_price), 2)
 
-        offer_id = int(json.loads(ctx.raw_json or "{}").get("offer_id") or 0)
-        if not offer_id:
-            return jsonify({"success": False, "msg": "no offer_id"}), 400
-
-        of22 = get_offer(STORE_KEY, offer_id)
-        payload = build_of24_payload_from_of22(of22, target)
+        full = get_offer_by_sku(STORE_KEY, shop_sku)
+        payload = build_of24_payload_from_of22(full, target)
         resp = update_offers(STORE_KEY, [payload], dry_run=False)
 
         run_id = f"manual-{shop_sku}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -511,6 +507,194 @@ def full_export_download(run_id):
         as_attachment=True,
         download_name=candidates[-1],
     )
+
+
+# =============================================================================
+# Batch push: select N candidates -> N OF21 fetches -> 1 batched OF24 call
+# =============================================================================
+
+@repricing_bp.route("/push-batch", methods=["POST"])
+def push_batch():
+    """Push N SKUs in one batched OF24 call.
+
+    Request JSON: {"shop_skus": ["sku1", "sku2", ...]}
+
+    For each sku:
+      - Fetch full fields via OF21 (~2s each, no cooldown lock)
+      - Compute target price
+      - Build OF24 payload preserving all fields
+
+    Then send all payloads in ONE OF24 call (single 65s cooldown).
+
+    Returns per-SKU success/failure breakdown. All-or-nothing wrt the OF24
+    call itself: if Mirakl rejects the batch we mark everyone failed.
+    """
+    from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers, OF24_DEFAULT_BATCH_SIZE
+    from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
+    from app.services.repricing_monitor_service import _log
+
+    payload = request.get_json(silent=True) or {}
+    skus_in = payload.get("shop_skus") or []
+    if not isinstance(skus_in, list) or not skus_in:
+        return jsonify({"success": False, "msg": "shop_skus must be a non-empty list"}), 400
+    if len(skus_in) > OF24_DEFAULT_BATCH_SIZE:
+        return jsonify({
+            "success": False,
+            "msg": f"batch too large: {len(skus_in)} > {OF24_DEFAULT_BATCH_SIZE} (chunk on the caller)",
+        }), 400
+
+    run_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+    # Pre-load shared context once
+    offers = fetch_active_offers(STORE_KEY)
+    by_sku = {o.shop_sku: o for o in offers}
+    configs = fetch_pricing_configs(STORE_KEY)
+
+    payloads = []
+    rejections = []         # (sku, reason)
+    targets_by_sku = {}     # sku -> {target, margin, cfg, supplier, sp, cost, bd}
+
+    for sku in skus_in:
+        sku = (sku or "").strip()
+        if not sku:
+            rejections.append(("", "empty_sku"))
+            continue
+        ctx = by_sku.get(sku)
+        if not ctx:
+            rejections.append((sku, "not_active"))
+            continue
+        if not ctx.warehouse_sku:
+            rejections.append((sku, "no_warehouse_sku"))
+            continue
+        cfg = configs.get(ctx.warehouse_sku)
+        if not cfg or cfg.get("return_shipping_base") is None:
+            rejections.append((sku, "missing_feishu_config"))
+            continue
+        supplier = cfg["supplier"]
+        if supplier not in ("Costway", "Vevor"):
+            rejections.append((sku, f"unsupported_supplier:{supplier}"))
+            continue
+        sp, _ = lookup_supplier_price(ctx.warehouse_sku, supplier)
+        if sp is None:
+            rejections.append((sku, "no_supplier_price"))
+            continue
+        try:
+            L = float(cfg["length_in"]); W = float(cfg["width_in"])
+            H = float(cfg["height_in"]); wt = float(cfg["weight_lb"])
+            rb = float(cfg["return_shipping_base"])
+            df = float(cfg["discount_factor"])
+            cr = float(cfg["commission_rate"])
+        except (TypeError, ValueError):
+            rejections.append((sku, "bad_numeric_cfg"))
+            continue
+
+        cost = cost_from_supplier_price(sp, supplier)
+        margin = realised_margin(
+            current_origin_price=ctx.db_origin_price,
+            supplier=supplier, supplier_price=sp,
+            return_shipping_base=rb, discount_factor=df, commission_rate=cr,
+            length_in=L, width_in=W, height_in=H, weight_lb=wt,
+        )
+        bd = calculate_breakdown(
+            supplier=supplier, supplier_price=sp,
+            return_shipping_base=rb, discount_factor=df,
+            length_in=L, width_in=W, height_in=H, weight_lb=wt,
+        )
+        target = round(float(bd.origin_price), 2)
+        targets_by_sku[sku] = {
+            "ctx": ctx, "target": target, "margin": margin,
+            "supplier": supplier, "sp": sp, "cost": cost, "bd": bd,
+            "df": df, "cr": cr, "rb": rb,
+        }
+
+    # Now OF21 each sku in order to build payloads.
+    # OF21 is not rate-capped; we fetch sequentially to be polite (~2s each).
+    of21_failures = []
+    for sku, info in list(targets_by_sku.items()):
+        try:
+            full = get_offer_by_sku(STORE_KEY, sku)
+        except Exception as exc:
+            of21_failures.append((sku, str(exc)))
+            del targets_by_sku[sku]
+            continue
+        info["full"] = full
+        info["payload"] = build_of24_payload_from_of22(full, info["target"])
+        payloads.append(info["payload"])
+
+    if not payloads:
+        return jsonify({
+            "success": False,
+            "run_id": run_id,
+            "msg": "no eligible SKUs to push",
+            "rejections": rejections,
+            "of21_failures": of21_failures,
+        }), 400
+
+    # Single OF24 batched call
+    resp = update_offers(STORE_KEY, payloads, dry_run=False)
+    http_status = resp.get("http_status")
+    ok = http_status in (200, 201) and not resp.get("error")
+    import_id = resp.get("import_id")
+
+    # Persist a log row per pushed SKU + per rejection
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for sku, info in targets_by_sku.items():
+        _log(STORE_KEY, run_id, "batch_push", info["ctx"], {
+            "supplier": info["supplier"],
+            "supplier_price_db": info["sp"],
+            "new_cost": round(info["cost"], 4),
+            "new_origin_price": info["target"],
+            "new_discount_price": round(info["target"] * info["df"], 2),
+            "discount_factor": info["df"], "commission_rate": info["cr"],
+            "return_shipping_base": info["rb"],
+            "return_shipping_extra": info["bd"].return_shipping_extra,
+            "return_cost_estimate": info["bd"].return_cost_estimate,
+            "total_cost": round(info["bd"].total_cost, 4),
+            "formula_calc_price": round(info["bd"].formula_calc_price, 4),
+            "target_origin_price": info["target"],
+            "profit_margin_before": round(info["margin"], 4),
+            "profit_margin_after": 0.12 if ok else None,
+            "mirakl_called": 1,
+            "mirakl_import_id": import_id,
+            "mirakl_http_status": http_status,
+            "mirakl_response_body": resp.get("response_body"),
+            "ip_used": resp.get("ip_used"),
+            "status": "pending_verify" if ok else "failed",
+            "decision_reason": f"batch_push run_id={run_id}",
+            "error_message": resp.get("error"),
+        })
+
+    # Update DB origin_price for successful pushes
+    if ok:
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                for sku, info in targets_by_sku.items():
+                    cursor.execute(
+                        """UPDATE order_system.offerprice_listing
+                              SET origin_price=%s,
+                                  last_cost_snapshot=%s,
+                                  last_cost_snapshot_at=NOW()
+                            WHERE shop_sku=%s
+                              AND platform='Macy' AND shop_name='kuyotq'""",
+                        (info["target"], info["cost"], sku),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    return jsonify({
+        "success": ok,
+        "run_id": run_id,
+        "import_id": import_id,
+        "http_status": http_status,
+        "pushed": len(targets_by_sku),
+        "rejections": rejections,
+        "of21_failures": of21_failures,
+        "ip_used": resp.get("ip_used"),
+        "skus_pushed": list(targets_by_sku.keys()),
+        "error_message": resp.get("error"),
+    })
 
 
 @repricing_bp.route("/full-export/latest-file", methods=["GET"])

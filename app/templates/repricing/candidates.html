@@ -15,17 +15,28 @@
     <i class="bi bi-check-circle"></i> 当前没有 SKU 需要改价。
 </div>
 {% else %}
-<p class="text-muted">
-    共 <strong>{{ rows|length }}</strong> 个 SKU。
-    红色 = 亏损（margin&lt;0），橙色 = 利润&lt;5% 临界。
-    推送会调 OF22 拿完整字段 + OF24 改价 + 5 分钟后 OF22 验证，**约 6 分钟一个 SKU**（单条手动模式）。
-</p>
+<div class="card mb-3 border-danger">
+    <div class="card-body py-2 d-flex justify-content-between align-items-center">
+        <div>
+            共 <strong>{{ rows|length }}</strong> 个 SKU。
+            <span id="sel-count" class="badge bg-danger">已勾选 0</span>
+            <small class="text-muted ms-2">勾选后点"批量推送"，~2.5 分钟一次性推完</small>
+        </div>
+        <div>
+            <button id="check-all-btn" class="btn btn-sm btn-outline-primary me-2">全选/取消</button>
+            <button id="batch-push-btn" class="btn btn-danger" disabled>
+                <i class="bi bi-arrow-up-circle"></i> 批量推送选中 (0)
+            </button>
+        </div>
+    </div>
+</div>
 
 <div class="card">
     <div class="table-responsive">
         <table class="table table-sm table-hover mb-0 align-middle">
             <thead class="table-light sticky-top">
                 <tr>
+                    <th style="width:30px;"><input type="checkbox" id="header-checkbox"></th>
                     <th>#</th>
                     <th>shop_sku</th>
                     <th>warehouse_sku</th>
@@ -41,7 +52,8 @@
             </thead>
             <tbody>
                 {% for r in rows %}
-                <tr>
+                <tr class="row-{{ r.shop_sku }}">
+                    <td><input type="checkbox" class="sku-checkbox" data-sku="{{ r.shop_sku }}"></td>
                     <td class="text-muted small">{{ loop.index }}</td>
                     <td><code>{{ r.shop_sku }}</code></td>
                     <td class="small text-muted">{{ r.warehouse_sku }}</td>
@@ -62,8 +74,8 @@
                         {{ '%.2f'|format(r.profit_margin_before|float * 100) }}%
                     </td>
                     <td class="text-center">
-                        <button class="btn btn-sm btn-danger push-btn" data-sku="{{ r.shop_sku }}">
-                            <i class="bi bi-arrow-up-circle"></i> 推送
+                        <button class="btn btn-sm btn-outline-danger push-btn" data-sku="{{ r.shop_sku }}">
+                            <i class="bi bi-arrow-up-circle"></i> 单推
                         </button>
                     </td>
                 </tr>
@@ -75,29 +87,105 @@
 {% endif %}
 
 <script>
+const checkboxes = document.querySelectorAll('.sku-checkbox');
+const headerCb = document.getElementById('header-checkbox');
+const checkAllBtn = document.getElementById('check-all-btn');
+const batchBtn = document.getElementById('batch-push-btn');
+const selCount = document.getElementById('sel-count');
+
+function getSelected() {
+    return Array.from(checkboxes).filter(c => c.checked).map(c => c.dataset.sku);
+}
+
+function refreshSelectionUI() {
+    const n = getSelected().length;
+    if (selCount) selCount.textContent = '已勾选 ' + n;
+    if (batchBtn) {
+        batchBtn.disabled = n === 0;
+        batchBtn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 批量推送选中 (' + n + ')';
+    }
+}
+
+checkboxes.forEach(cb => cb.addEventListener('change', refreshSelectionUI));
+
+if (headerCb) {
+    headerCb.addEventListener('change', () => {
+        checkboxes.forEach(cb => { cb.checked = headerCb.checked; });
+        refreshSelectionUI();
+    });
+}
+
+if (checkAllBtn) {
+    checkAllBtn.addEventListener('click', () => {
+        const anyUnchecked = Array.from(checkboxes).some(c => !c.checked);
+        checkboxes.forEach(cb => { cb.checked = anyUnchecked; });
+        if (headerCb) headerCb.checked = anyUnchecked;
+        refreshSelectionUI();
+    });
+}
+
+if (batchBtn) {
+    batchBtn.addEventListener('click', async () => {
+        const skus = getSelected();
+        if (!skus.length) return;
+        if (skus.length > 50) {
+            alert('每批最多 50 个，请减少选中数量。');
+            return;
+        }
+        if (!confirm(`批量推送 ${skus.length} 个 SKU 到 Mirakl?\n大约 ${Math.ceil(2 + 1.1)} 分钟一次性推完，比单推快 30 倍以上。`)) return;
+        batchBtn.disabled = true;
+        batchBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
+        try {
+            const r = await fetch('/repricing/push-batch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({shop_skus: skus}),
+            });
+            const data = await r.json();
+            if (data.success) {
+                alert(`✅ 批量推送成功\n推送了 ${data.pushed} 个 SKU\nimport_id=${data.import_id}\nrun_id=${data.run_id}\n\n刷新页面看最新状态，明天 OF52 会自动对账。`);
+                location.reload();
+            } else {
+                let msg = '❌ 批量推送失败\n';
+                if (data.msg) msg += data.msg + '\n';
+                if (data.error_message) msg += '错误: ' + data.error_message + '\n';
+                if (data.rejections && data.rejections.length) msg += '拒绝 ' + data.rejections.length + ' 个: ' + JSON.stringify(data.rejections.slice(0, 5));
+                alert(msg);
+                batchBtn.disabled = false;
+                refreshSelectionUI();
+            }
+        } catch (err) {
+            alert('JS 错误: ' + err.message);
+            batchBtn.disabled = false;
+            refreshSelectionUI();
+        }
+    });
+}
+
+// 单推按钮 (保留)
 document.querySelectorAll('.push-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         const sku = btn.dataset.sku;
-        if (!confirm(`确认推送 ${sku} 到 Mirakl? (约 130 秒)`)) return;
+        if (!confirm(`确认单推 ${sku}? (约 67 秒)`)) return;
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
         try {
             const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
             const data = await r.json();
             if (data.success) {
-                btn.classList.remove('btn-danger');
+                btn.classList.remove('btn-outline-danger');
                 btn.classList.add('btn-success');
-                btn.innerHTML = '<i class="bi bi-check-circle"></i> 已推送';
-                alert(`✅ 已推送 ${sku}\n原价 $${data.old_origin_price} → 新价 $${data.new_origin_price}\nimport_id=${data.import_id}`);
+                btn.innerHTML = '<i class="bi bi-check-circle"></i> 已推';
+                alert(`✅ ${sku}: $${data.old_origin_price} → $${data.new_origin_price}\nimport_id=${data.import_id}`);
             } else {
-                alert('❌ 推送失败: ' + (data.msg || JSON.stringify(data)));
+                alert('❌ ' + (data.msg || JSON.stringify(data)));
                 btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+                btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 单推';
             }
         } catch (e) {
             alert('错误: ' + e.message);
             btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+            btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 单推';
         }
     });
 });

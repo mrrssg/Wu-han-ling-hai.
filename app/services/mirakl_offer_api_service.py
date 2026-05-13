@@ -445,24 +445,45 @@ def update_offers(
 
 
 # =============================================================================
-# OF22 - get one offer (kept for debugging; not used in normal flow)
+# OF21 by shop_sku - fast, NOT gated by cooldown lock (no Mirakl rate cap)
+# Replaces the older OF22 single-offer fetch.
 # =============================================================================
 
-def get_offer(store_key: str, offer_id: int) -> Dict[str, Any]:
+def get_offer_by_sku(store_key: str, shop_sku: str) -> Dict[str, Any]:
+    """Fetch one offer's full fields via OF21 with sku filter.
+
+    Why this and not OF22:
+        - OF21 has no published rate cap; we measured ~2s/call repeatedly
+          with no 429s, so we don't burn the OF24 cooldown bucket.
+        - The returned offer dict has the same field set as OF22 (description,
+          retail_prices, product_references, offer_additional_fields, etc.).
+        - Empirically a single-SKU OF21 returns just that one offer in
+          ~1.2-2.0s, which is faster than OF22's 65s cooldown overhead.
+
+    Raises RuntimeError if HTTP != 200 or no matching offer.
+    """
     if store_key not in SUPPORTED_STORE_KEYS:
         raise ValueError(f"store_key not enabled: {store_key}")
     api = _resolve_api(store_key)
     net = _proxy_session_headers(store_key, api["api_key"])
-    acquire_offers_cooldown(store_key, action="of22_get")
     resp = _request_with_retry(
         method="GET",
-        url=f"{api['api_url']}/api/offers/{offer_id}",
+        url=f"{api['api_url']}/api/offers",
         headers=net["headers"],
+        params={"sku": shop_sku, "max": 10, "paginate": "false"},
         proxies=net["proxies"],
         timeout=REQUEST_TIMEOUT,
         retries=REQUEST_RETRIES,
         backoff=2.0,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"OF22 failed: {resp.status_code} {resp.text[:500]}")
-    return resp.json()
+        raise RuntimeError(f"OF21 failed for sku={shop_sku}: {resp.status_code} {resp.text[:500]}")
+    data = resp.json()
+    offers = data.get("offers") or []
+    if not offers:
+        raise RuntimeError(f"OF21 returned no offer for shop_sku={shop_sku}")
+    # Exact match in case Mirakl ever returns suffix-matches
+    for o in offers:
+        if o.get("shop_sku") == shop_sku:
+            return o
+    return offers[0]

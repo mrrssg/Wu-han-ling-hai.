@@ -29,7 +29,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from app import create_app
 from app.models.db_manager import DBManager
-from app.services.mirakl_offer_api_service import get_offer, update_offers
+from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers
 from app.services.repricing_formula import (
     calculate_breakdown,
     cost_from_supplier_price,
@@ -120,6 +120,11 @@ def build_of24_payload_from_of22(of22: dict, new_price: float) -> dict:
     return cleaned
 
 
+# Alias - the field shape from OF21 by-sku is identical to OF22, so the same
+# builder works for both. Used by repricing.routes which now fetches via OF21.
+build_of24_payload_from_full_offer = build_of24_payload_from_of22
+
+
 # =============================================================================
 # Single SKU pipeline
 # =============================================================================
@@ -198,20 +203,19 @@ def push_one(store_key: str, shop_sku: str, confirm_live: bool) -> dict:
     print(f"  current_margin:       {margin:.4f}")
     print(f"  target_margin:        ~0.12 (formula default)")
 
-    # 2. OF22 to fetch full offer details
-    print(f"\n=== Calling OF22 (offer_id={offer_id}) ===")
+    # 2. OF21 by sku to fetch full offer details (no cooldown lock, ~2s)
+    print(f"\n=== Calling OF21 sku={shop_sku} ===")
     t0 = time.time()
-    of22 = get_offer(store_key, int(offer_id))
-    print(f"  OF22 ok, {time.time() - t0:.1f}s")
+    of22 = get_offer_by_sku(store_key, shop_sku)
+    print(f"  OF21 ok, {time.time() - t0:.1f}s")
     print(f"  shop_sku={of22.get('shop_sku')}  state_code={of22.get('state_code')}  "
           f"quantity={of22.get('quantity')}  current price={of22.get('price')}")
     print(f"  description present={bool(of22.get('description'))}  "
           f"leadtime={of22.get('leadtime_to_ship')}  "
           f"logistic_class={of22.get('logistic_class')}")
 
-    # Sanity: OF22 shop_sku should match
     if of22.get("shop_sku") != shop_sku:
-        return {"success": False, "msg": "OF22 returned different shop_sku - aborting"}
+        return {"success": False, "msg": "OF21 returned different shop_sku - aborting"}
 
     # 3. Build OF24 payload
     payload_offer = build_of24_payload_from_of22(of22, target_origin)
@@ -302,20 +306,19 @@ def push_one(store_key: str, shop_sku: str, confirm_live: bool) -> dict:
 
 def post_verify(store_key: str, shop_sku: str, offer_id: int,
                 expected_price: float, wait_seconds: int) -> dict:
-    """Sleep `wait_seconds`, then call OF22 again to see if Mirakl applied the
+    """Sleep `wait_seconds`, then OF21 by-sku again to see if Mirakl applied the
     new price. Returns {match: bool, current_price: float, ...}.
 
-    OF22 takes a cooldown slot too (65s); we still wait the full wait_seconds
-    because Mirakl needs time to actually process the import.
+    OF21 is not gated by the OF24 cooldown lock.
     """
     if wait_seconds > 0:
         print(f"\n  Sleeping {wait_seconds}s before post-verify ...")
         time.sleep(wait_seconds)
 
-    print(f"\n=== Post-verify OF22 (offer_id={offer_id}) ===")
+    print(f"\n=== Post-verify OF21 (shop_sku={shop_sku}) ===")
     t0 = time.time()
-    of22 = get_offer(store_key, int(offer_id))
-    print(f"  OF22 returned in {time.time() - t0:.1f}s")
+    of22 = get_offer_by_sku(store_key, shop_sku)
+    print(f"  OF21 returned in {time.time() - t0:.1f}s")
 
     current_price = of22.get("price")
     prices_block = of22.get("applicable_pricing") or {}
