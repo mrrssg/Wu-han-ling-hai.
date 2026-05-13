@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}黑名单 - macy_kuyotq{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3><i class="bi bi-shield-x"></i> 黑名单 + 失败计数</h3>
+        <small class="text-muted">连续失败 3 次自动入黑名单；只有人工解除</small>
+    </div>
+    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+</div>
+
+{% if not rows %}
+<div class="alert alert-success">
+    <i class="bi bi-check-circle"></i> 当前没有 SKU 在黑名单或有失败计数。
+</div>
+{% else %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>shop_sku</th>
+                    <th>失败次数</th>
+                    <th>黑名单</th>
+                    <th>入黑时间</th>
+                    <th>入黑原因</th>
+                    <th>最后告警</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td><code>{{ r.shop_sku }}</code></td>
+                    <td class="text-center text-danger fw-bold">{{ r.failure_count }}</td>
+                    <td>
+                        {% if r.blacklisted %}<span class="badge bg-dark">已加入黑名单</span>
+                        {% else %}<span class="badge bg-warning text-dark">仅累计失败</span>{% endif %}
+                    </td>
+                    <td class="small">{{ r.blacklisted_at or '-' }}</td>
+                    <td class="small text-muted" style="max-width: 300px;">{{ r.blacklisted_reason or '-' }}</td>
+                    <td class="small">{{ r.last_alert_type or '-' }} ({{ r.last_alert_at or '-' }})</td>
+                    <td>
+                        {% if r.blacklisted or r.failure_count > 0 %}
+                        <form method="POST" action="{{ url_for('repricing.blacklist_clear', shop_sku=r.shop_sku) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-outline-success"
+                                    onclick="return confirm('确认解除 {{ r.shop_sku }} 的黑名单和失败计数？')">
+                                <i class="bi bi-check"></i> 解除
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}改价历史 - macy_kuyotq{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3><i class="bi bi-clock-history"></i> 改价历史</h3>
+        <small class="text-muted">所有 run（auto_monitor / manual_full / manual_single）的决策日志</small>
+    </div>
+    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+</div>
+
+<div class="mb-3">
+    <div class="btn-group" role="group">
+        {% for s in ['all','success','pending_verify','verification_failed','dry_run','failed','alert','skipped','blacklisted'] %}
+        <a href="{{ url_for('repricing.changes_page', status=s) }}"
+           class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-outline-primary{% endif %}">
+           {{ s }}
+        </a>
+        {% endfor %}
+    </div>
+    <small class="text-muted ms-2">最近 300 条</small>
+</div>
+
+{% if not rows %}
+<div class="alert alert-info">没有符合条件的记录。</div>
+{% else %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>时间</th>
+                    <th>SKU</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th class="text-end">原价</th>
+                    <th class="text-end">新价</th>
+                    <th class="text-end">原成本</th>
+                    <th class="text-end">新成本</th>
+                    <th class="text-end">利润前→后</th>
+                    <th>import_id</th>
+                    <th>HTTP</th>
+                    <th>原因/告警</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td class="small">{{ r.triggered_at }}</td>
+                    <td><code class="small">{{ r.shop_sku }}</code></td>
+                    <td class="small text-muted">{{ r.run_type }}</td>
+                    <td>
+                        {% if r.status == 'success' %}<span class="badge bg-success">success</span>
+                        {% elif r.status == 'pending_verify' %}<span class="badge bg-info text-dark">pending_verify</span>
+                        {% elif r.status == 'verification_failed' %}<span class="badge bg-danger">verify_failed</span>
+                        {% elif r.status == 'failed' %}<span class="badge bg-danger">failed</span>
+                        {% elif r.status == 'dry_run' %}<span class="badge bg-secondary">dry_run</span>
+                        {% elif r.status == 'alert' %}<span class="badge bg-warning text-dark">alert</span>
+                        {% elif r.status == 'skipped' %}<span class="badge bg-light text-dark">skipped</span>
+                        {% elif r.status == 'blacklisted' %}<span class="badge bg-dark">blacklisted</span>
+                        {% else %}<span class="badge bg-light text-dark">{{ r.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-end small">{{ r.old_origin_price or '-' }}</td>
+                    <td class="text-end small fw-bold">{{ r.new_origin_price or '-' }}</td>
+                    <td class="text-end small">{{ '%.2f'|format(r.old_cost|float) if r.old_cost else '-' }}</td>
+                    <td class="text-end small">{{ '%.2f'|format(r.new_cost|float) if r.new_cost else '-' }}</td>
+                    <td class="text-end small">
+                        {% if r.profit_margin_before is not none %}{{ '%.2f'|format(r.profit_margin_before|float * 100) }}%{% else %}-{% endif %}
+                        →
+                        {% if r.profit_margin_after is not none %}{{ '%.2f'|format(r.profit_margin_after|float * 100) }}%{% else %}-{% endif %}
+                    </td>
+                    <td class="small">{{ r.mirakl_import_id or '-' }}</td>
+                    <td class="small">{{ r.mirakl_http_status or '-' }}</td>
+                    <td class="small text-muted">
+                        {% if r.alert_type %}<code>{{ r.alert_type }}</code>{% endif %}
+                        {% if r.decision_reason %} {{ r.decision_reason }}{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

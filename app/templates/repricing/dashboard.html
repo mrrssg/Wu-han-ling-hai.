@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}价格监控 - macy_kuyotq{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3 class="mb-0"><i class="bi bi-currency-dollar"></i> 价格监控仪表盘</h3>
+        <small class="text-muted">店铺: macy_kuyotq</small>
+    </div>
+    <div>
+        <a href="{{ url_for('repricing.candidates_page') }}" class="btn btn-sm btn-outline-danger me-2"><i class="bi bi-fire"></i> 待改价</a>
+        <a href="{{ url_for('repricing.alerts_page') }}" class="btn btn-sm btn-outline-warning me-2"><i class="bi bi-exclamation-triangle"></i> 告警</a>
+        <a href="{{ url_for('repricing.changes_page') }}" class="btn btn-sm btn-outline-secondary me-2"><i class="bi bi-clock-history"></i> 历史</a>
+        <a href="{{ url_for('repricing.blacklist_page') }}" class="btn btn-sm btn-outline-dark"><i class="bi bi-shield-x"></i> 黑名单</a>
+    </div>
+</div>
+
+<!-- KPI 行 -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card border-0 bg-primary bg-opacity-10">
+            <div class="card-body">
+                <div class="text-muted small">店铺在售 offer</div>
+                <div class="display-5 fw-bold text-primary">{{ summary.active_offers }}</div>
+                <small class="text-muted">总记录 {{ summary.total_offers }}</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 bg-danger bg-opacity-10">
+            <div class="card-body">
+                <div class="text-muted small">待改价 <span class="badge bg-danger">利润 &lt; 5%</span></div>
+                <div class="display-5 fw-bold text-danger">{{ summary.latest_dry_run }}</div>
+                <small><a href="{{ url_for('repricing.candidates_page') }}">查看明细 →</a></small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 bg-warning bg-opacity-10">
+            <div class="card-body">
+                <div class="text-muted small">告警 <span class="badge bg-warning text-dark">需补数据</span></div>
+                <div class="display-5 fw-bold text-warning">{{ summary.latest_alert }}</div>
+                <small><a href="{{ url_for('repricing.alerts_page') }}">查看明细 →</a></small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 bg-success bg-opacity-10">
+            <div class="card-body">
+                <div class="text-muted small">今日已推送</div>
+                <div class="display-5 fw-bold text-success">{{ summary.success_today }}</div>
+                {% if summary.blacklist_count > 0 %}
+                <small class="text-danger">黑名单 {{ summary.blacklist_count }}</small>
+                {% else %}
+                <small class="text-muted">黑名单 0</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 数据新鲜度 -->
+<div class="card mb-4">
+    <div class="card-header bg-light"><i class="bi bi-clock"></i> 数据新鲜度</div>
+    <div class="card-body py-2">
+        <div class="row">
+            <div class="col-md-6">
+                <small class="text-muted">Costway 供应商成本最新更新：</small>
+                <strong>{{ freshness.costway_max }}</strong>
+                {% if freshness.costway_stale %}
+                    <span class="badge bg-danger">超 {{ freshness.threshold_hours }}h, 监控会拒跑</span>
+                {% else %}
+                    <span class="badge bg-success">新鲜</span>
+                {% endif %}
+            </div>
+            <div class="col-md-6">
+                <small class="text-muted">Vevor 供应商成本最新更新：</small>
+                <strong>{{ freshness.vevor_max }}</strong>
+                {% if freshness.vevor_stale %}
+                    <span class="badge bg-danger">超 {{ freshness.threshold_hours }}h, 监控会拒跑</span>
+                {% else %}
+                    <span class="badge bg-success">新鲜</span>
+                {% endif %}
+            </div>
+            <div class="col-md-12 mt-2">
+                <small class="text-muted">最近监控运行：</small>
+                <strong>{{ summary.latest_run_at or '尚未运行' }}</strong>
+                {% if summary.latest_run_id %}
+                <code class="ms-2 small">{{ summary.latest_run_id }}</code>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top 10 待改价 -->
+<div class="card mb-4">
+    <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
+        <div><i class="bi bi-fire text-danger"></i> <strong>Top 10 待改价（按亏损程度排序）</strong></div>
+        <a href="{{ url_for('repricing.candidates_page') }}" class="btn btn-sm btn-outline-danger">查看全部 →</a>
+    </div>
+    {% if top_candidates %}
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>shop_sku</th>
+                    <th>warehouse_sku</th>
+                    <th>供应商</th>
+                    <th class="text-end">供应商价</th>
+                    <th class="text-end">当前成本</th>
+                    <th class="text-end">现售价</th>
+                    <th class="text-end">建议价</th>
+                    <th class="text-end">当前利润</th>
+                    <th class="text-center">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in top_candidates %}
+                <tr>
+                    <td><code>{{ r.shop_sku }}</code></td>
+                    <td class="small text-muted">{{ r.warehouse_sku }}</td>
+                    <td>
+                        {% if r.supplier == 'Vevor' %}<span class="badge bg-info text-dark">Vevor</span>
+                        {% elif r.supplier == 'Costway' %}<span class="badge bg-secondary">Costway</span>
+                        {% else %}{{ r.supplier }}{% endif %}
+                    </td>
+                    <td class="text-end">${{ r.supplier_price_db }}</td>
+                    <td class="text-end">${{ '%.2f'|format(r.new_cost|float) }}</td>
+                    <td class="text-end">${{ r.old_origin_price }}</td>
+                    <td class="text-end text-success fw-bold">${{ r.new_origin_price }}</td>
+                    <td class="text-end {% if r.profit_margin_before < 0 %}text-danger fw-bold{% else %}text-warning{% endif %}">
+                        {{ '%.2f'|format(r.profit_margin_before|float * 100) }}%
+                    </td>
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-danger push-btn" data-sku="{{ r.shop_sku }}">
+                            <i class="bi bi-arrow-up-circle"></i> 推送
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body text-center text-muted py-4">
+        <i class="bi bi-check-circle text-success display-4"></i><br>
+        当前没有需要改价的 offer，所有利润都 ≥ 5%
+    </div>
+    {% endif %}
+</div>
+
+<!-- 告警分类 -->
+<div class="card mb-4">
+    <div class="card-header bg-warning bg-opacity-10">
+        <i class="bi bi-exclamation-triangle text-warning"></i> <strong>最新监控告警分布</strong>
+    </div>
+    <div class="card-body">
+        {% if alert_breakdown %}
+        <ul class="mb-0">
+            {% for a in alert_breakdown %}
+            <li>
+                <code>{{ a.alert_type }}</code>: <strong>{{ a.c }}</strong>
+                <small class="text-muted">
+                    {% if a.alert_type == 'feishu_config_missing' %}— 飞书 Mirakl 表里没有这个 SKU（需要从老表合并）
+                    {% elif a.alert_type == 'return_shipping_missing' %}— 飞书"退货运费(基础)"为空
+                    {% elif a.alert_type == 'cost_missing' %}— 供应商表查不到这个 SKU
+                    {% elif a.alert_type == 'cost_volatility_30pct' %}— 成本波动 &gt; 30% (异常，已拦截)
+                    {% elif a.alert_type == 'dim_missing' %}— 飞书尺寸/重量为空
+                    {% elif a.alert_type == 'no_warehouse_sku' %}— mapping_table 没有该 Mirakl SKU 的映射
+                    {% endif %}
+                </small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted mb-0">没有告警</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 最近改价 -->
+<div class="card mb-4">
+    <div class="card-header bg-secondary bg-opacity-10 d-flex justify-content-between align-items-center">
+        <div><i class="bi bi-clock-history"></i> <strong>最近 20 条改价记录</strong></div>
+        <a href="{{ url_for('repricing.changes_page') }}" class="btn btn-sm btn-outline-secondary">完整历史 →</a>
+    </div>
+    {% if recent %}
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>时间</th>
+                    <th>SKU</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th class="text-end">原价</th>
+                    <th class="text-end">新价</th>
+                    <th class="text-end">利润前/后</th>
+                    <th>import_id</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent %}
+                <tr>
+                    <td class="small">{{ r.triggered_at }}</td>
+                    <td><code>{{ r.shop_sku }}</code></td>
+                    <td class="small">{{ r.run_type }}</td>
+                    <td>
+                        {% if r.status == 'success' %}<span class="badge bg-success">success</span>
+                        {% elif r.status == 'pending_verify' %}<span class="badge bg-info text-dark">pending_verify</span>
+                        {% elif r.status == 'verification_failed' %}<span class="badge bg-danger">verify_failed</span>
+                        {% elif r.status == 'failed' %}<span class="badge bg-danger">failed</span>
+                        {% elif r.status == 'dry_run' %}<span class="badge bg-secondary">dry_run</span>
+                        {% else %}<span class="badge bg-light text-dark">{{ r.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-end">${{ r.old_origin_price or '-' }}</td>
+                    <td class="text-end fw-bold">${{ r.new_origin_price or '-' }}</td>
+                    <td class="text-end small">
+                        {% if r.profit_margin_before %}{{ '%.2f'|format(r.profit_margin_before|float * 100) }}%{% else %}-{% endif %}
+                        →
+                        {% if r.profit_margin_after %}{{ '%.2f'|format(r.profit_margin_after|float * 100) }}%{% else %}-{% endif %}
+                    </td>
+                    <td class="small">{{ r.mirakl_import_id or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body text-muted py-3">尚无改价记录</div>
+    {% endif %}
+</div>
+
+<script>
+document.querySelectorAll('.push-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const sku = btn.dataset.sku;
+        if (!confirm(`确认推送 ${sku} 到 Mirakl? (约 130 秒)`)) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
+        try {
+            const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
+            const data = await r.json();
+            if (data.success) {
+                alert(`✅ 已推送 ${sku}\n原价 $${data.old_origin_price} → 新价 $${data.new_origin_price}\nimport_id=${data.import_id}\n稍后刷新页面看明天 OF52 对账结果。`);
+                location.reload();
+            } else {
+                alert('❌ 推送失败: ' + (data.msg || JSON.stringify(data)));
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+            }
+        } catch (e) {
+            alert('错误: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+        }
+    });
+});
+</script>
+{% endblock %}

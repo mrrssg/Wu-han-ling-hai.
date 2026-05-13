@@ -25,6 +25,9 @@ def create_app(config_name='default'):
     from app.routes.ai_fill import ai_fill_bp
     app.register_blueprint(ai_fill_bp, url_prefix='/ai-fill')
 
+    from app.routes.repricing import repricing_bp
+    app.register_blueprint(repricing_bp, url_prefix='/repricing')
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

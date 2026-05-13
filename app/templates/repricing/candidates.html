@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}待改价 - macy_kuyotq{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3><i class="bi bi-fire text-danger"></i> 待改价 (latest dry-run)</h3>
+        <small class="text-muted">利润 &lt; 5% 的 active offer，按当前利润率升序排列（最亏的在最上）</small>
+    </div>
+    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+</div>
+
+{% if not rows %}
+<div class="alert alert-success">
+    <i class="bi bi-check-circle"></i> 当前没有 SKU 需要改价。
+</div>
+{% else %}
+<p class="text-muted">
+    共 <strong>{{ rows|length }}</strong> 个 SKU。
+    红色 = 亏损（margin&lt;0），橙色 = 利润&lt;5% 临界。
+    推送会调 OF22 拿完整字段 + OF24 改价 + 5 分钟后 OF22 验证，**约 6 分钟一个 SKU**（单条手动模式）。
+</p>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light sticky-top">
+                <tr>
+                    <th>#</th>
+                    <th>shop_sku</th>
+                    <th>warehouse_sku</th>
+                    <th>供应商</th>
+                    <th class="text-end">供应商价</th>
+                    <th class="text-end">当前成本</th>
+                    <th class="text-end">现售价</th>
+                    <th class="text-end">建议新价</th>
+                    <th class="text-end">涨幅</th>
+                    <th class="text-end">当前利润</th>
+                    <th class="text-center">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td class="text-muted small">{{ loop.index }}</td>
+                    <td><code>{{ r.shop_sku }}</code></td>
+                    <td class="small text-muted">{{ r.warehouse_sku }}</td>
+                    <td>
+                        {% if r.supplier == 'Vevor' %}<span class="badge bg-info text-dark">Vevor</span>
+                        {% elif r.supplier == 'Costway' %}<span class="badge bg-secondary">Costway</span>
+                        {% else %}{{ r.supplier }}{% endif %}
+                    </td>
+                    <td class="text-end">${{ r.supplier_price_db }}</td>
+                    <td class="text-end">${{ '%.2f'|format(r.new_cost|float) }}</td>
+                    <td class="text-end">${{ r.old_origin_price }}</td>
+                    <td class="text-end text-success fw-bold">${{ r.new_origin_price }}</td>
+                    <td class="text-end small">
+                        {% set delta_pct = (r.new_origin_price|float - r.old_origin_price|float) / r.old_origin_price|float * 100 %}
+                        +{{ '%.1f'|format(delta_pct) }}%
+                    </td>
+                    <td class="text-end {% if r.profit_margin_before < 0 %}text-danger fw-bold{% else %}text-warning{% endif %}">
+                        {{ '%.2f'|format(r.profit_margin_before|float * 100) }}%
+                    </td>
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-danger push-btn" data-sku="{{ r.shop_sku }}">
+                            <i class="bi bi-arrow-up-circle"></i> 推送
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<script>
+document.querySelectorAll('.push-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const sku = btn.dataset.sku;
+        if (!confirm(`确认推送 ${sku} 到 Mirakl? (约 130 秒)`)) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
+        try {
+            const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
+            const data = await r.json();
+            if (data.success) {
+                btn.classList.remove('btn-danger');
+                btn.classList.add('btn-success');
+                btn.innerHTML = '<i class="bi bi-check-circle"></i> 已推送';
+                alert(`✅ 已推送 ${sku}\n原价 $${data.old_origin_price} → 新价 $${data.new_origin_price}\nimport_id=${data.import_id}`);
+            } else {
+                alert('❌ 推送失败: ' + (data.msg || JSON.stringify(data)));
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+            }
+        } catch (e) {
+            alert('错误: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-up-circle"></i> 推送';
+        }
+    });
+});
+</script>
+{% endblock %}

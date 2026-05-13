@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}告警明细 - macy_kuyotq{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h3><i class="bi bi-exclamation-triangle text-warning"></i> 告警明细</h3>
+        <small class="text-muted">未处理的告警（按最后告警时间倒序）</small>
+    </div>
+    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+</div>
+
+{% if breakdown %}
+<div class="card mb-3">
+    <div class="card-header bg-light">最新监控告警分类</div>
+    <div class="card-body py-2">
+        {% for b in breakdown %}
+        <span class="badge bg-warning text-dark me-2 mb-1 fs-6">
+            {{ b.alert_type }}: <strong>{{ b.c }}</strong>
+        </span>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if not rows %}
+<div class="alert alert-success">
+    <i class="bi bi-check-circle"></i> 当前无未处理告警。
+</div>
+{% else %}
+<p class="text-muted">共 <strong>{{ rows|length }}</strong> 条未处理告警</p>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>shop_sku</th>
+                    <th>告警类型</th>
+                    <th>详细信息</th>
+                    <th>告警时间</th>
+                    <th>失败次数</th>
+                    <th>黑名单</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td><code>{{ r.shop_sku }}</code></td>
+                    <td><span class="badge bg-warning text-dark">{{ r.last_alert_type }}</span></td>
+                    <td class="small text-muted">{{ r.last_alert_message or '' }}</td>
+                    <td class="small">{{ r.last_alert_at }}</td>
+                    <td class="text-center {% if r.failure_count > 0 %}text-danger fw-bold{% endif %}">{{ r.failure_count }}</td>
+                    <td>
+                        {% if r.blacklisted %}<span class="badge bg-dark">已加入黑名单</span>
+                        {% else %}<span class="badge bg-light text-dark">否</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
