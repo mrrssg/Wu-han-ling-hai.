@@ -48,10 +48,17 @@ STORE_KEY = "macy_kuyotq"
 # =============================================================================
 
 def _query(sql: str, params=None) -> List[Dict]:
+    """Run a SELECT and return rows. Pass params as a tuple; never pass ()
+    because pymysql then interprets `%` in the SQL (e.g. inside LIKE patterns)
+    as format placeholders and explodes with "not enough arguments".
+    """
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, params or ())
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
             return cursor.fetchall() or []
     finally:
         conn.close()
