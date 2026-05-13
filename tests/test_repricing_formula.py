@@ -51,11 +51,17 @@ def _token():
 
 
 def _unwrap_formula(v):
-    """Feishu formula fields come back as {'type': 2, 'value': [..]}; unwrap to scalar."""
+    """Feishu formula fields come back as {'type': N, 'value': [..]}; unwrap to
+    scalar. String-output Formula returns text segments like
+    {'text': '是', 'type': 'text'} - unwrap those too.
+    """
     if isinstance(v, dict):
-        val = v.get("value")
+        val = v.get("value", v)
         if isinstance(val, list):
-            return val[0] if val else None
+            val = val[0] if val else None
+        # text-segment shape
+        if isinstance(val, dict) and "text" in val:
+            return val["text"]
         return val
     return v
 
