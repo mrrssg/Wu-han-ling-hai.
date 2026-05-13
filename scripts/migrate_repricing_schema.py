@@ -230,6 +230,31 @@ def create_repricing_full_sync_run(cursor):
     )
 
 
+def widen_api_call_lock_action(cursor):
+    """The original api_call_lock.last_action is ENUM('sync','preview'). Our
+    new offers_api lock uses richer action labels (of52_submit, of53_poll,
+    of24_update, of22_get, ...). Convert to VARCHAR if still enum.
+    """
+    print("[0/5] Widening order_system.api_call_lock.last_action to VARCHAR(32) ...")
+    cursor.execute(
+        """SELECT column_type FROM information_schema.columns
+           WHERE table_schema='order_system' AND table_name='api_call_lock'
+             AND column_name='last_action' LIMIT 1"""
+    )
+    row = cursor.fetchone()
+    if not row:
+        print("      column not found - skip (api_call_lock missing?)")
+        return
+    col_type = (row.get("column_type") or "").lower()
+    if "varchar" in col_type:
+        print(f"      already VARCHAR ({col_type}); skip")
+        return
+    cursor.execute(
+        "ALTER TABLE order_system.api_call_lock MODIFY COLUMN last_action VARCHAR(32) NULL"
+    )
+    print("      converted enum -> VARCHAR(32)")
+
+
 def main():
     config_name = os.environ.get("FLASK_CONFIG", "production")
     app = create_app(config_name)
@@ -237,6 +262,7 @@ def main():
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cursor:
+                widen_api_call_lock_action(cursor)
                 extend_offerprice_listing(cursor)
                 create_offer_pricing_config(cursor)
                 create_offer_price_change_log(cursor)
