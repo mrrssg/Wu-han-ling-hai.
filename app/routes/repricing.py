@@ -16,6 +16,7 @@ All read endpoints are GET; only writes use POST. No Mirakl API call is made
 from a GET path - GETs only read autoweb DB.
 """
 import json
+import os
 import sys
 import threading
 import uuid
@@ -447,3 +448,91 @@ def blacklist_clear(shop_sku):
         conn.close()
     flash(f"已解除 {shop_sku} 的黑名单", "success")
     return redirect(url_for("repricing.blacklist_page"))
+
+
+# =============================================================================
+# Part 2: full repricing export (xlsx download for manual Mirakl upload)
+# =============================================================================
+
+@repricing_bp.route("/full-export", methods=["GET"])
+def full_export_page():
+    # Show most recent run + download link
+    latest = _query(
+        """SELECT run_id, MIN(triggered_at) started_at, MAX(triggered_at) finished_at,
+                  COUNT(*) total
+             FROM order_system.offer_price_change_log
+            WHERE run_type='full_export'
+            GROUP BY run_id
+            ORDER BY MAX(triggered_at) DESC
+            LIMIT 5"""
+    )
+    return render_template("repricing/full_export.html", latest_runs=latest)
+
+
+@repricing_bp.route("/full-export/run", methods=["POST"])
+def full_export_run():
+    from app.services.repricing_full_export_service import run_full_export
+    out_dir = os.path.join(
+        current_app.config.get("BASE_DIR", current_app.root_path),
+        "instance", "exports", "repricing",
+    )
+    try:
+        result = run_full_export(out_dir)
+    except Exception as exc:
+        return jsonify({"success": False, "msg": str(exc)}), 500
+    return jsonify(result)
+
+
+@repricing_bp.route("/full-export/download/<run_id>", methods=["GET"])
+def full_export_download(run_id):
+    """Download the xlsx generated for a given run_id."""
+    from flask import send_file
+    out_dir = os.path.join(
+        current_app.config.get("BASE_DIR", current_app.root_path),
+        "instance", "exports", "repricing",
+    )
+    # Find the file matching this run_id - filename has the timestamp embedded
+    # Easier: scan the dir for files mentioning the run_id's timestamp
+    if not os.path.isdir(out_dir):
+        flash("export directory missing", "danger")
+        return redirect(url_for("repricing.full_export_page"))
+    # run_id format: full-macy_kuyotq-YYYYMMDD-HHMMSS-xxxxxx
+    parts = run_id.split("-")
+    timestamp = "_".join(parts[2:4]) if len(parts) >= 4 else ""
+    candidates = sorted(
+        [f for f in os.listdir(out_dir)
+         if f.endswith(".xlsx") and timestamp in f.replace("-", "_")]
+    )
+    if not candidates:
+        flash(f"no export file found for {run_id}", "warning")
+        return redirect(url_for("repricing.full_export_page"))
+    return send_file(
+        os.path.join(out_dir, candidates[-1]),
+        as_attachment=True,
+        download_name=candidates[-1],
+    )
+
+
+@repricing_bp.route("/full-export/latest-file", methods=["GET"])
+def full_export_latest_file():
+    """Just download the most recent xlsx without specifying run_id."""
+    from flask import send_file
+    out_dir = os.path.join(
+        current_app.config.get("BASE_DIR", current_app.root_path),
+        "instance", "exports", "repricing",
+    )
+    if not os.path.isdir(out_dir):
+        flash("export directory missing", "danger")
+        return redirect(url_for("repricing.full_export_page"))
+    files = sorted(
+        [f for f in os.listdir(out_dir) if f.endswith(".xlsx")],
+        reverse=True,
+    )
+    if not files:
+        flash("no export file yet; click 生成 first", "warning")
+        return redirect(url_for("repricing.full_export_page"))
+    return send_file(
+        os.path.join(out_dir, files[0]),
+        as_attachment=True,
+        download_name=files[0],
+    )
