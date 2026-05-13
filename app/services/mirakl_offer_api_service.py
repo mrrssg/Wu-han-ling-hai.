@@ -353,11 +353,16 @@ def download_export_chunks(
             payload = resp.json()
         except ValueError as exc:
             raise RuntimeError(f"chunk not JSON: {exc}") from exc
-        offers = payload.get("offers")
-        if offers is None and isinstance(payload, list):
+        # Mirakl OF52 chunks can return either {"offers": [...]} or a top-level array.
+        if isinstance(payload, list):
             offers = payload
+        elif isinstance(payload, dict):
+            offers = payload.get("offers")
+        else:
+            offers = None
         if not isinstance(offers, list):
-            raise RuntimeError(f"chunk has no offers array: keys={list(payload.keys())[:5]}")
+            keys_preview = list(payload.keys())[:5] if isinstance(payload, dict) else type(payload).__name__
+            raise RuntimeError(f"chunk has no offers array: {keys_preview}")
         all_offers.extend(offers)
     return all_offers
 
