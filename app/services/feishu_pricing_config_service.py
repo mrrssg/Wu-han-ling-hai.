@@ -282,3 +282,109 @@ def freshness_status(store_key: str = "macy_kuyotq") -> Dict:
             }
     finally:
         conn.close()
+
+
+# =============================================================================
+# Push the latest supplier_price back into the Feishu Mirakl table's
+# `供应商价格` field. Called after a successful OF24 push so the Feishu
+# `成本/利润` Formula columns stay in sync with what Mirakl actually sees.
+# =============================================================================
+
+def _get_feishu_record_ids(warehouse_skus: List[str], store_key: str) -> Dict[str, str]:
+    """warehouse_sku -> feishu_record_id from our DB cache (no Feishu lookup)."""
+    if not warehouse_skus:
+        return {}
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            chunk = 1000
+            out: Dict[str, str] = {}
+            for i in range(0, len(warehouse_skus), chunk):
+                part = warehouse_skus[i:i + chunk]
+                placeholders = ",".join(["%s"] * len(part))
+                cursor.execute(
+                    f"SELECT warehouse_sku, feishu_record_id "
+                    f"FROM order_system.offer_pricing_config "
+                    f"WHERE store_key=%s AND warehouse_sku IN ({placeholders})",
+                    [store_key] + part,
+                )
+                for r in cursor.fetchall():
+                    rid = r.get("feishu_record_id")
+                    if rid:
+                        out[r["warehouse_sku"]] = rid
+            return out
+    finally:
+        conn.close()
+
+
+def write_supplier_prices_to_feishu(
+    updates: List[Dict[str, Any]],
+    store_key: str = "macy_kuyotq",
+) -> Dict[str, Any]:
+    """`updates`: list of {"warehouse_sku": str, "supplier_price": float}.
+
+    Writes each value into the Feishu Mirakl table's `供应商价格` field by
+    record_id (cached in our DB at offer_pricing_config.feishu_record_id).
+
+    Returns:
+        {"sent": int, "not_found": [warehouse_sku, ...]}
+
+    Failure-tolerant: never raises - the upstream push is more important.
+    """
+    if not updates or store_key != "macy_kuyotq":
+        return {"sent": 0, "not_found": []}
+
+    src = FEISHU_SOURCES["macy_kuyotq"]
+    app_token = src["app_token"]
+    table_id = src["table_id"]
+
+    skus = [u.get("warehouse_sku") for u in updates if u.get("warehouse_sku")]
+    record_map = _get_feishu_record_ids(skus, store_key)
+
+    payload_records = []
+    not_found = []
+    for u in updates:
+        wh = u.get("warehouse_sku")
+        sp = u.get("supplier_price")
+        if not wh or sp is None:
+            continue
+        rid = record_map.get(wh)
+        if not rid:
+            not_found.append(wh)
+            continue
+        try:
+            sp_f = round(float(sp), 4)
+        except (TypeError, ValueError):
+            continue
+        payload_records.append({
+            "record_id": rid,
+            "fields": {"供应商价格": sp_f},
+        })
+
+    if not payload_records:
+        return {"sent": 0, "not_found": not_found}
+
+    try:
+        token = _get_tenant_token()
+        H = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        url = (
+            f"https://open.feishu.cn/open-apis/bitable/v1/apps/"
+            f"{app_token}/tables/{table_id}/records/batch_update"
+        )
+        sent_total = 0
+        chunk = 500
+        for i in range(0, len(payload_records), chunk):
+            body = {"records": payload_records[i:i + chunk]}
+            r = requests.post(url, headers=H, json=body, timeout=60)
+            data = r.json() if r.content else {}
+            if data.get("code") != 0:
+                # log and continue with next chunk - don't break the world
+                print(f"[feishu_writeback] chunk failed: {data}")
+                continue
+            sent_total += len(body["records"])
+            time.sleep(0.2)
+    except Exception as exc:
+        print(f"[feishu_writeback] exception: {exc}")
+        return {"sent": 0, "not_found": not_found, "error": str(exc)}
+
+    return {"sent": sent_total, "not_found": not_found}

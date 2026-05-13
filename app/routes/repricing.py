@@ -414,6 +414,7 @@ def push_one(shop_sku):
             "error_message": resp.get("error"),
         })
 
+        feishu_writeback = None
         if ok:
             conn = DBManager.get_connection()
             try:
@@ -431,6 +432,18 @@ def push_one(shop_sku):
             finally:
                 conn.close()
 
+            # Sync latest supplier_price back to Feishu so the Formula
+            # cost/profit columns track reality. Best-effort; never blocks
+            # the push success.
+            try:
+                from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
+                feishu_writeback = write_supplier_prices_to_feishu(
+                    [{"warehouse_sku": ctx.warehouse_sku, "supplier_price": sp}],
+                    store_key=STORE_KEY,
+                )
+            except Exception as exc:
+                feishu_writeback = {"sent": 0, "error": str(exc)}
+
         return jsonify({
             "success": ok,
             "shop_sku": shop_sku,
@@ -441,6 +454,7 @@ def push_one(shop_sku):
             "http_status": resp.get("http_status"),
             "ip_used": resp.get("ip_used"),
             "run_id": run_id,
+            "feishu_writeback": feishu_writeback,
         })
     except Exception as exc:
         return jsonify({"success": False, "msg": str(exc)}), 500
@@ -684,6 +698,7 @@ def push_batch():
         })
 
     # Update DB origin_price for successful pushes
+    feishu_writeback = None
     if ok:
         conn = DBManager.get_connection()
         try:
@@ -702,6 +717,21 @@ def push_batch():
         finally:
             conn.close()
 
+        # Sync supplier prices back to Feishu for the SKUs we just pushed.
+        try:
+            from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
+            feishu_writeback = write_supplier_prices_to_feishu(
+                [
+                    {"warehouse_sku": info["ctx"].warehouse_sku,
+                     "supplier_price": info["sp"]}
+                    for info in targets_by_sku.values()
+                    if info["ctx"].warehouse_sku
+                ],
+                store_key=STORE_KEY,
+            )
+        except Exception as exc:
+            feishu_writeback = {"sent": 0, "error": str(exc)}
+
     return jsonify({
         "success": ok,
         "run_id": run_id,
@@ -713,6 +743,7 @@ def push_batch():
         "ip_used": resp.get("ip_used"),
         "skus_pushed": list(targets_by_sku.keys()),
         "error_message": resp.get("error"),
+        "feishu_writeback": feishu_writeback,
     })
 
 
