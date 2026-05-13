@@ -26,7 +26,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from openpyxl import Workbook
+import shutil
+
+from openpyxl import Workbook, load_workbook
 
 from app.models.db_manager import DBManager
 from app.services.repricing_formula import (
@@ -281,7 +283,38 @@ def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict) -> Dict[str, Any]:
     }
 
 
-def write_xlsx(rows: List[Dict[str, Any]], output_path: str) -> int:
+def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
+                base_template_path: Optional[str] = None) -> int:
+    """Write the offers-import xlsx.
+
+    If `base_template_path` exists, we copy it and append data rows to
+    preserve header styling, freeze panes, column widths, etc. Otherwise
+    we fall back to creating a plain Workbook from scratch.
+    """
+    if base_template_path and os.path.exists(base_template_path):
+        # Copy base then append data rows after header
+        shutil.copyfile(base_template_path, output_path)
+        wb = load_workbook(output_path)
+        sheet_name = "offers-import" if "offers-import" in wb.sheetnames else wb.sheetnames[0]
+        ws = wb[sheet_name]
+        # Clear any leftover data rows (defensive: base should already be header-only)
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row - 1)
+        # Discover header order from the base (lower-case match for safety)
+        base_headers = [str(c.value).strip() if c.value else "" for c in ws[1]]
+        # Build header-name -> column-index map (1-based)
+        col_idx_by_name = {h: i + 1 for i, h in enumerate(base_headers) if h}
+        # Append rows aligned to base header order
+        for r in rows:
+            line = []
+            for h in base_headers:
+                line.append(r.get(h))
+            ws.append(line)
+        wb.save(output_path)
+        wb.close()
+        return len(rows)
+
+    # Fallback: plain workbook
     wb = Workbook()
     ws = wb.active
     ws.title = "offers-import"
@@ -449,10 +482,15 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     fname = f"macy_kuyotq_repricing_{started.strftime('%Y%m%d_%H%M%S')}.xlsx"
     output_path = os.path.join(output_dir, fname)
-    written = write_xlsx(xlsx_rows, output_path) if xlsx_rows else 0
-    if not xlsx_rows:
-        # write empty file with just header so download still works
-        write_xlsx([], output_path)
+
+    # Look for the styled base template alongside instance/
+    base_template = os.path.join(
+        os.path.dirname(os.path.dirname(output_dir)),  # instance/
+        "repricing",
+        "offers_import_blank.xlsx",
+    )
+
+    written = write_xlsx(xlsx_rows, output_path, base_template_path=base_template)
 
     _log_decisions(run_id, decisions)
 
