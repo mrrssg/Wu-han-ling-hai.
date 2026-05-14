@@ -1428,6 +1428,10 @@ class DBManager:
                     lo.`Order line no.` AS line_item_number,
                     lo.`Date created` AS order_date,
                     lo.`Offer SKU` AS platform_sku,
+                    REGEXP_REPLACE(
+                        JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.phone')),
+                        '[^0-9]', ''
+                    ) AS phone,
                     'lowes_autool' AS store_key
                 FROM lowesorder lo
                 LEFT JOIN order_system.lowes_order_data ld
