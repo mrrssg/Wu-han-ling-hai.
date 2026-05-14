@@ -42,9 +42,12 @@ from app.services.repricing_monitor_service import (
 from app.services.repricing_stores import get_store
 
 
-# Column order MUST match each store's Mirakl offers-import template.
-# Macy-kuyotq (non-Dropship) = 19 cols, customer price in `price`.
-OFFERS_IMPORT_COLUMNS_MACY = [
+# Column order MUST match the Mirakl offers-import template. Both stores
+# (Macy-kuyotq, Lowes-Autool) are non-Dropship and share the same 19-column
+# template: a single `price` plus an optional discount (discount-price +
+# discount window). Lowes additionally fills the discount columns; Macy fills
+# `price` only - that's a row-fill difference, not a column difference.
+OFFERS_IMPORT_COLUMNS = [
     "sku", "product-id", "product-id-type", "description",
     "internal-description", "price", "price-additional-info", "quantity",
     "min-quantity-alert", "state", "available-start-date",
@@ -52,19 +55,6 @@ OFFERS_IMPORT_COLUMNS_MACY = [
     "discount-start-date", "discount-end-date", "discount-price",
     "update-delete", "leadtime-to-ship",
 ]
-# Lowes-Autool (Dropship) = 22 cols, customer price in `retail-price`,
-# discounted customer price in `discount-retail-price`.
-OFFERS_IMPORT_COLUMNS_LOWES = [
-    "sku", "product-id", "product-id-type", "description",
-    "internal-description", "price", "msrp", "retail-price",
-    "discount-retail-price", "discount-retail-price-start-date",
-    "discount-retail-price-end-date", "price-additional-info", "quantity",
-    "min-quantity-alert", "state", "available-start-date",
-    "available-end-date", "logistic-class", "discount-start-date",
-    "discount-end-date", "discount-price", "update-delete",
-]
-# legacy alias (some code/tests import this name)
-OFFERS_IMPORT_COLUMNS = OFFERS_IMPORT_COLUMNS_MACY
 
 MIN_PRICE_DELTA = 0.01    # ignore drift below 1¢
 
@@ -282,21 +272,22 @@ def _raw_first(raw: Dict, key: str):
     return {}
 
 
-def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict, mode: str) -> Dict[str, Any]:
-    """Build one offers-import xlsx row.
+def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict,
+                    push_discount: bool) -> Dict[str, Any]:
+    """Build one offers-import xlsx row (standard non-Dropship 19-col layout).
 
-    non_dropship (Macy): customer price goes in `price`. 19-col template.
-    dropship (Lowes): `price` keeps the wholesale cost (preserved from raw);
-        customer price goes in `retail-price`, discounted customer price in
-        `discount-retail-price`; discount dates + discount-price preserved
-        from the OF52 raw so Mirakl keeps the campaign window intact.
+    Every store writes the customer price into `price` (= 活动前原价).
+    push_discount stores (Lowes) also write the 折扣后价格 into `discount-price`
+    and reuse the live offer's discount window (user rule: 日期沿用现有的).
+    Price-only stores (Macy) leave the discount columns blank.
     """
-    base = {
+    row = {
         "sku": offer["shop_sku"],
         "product-id": raw.get("product_sku") or offer["shop_sku"],
         "product-id-type": "SKU",
         "description": None,
         "internal-description": None,
+        "price": decision["target_origin_price"],
         "price-additional-info": None,
         "quantity": raw.get("quantity") or offer.get("quantity") or 0,
         "min-quantity-alert": None,
@@ -304,38 +295,21 @@ def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict, mode: str) -> Dict[s
         "available-start-date": None,
         "available-end-date": None,
         "logistic-class": _raw_logistic_code(raw),
+        "favorite-rank": None,
         "discount-start-date": None,
         "discount-end-date": None,
         "discount-price": None,
         "update-delete": "update",
+        "leadtime-to-ship": raw.get("leadtime_to_ship"),
     }
 
-    if mode == "dropship":
+    if push_discount:
         prices0 = _raw_first(raw, "prices")
-        retail0 = _raw_first(raw, "retail_prices")
-        base.update({
-            # wholesale cost - preserve whatever OF52 carried
-            "price": prices0.get("origin_price") if prices0 else raw.get("price"),
-            "msrp": raw.get("msrp"),
-            # the two columns we actually change:
-            "retail-price": decision["target_origin_price"],
-            "discount-retail-price": decision.get("target_discount_price"),
-            # preserve the retail discount campaign window
-            "discount-retail-price-start-date": retail0.get("discount_start_date"),
-            "discount-retail-price-end-date": retail0.get("discount_end_date"),
-            # preserve the wholesale discount window + price
-            "discount-start-date": prices0.get("discount_start_date") if prices0 else None,
-            "discount-end-date": prices0.get("discount_end_date") if prices0 else None,
-            "discount-price": prices0.get("unit_discount_price") if prices0 else None,
-        })
-    else:
-        base.update({
-            "price": decision["target_origin_price"],
-            "favorite-rank": None,
-            "leadtime-to-ship": raw.get("leadtime_to_ship"),
-        })
+        row["discount-price"] = decision.get("target_discount_price")
+        row["discount-start-date"] = prices0.get("discount_start_date")
+        row["discount-end-date"] = prices0.get("discount_end_date")
 
-    return base
+    return row
 
 
 def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
@@ -475,7 +449,7 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
     Aborts if supplier data is stale.
     """
     scfg = get_store(store_key)               # raises if unsupported
-    mode = scfg["mode"]
+    push_discount = scfg["push_discount"]
     formula_variant = scfg["formula_variant"]
 
     started = datetime.now()
@@ -536,7 +510,7 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
                     raw = json.loads(offer["raw_json"])
                 except (TypeError, ValueError):
                     raw = {}
-            xlsx_rows.append(_build_xlsx_row(offer, decision, raw, mode))
+            xlsx_rows.append(_build_xlsx_row(offer, decision, raw, push_discount))
             # collect for Feishu supplier-price writeback (user uploads the
             # xlsx to Mirakl, so these prices ARE about to change)
             if wh and decision.get("supplier_price") is not None:

@@ -56,7 +56,8 @@ REPRICING_STORES: Dict[str, Dict] = {
         "feishu_app_token": FEISHU_APP_TOKEN,
         "feishu_table_id": "tblGp3uvtOe99vjY",   # Lowes-Autool-Mirakl
         "feishu_label": "Lowes-Autool-Mirakl",
-        "excel_template": "offers_import_lowes_blank.xlsx",
+        # non-Dropship, same 19-col offers-import template as Macy
+        "excel_template": "offers_import_blank.xlsx",
     },
 }
 
