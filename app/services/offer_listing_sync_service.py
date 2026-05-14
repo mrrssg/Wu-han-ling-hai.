@@ -55,6 +55,18 @@ def _ensure_cursor_table():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            # idempotent column add (table may pre-date this column)
+            cursor.execute(
+                """SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='order_system'
+                     AND table_name='offer_sync_cursor'
+                     AND column_name='last_new_count' LIMIT 1"""
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    "ALTER TABLE order_system.offer_sync_cursor "
+                    "ADD COLUMN last_new_count INT NOT NULL DEFAULT 0"
+                )
         conn.commit()
     finally:
         conn.close()
@@ -76,7 +88,7 @@ def _get_cursor(store_key: str) -> Optional[str]:
 
 
 def _save_cursor(store_key: str, last_request_date: str, tracking_id: str,
-                 offer_count: int, status: str):
+                 offer_count: int, status: str, new_count: int = 0):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = DBManager.get_connection()
     try:
@@ -84,15 +96,17 @@ def _save_cursor(store_key: str, last_request_date: str, tracking_id: str,
             cursor.execute(
                 """INSERT INTO order_system.offer_sync_cursor
                        (store_key, last_request_date, last_run_at,
-                        last_tracking_id, last_offer_count, last_status)
-                   VALUES (%s, %s, %s, %s, %s, %s)
+                        last_tracking_id, last_offer_count, last_status, last_new_count)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
                    ON DUPLICATE KEY UPDATE
                        last_request_date = VALUES(last_request_date),
                        last_run_at = VALUES(last_run_at),
                        last_tracking_id = VALUES(last_tracking_id),
                        last_offer_count = VALUES(last_offer_count),
-                       last_status = VALUES(last_status)""",
-                (store_key, last_request_date, now, tracking_id, offer_count, status),
+                       last_status = VALUES(last_status),
+                       last_new_count = VALUES(last_new_count)""",
+                (store_key, last_request_date, now, tracking_id, offer_count,
+                 status, new_count),
             )
         conn.commit()
     finally:
@@ -303,10 +317,25 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
     affected = 0
     try:
         with conn.cursor() as cursor:
+            # row count before, to derive "newly added offers"
+            cursor.execute(
+                """SELECT COUNT(*) AS c FROM order_system.offerprice_listing
+                   WHERE platform=%s AND shop_name=%s""",
+                (store_cfg["platform"], store_cfg["shop_name"]),
+            )
+            count_before = int((cursor.fetchone() or {}).get("c") or 0)
+
             chunk = 500
             for i in range(0, len(rows), chunk):
                 cursor.executemany(UPSERT_SQL, rows[i:i + chunk])
                 affected += cursor.rowcount or 0
+
+            cursor.execute(
+                """SELECT COUNT(*) AS c FROM order_system.offerprice_listing
+                   WHERE platform=%s AND shop_name=%s""",
+                (store_cfg["platform"], store_cfg["shop_name"]),
+            )
+            count_after = int((cursor.fetchone() or {}).get("c") or 0)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -314,7 +343,12 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
     finally:
         conn.close()
 
-    return {"total": len(rows), "affected": affected, "with_warehouse_sku": with_wh}
+    return {
+        "total": len(rows),
+        "affected": affected,
+        "with_warehouse_sku": with_wh,
+        "new_count": max(0, count_after - count_before),
+    }
 
 
 def run_offer_listing_sync(
@@ -374,7 +408,8 @@ def run_offer_listing_sync(
     offers = download_export_chunks(urls, store_key)
     upsert_stats = _upsert_offers(offers, store_key, source_export_id=tracking_id)
 
-    _save_cursor(store_key, new_cursor_value, tracking_id, len(offers), "completed")
+    _save_cursor(store_key, new_cursor_value, tracking_id, len(offers),
+                 "completed", new_count=upsert_stats["new_count"])
 
     return {
         "success": True,
@@ -385,6 +420,7 @@ def run_offer_listing_sync(
         "chunks": len(urls),
         "offers_fetched": len(offers),
         "rows_upserted": upsert_stats["affected"],
+        "new_offers": upsert_stats["new_count"],
         "with_warehouse_sku": upsert_stats["with_warehouse_sku"],
         "ip_used": poll.get("ip_used"),
         "duration_seconds": round((datetime.now() - started).total_seconds(), 2),

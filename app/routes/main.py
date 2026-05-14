@@ -52,4 +52,48 @@ def health():
         conn.close()
 
     overall_ok = all(not r['is_stale'] for r in rows)
-    return render_template('health.html', rows=rows, overall_ok=overall_ok)
+
+    # Offer 全量/增量同步状态（offer_sync_cursor）
+    offer_sync_rows = []
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT store_key, last_request_date, last_run_at,
+                       last_tracking_id, last_offer_count, last_new_count,
+                       last_status,
+                       TIMESTAMPDIFF(MINUTE, last_run_at, NOW()) AS minutes_since
+                FROM order_system.offer_sync_cursor
+                ORDER BY store_key
+                """
+            )
+            for r in cursor.fetchall():
+                minutes_since = r['minutes_since'] or 0
+                status = (r.get('last_status') or '').lower()
+                # 成功标志：completed / completed_no_data 都算成功
+                is_ok = status.startswith('completed')
+                # 超过 30 小时没跑也标红（cron 是每天一次）
+                is_stale = minutes_since > 30 * 60
+                offer_sync_rows.append({
+                    'store_key': r['store_key'],
+                    'last_run_at': r['last_run_at'],
+                    'hours_since': round(minutes_since / 60, 1),
+                    'last_offer_count': r.get('last_offer_count') or 0,
+                    'last_new_count': r.get('last_new_count') or 0,
+                    'last_status': r.get('last_status') or '',
+                    'is_ok': is_ok,
+                    'is_stale': is_stale,
+                })
+    except Exception:
+        # offer_sync_cursor 表可能还没建（首次同步前）
+        offer_sync_rows = []
+    finally:
+        conn.close()
+
+    return render_template(
+        'health.html',
+        rows=rows,
+        overall_ok=overall_ok,
+        offer_sync_rows=offer_sync_rows,
+    )

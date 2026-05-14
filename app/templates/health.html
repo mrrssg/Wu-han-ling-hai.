@@ -63,4 +63,67 @@
         <li>必要时手动改 <code>order_system.txn_sync_cursor.last_synced_at</code> 推一下游标（注意:不可回退</li>
     </ol>
 </div>
+
+<!-- ============ Offer 同步状态 ============ -->
+<div class="row mb-3 mt-5">
+    <div class="col">
+        <h3><i class="bi bi-box-arrow-down"></i> Offer 同步状态 (OF52+OF53)</h3>
+        <p class="text-muted small mb-0">
+            每天凌晨从 Mirakl 拉全店 offer 状态到 <code>offerprice_listing</code>。超过 30 小时没跑显示红色。
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>店铺</th>
+                    <th>上次同步时间</th>
+                    <th>距今</th>
+                    <th>拉取 offer 数</th>
+                    <th>新增 offer 数</th>
+                    <th>同步结果</th>
+                    <th>状态</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in offer_sync_rows %}
+                <tr>
+                    <td><code>{{ r.store_key }}</code></td>
+                    <td>{{ r.last_run_at }}</td>
+                    <td>{{ r.hours_since }} 小时</td>
+                    <td>{{ r.last_offer_count }}</td>
+                    <td>
+                        {% if r.last_new_count > 0 %}
+                            <span class="badge bg-info text-dark">+{{ r.last_new_count }}</span>
+                        {% else %}
+                            <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if r.is_ok %}
+                            <span class="badge bg-success">{{ r.last_status }}</span>
+                        {% else %}
+                            <span class="badge bg-danger">{{ r.last_status or '未知' }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if r.is_stale %}
+                            <span class="badge bg-danger">🔴 超 30h 未同步</span>
+                        {% elif not r.is_ok %}
+                            <span class="badge bg-danger">🔴 同步失败</span>
+                        {% else %}
+                            <span class="badge bg-success">🟢 正常</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">还没有 offer 同步记录（首次 cron 02:20 后出现）</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
 {% endblock %}
