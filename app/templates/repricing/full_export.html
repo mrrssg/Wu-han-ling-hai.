@@ -95,6 +95,18 @@ document.getElementById('run-btn').addEventListener('click', async (e) => {
             if (s.alert_unsupported_supplier) summaryHtml += ' 供应商不支持 ' + s.alert_unsupported_supplier + ';';
             summaryHtml += '</li>';
             summaryHtml += '</ul>';
+            if (data.feishu_writeback) {
+                const fw = data.feishu_writeback;
+                if (fw.error) {
+                    summaryHtml += '<p class="text-warning mb-2">⚠️ 飞书供应商价回写出错: ' + fw.error + '</p>';
+                } else {
+                    summaryHtml += '<p class="mb-2">📋 飞书供应商价已同步: <strong>' + (fw.sent || 0) + '</strong> 个';
+                    if (fw.not_found && fw.not_found.length) {
+                        summaryHtml += '（' + fw.not_found.length + ' 个飞书无 record_id 跳过）';
+                    }
+                    summaryHtml += '</p>';
+                }
+            }
             summaryHtml += '<a href="/repricing/full-export/download/' + data.run_id + '" class="btn btn-success">';
             summaryHtml += '<i class="bi bi-download"></i> 立即下载 ' + data.filename + '</a>';
             summaryHtml += '</div>';

@@ -447,6 +447,7 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
 
     decisions: List[Tuple[Dict, Dict]] = []
     xlsx_rows: List[Dict[str, Any]] = []
+    feishu_price_updates: List[Dict[str, Any]] = []
 
     summary = {
         "total_offers": len(active_offers),
@@ -475,6 +476,13 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
                 except (TypeError, ValueError):
                     raw = {}
             xlsx_rows.append(_build_xlsx_row(offer, decision, raw))
+            # collect for Feishu supplier-price writeback (user uploads the
+            # xlsx to Mirakl, so these prices ARE about to change)
+            if wh and decision.get("supplier_price") is not None:
+                feishu_price_updates.append({
+                    "warehouse_sku": wh,
+                    "supplier_price": decision["supplier_price"],
+                })
 
     # Sort xlsx output by sku for tidy review
     xlsx_rows.sort(key=lambda r: r["sku"])
@@ -494,6 +502,18 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
 
     _log_decisions(run_id, decisions)
 
+    # Sync the would-update SKUs' supplier prices back to Feishu so the
+    # Formula columns reflect the prices that the (about-to-be-uploaded)
+    # Excel was built on. Best-effort: never blocks the export.
+    feishu_writeback = None
+    try:
+        from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
+        feishu_writeback = write_supplier_prices_to_feishu(
+            feishu_price_updates, store_key=STORE_KEY
+        )
+    except Exception as exc:
+        feishu_writeback = {"sent": 0, "error": str(exc)}
+
     duration = (datetime.now() - started).total_seconds()
     return {
         "success": True,
@@ -502,6 +522,7 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
         "filename": fname,
         "rows_written": written,
         "summary": summary,
+        "feishu_writeback": feishu_writeback,
         "duration_seconds": round(duration, 2),
         "freshness": {
             "costway_max": str(freshness["costway_max"]),
