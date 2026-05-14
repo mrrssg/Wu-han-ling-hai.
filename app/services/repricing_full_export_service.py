@@ -42,11 +42,14 @@ from app.services.repricing_monitor_service import (
 from app.services.repricing_stores import get_store
 
 
-# Column order MUST match the Mirakl offers-import template. Both stores
-# (Macy-kuyotq, Lowes-Autool) are non-Dropship and share the same 19-column
-# template: a single `price` plus an optional discount (discount-price +
-# discount window). Lowes additionally fills the discount columns; Macy fills
-# `price` only - that's a row-fill difference, not a column difference.
+# Both stores are non-Dropship: a single `price` plus an optional discount
+# (discount-price + discount window), NO retail-price/msrp. The actual column
+# set is read from each store's base template at write time (write_xlsx) -
+#   Macy  : 19 cols (offers_import_blank.xlsx)
+#   Lowes : 18 cols, same minus `favorite-rank` (offers_import_lowes_blank.xlsx)
+# _build_xlsx_row emits the 19-col superset; write_xlsx keeps only the columns
+# the base template actually has. This constant is just the fallback header
+# used when no base template file is found.
 OFFERS_IMPORT_COLUMNS = [
     "sku", "product-id", "product-id-type", "description",
     "internal-description", "price", "price-additional-info", "quantity",
