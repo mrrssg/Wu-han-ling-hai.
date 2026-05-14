@@ -12,8 +12,8 @@ Key invariants:
 3. Numeric money fields written to Mirakl are `round(v, 2)` -
    see feedback_mirakl_number_precision in memory.
 
-Designed only for macy_kuyotq for now; STORE_KEYS gate keeps other stores
-out until they have been deliberately enabled.
+Stores enabled for repricing live in repricing_stores.REPRICING_STORES
+(macy_kuyotq + lowes_autool). _check_store() gates every entry point.
 """
 import json
 import os
@@ -30,9 +30,16 @@ from app.services.mirakl_shipping_service import (
     _request_with_retry,
     load_store_config,
 )
+from app.services.repricing_stores import is_supported as _store_supported
 
 
-SUPPORTED_STORE_KEYS = {"macy_kuyotq"}
+def _check_store(store_key: str):
+    if not _store_supported(store_key):
+        raise ValueError(f"store_key not enabled for repricing: {store_key}")
+
+
+# Kept for backward-compat with any external import; prefer repricing_stores.
+SUPPORTED_STORE_KEYS = {"macy_kuyotq", "lowes_autool"}
 
 # Cooldown configuration. Mirakl OF24 hard cap = 1/min. 65s buffer.
 COOLDOWN_API_NAME = "offers_api"
@@ -95,8 +102,7 @@ def acquire_offers_cooldown(store_key: str, action: str = "call") -> Dict[str, A
     NOT return ok=False - this is a *waiting* lock not a *try* lock. Use
     `peek_offers_cooldown_remaining` for a non-blocking status check.
     """
-    if store_key not in SUPPORTED_STORE_KEYS:
-        raise ValueError(f"store_key not enabled: {store_key}")
+    _check_store(store_key)
 
     waited = 0.0
     while True:
@@ -224,8 +230,7 @@ def submit_offer_export(
     If `last_request_date` is None, runs a full export (active offers only by
     default; pass include_inactive=True to also get inactive offers).
     """
-    if store_key not in SUPPORTED_STORE_KEYS:
-        raise ValueError(f"store_key not enabled: {store_key}")
+    _check_store(store_key)
     api = _resolve_api(store_key)
     net = _proxy_session_headers(store_key, api["api_key"])
 
@@ -281,8 +286,7 @@ def poll_offer_export(
     Sleeps `interval_seconds` between polls. Honours the cooldown lock on each
     poll so two concurrent monitors do not over-hammer Mirakl.
     """
-    if store_key not in SUPPORTED_STORE_KEYS:
-        raise ValueError(f"store_key not enabled: {store_key}")
+    _check_store(store_key)
     api = _resolve_api(store_key)
     net = _proxy_session_headers(store_key, api["api_key"])
 
@@ -383,8 +387,7 @@ def update_offers(
     payload, return it for inspection, and the caller logs status=dry_run.
     Production callers must pass dry_run=False explicitly.
     """
-    if store_key not in SUPPORTED_STORE_KEYS:
-        raise ValueError(f"store_key not enabled: {store_key}")
+    _check_store(store_key)
     if not payload_offers:
         return {"sent": 0, "dry_run": dry_run, "import_id": None}
     if len(payload_offers) > OF24_DEFAULT_BATCH_SIZE * 2:
@@ -462,8 +465,7 @@ def get_offer_by_sku(store_key: str, shop_sku: str) -> Dict[str, Any]:
 
     Raises RuntimeError if HTTP != 200 or no matching offer.
     """
-    if store_key not in SUPPORTED_STORE_KEYS:
-        raise ValueError(f"store_key not enabled: {store_key}")
+    _check_store(store_key)
     api = _resolve_api(store_key)
     net = _proxy_session_headers(store_key, api["api_key"])
     resp = _request_with_retry(

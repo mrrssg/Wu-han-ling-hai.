@@ -1,7 +1,7 @@
 """
-Part 2: weekly full repricing export.
+Part 2: weekly full repricing export. Multi-store (macy_kuyotq + lowes_autool).
 
-For every active macy_kuyotq offer:
+For every active offer of the given store:
   1. Calculate target origin_price using the latest supplier cost + Feishu
      config (returns 12% margin per the formula in repricing_formula).
   2. Compare against current DB origin_price.
@@ -39,14 +39,12 @@ from app.services.repricing_monitor_service import (
     MAX_SUPPLIER_STALE_HOURS,
     get_supplier_freshness,
 )
+from app.services.repricing_stores import get_store
 
 
-STORE_KEY = "macy_kuyotq"
-
-# Column order MUST match the Mirakl offers-import template; if anything in
-# this list deviates from the sample uploaded by the operator, Mirakl will
-# reject the file at validation.
-OFFERS_IMPORT_COLUMNS = [
+# Column order MUST match each store's Mirakl offers-import template.
+# Macy-kuyotq (non-Dropship) = 19 cols, customer price in `price`.
+OFFERS_IMPORT_COLUMNS_MACY = [
     "sku", "product-id", "product-id-type", "description",
     "internal-description", "price", "price-additional-info", "quantity",
     "min-quantity-alert", "state", "available-start-date",
@@ -54,6 +52,19 @@ OFFERS_IMPORT_COLUMNS = [
     "discount-start-date", "discount-end-date", "discount-price",
     "update-delete", "leadtime-to-ship",
 ]
+# Lowes-Autool (Dropship) = 22 cols, customer price in `retail-price`,
+# discounted customer price in `discount-retail-price`.
+OFFERS_IMPORT_COLUMNS_LOWES = [
+    "sku", "product-id", "product-id-type", "description",
+    "internal-description", "price", "msrp", "retail-price",
+    "discount-retail-price", "discount-retail-price-start-date",
+    "discount-retail-price-end-date", "price-additional-info", "quantity",
+    "min-quantity-alert", "state", "available-start-date",
+    "available-end-date", "logistic-class", "discount-start-date",
+    "discount-end-date", "discount-price", "update-delete",
+]
+# legacy alias (some code/tests import this name)
+OFFERS_IMPORT_COLUMNS = OFFERS_IMPORT_COLUMNS_MACY
 
 MIN_PRICE_DELTA = 0.01    # ignore drift below 1¢
 
@@ -62,7 +73,8 @@ MIN_PRICE_DELTA = 0.01    # ignore drift below 1¢
 # Bulk preload helpers - replace per-SKU queries
 # =============================================================================
 
-def _load_active_offers() -> List[Dict]:
+def _load_active_offers(store_key: str) -> List[Dict]:
+    scfg = get_store(store_key)
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
@@ -70,14 +82,15 @@ def _load_active_offers() -> List[Dict]:
                 """SELECT shop_sku, warehouse_sku, origin_price, raw_json,
                           state_code, quantity, last_cost_snapshot
                      FROM order_system.offerprice_listing
-                    WHERE platform='Macy' AND shop_name='kuyotq' AND active=1""",
+                    WHERE platform=%s AND shop_name=%s AND active=1""",
+                (scfg["platform"], scfg["shop_name"]),
             )
             return cursor.fetchall() or []
     finally:
         conn.close()
 
 
-def _load_pricing_configs() -> Dict[str, Dict]:
+def _load_pricing_configs(store_key: str) -> Dict[str, Dict]:
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
@@ -86,7 +99,7 @@ def _load_pricing_configs() -> Dict[str, Dict]:
                           return_shipping_base, length_in, width_in, height_in, weight_lb
                      FROM order_system.offer_pricing_config
                     WHERE store_key=%s""",
-                (STORE_KEY,),
+                (store_key,),
             )
             return {r["warehouse_sku"]: r for r in cursor.fetchall() or []}
     finally:
@@ -133,14 +146,14 @@ def _load_supplier_prices() -> Dict[Tuple[str, str], Tuple[float, Any]]:
     return out
 
 
-def _load_blacklist() -> set:
+def _load_blacklist(store_key: str) -> set:
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 """SELECT shop_sku FROM order_system.offer_alert_state
                     WHERE store_key=%s AND blacklisted=1""",
-                (STORE_KEY,),
+                (store_key,),
             )
             return {r["shop_sku"] for r in cursor.fetchall() or []}
     finally:
@@ -151,7 +164,8 @@ def _load_blacklist() -> set:
 # Per-row decision (pure-python, no DB)
 # =============================================================================
 
-def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set) -> Dict[str, Any]:
+def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
+            formula_variant: str = "macy") -> Dict[str, Any]:
     """Decide what to do with one offer; returns a result dict with one of
     these statuses:
       - 'skipped_blacklist'
@@ -206,6 +220,7 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set) -
         discount_factor=df,
         length_in=float(L), width_in=float(W),
         height_in=float(H), weight_lb=float(wt),
+        formula_variant=formula_variant,
     )
     target_origin = round(float(bd.origin_price), 2)
     target_discount = round(float(bd.discount_price), 2)
@@ -252,35 +267,75 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set) -
 # Excel writer
 # =============================================================================
 
-def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict) -> Dict[str, Any]:
-    """Build one row of the offers-import xlsx. Mirakl ignores empty columns
-    for fields we don't want to touch.
+def _raw_logistic_code(raw: Dict):
+    lc = raw.get("logistic_class")
+    if isinstance(lc, dict):
+        return lc.get("code")
+    return lc
+
+
+def _raw_first(raw: Dict, key: str):
+    """raw['prices'] / raw['retail_prices'] is a list; return first dict or {}."""
+    v = raw.get(key)
+    if isinstance(v, list) and v and isinstance(v[0], dict):
+        return v[0]
+    return {}
+
+
+def _build_xlsx_row(offer: Dict, decision: Dict, raw: Dict, mode: str) -> Dict[str, Any]:
+    """Build one offers-import xlsx row.
+
+    non_dropship (Macy): customer price goes in `price`. 19-col template.
+    dropship (Lowes): `price` keeps the wholesale cost (preserved from raw);
+        customer price goes in `retail-price`, discounted customer price in
+        `discount-retail-price`; discount dates + discount-price preserved
+        from the OF52 raw so Mirakl keeps the campaign window intact.
     """
-    return {
+    base = {
         "sku": offer["shop_sku"],
         "product-id": raw.get("product_sku") or offer["shop_sku"],
         "product-id-type": "SKU",
         "description": None,
         "internal-description": None,
-        "price": decision["target_origin_price"],
         "price-additional-info": None,
         "quantity": raw.get("quantity") or offer.get("quantity") or 0,
         "min-quantity-alert": None,
         "state": raw.get("state_code") or offer.get("state_code") or "11",
         "available-start-date": None,
         "available-end-date": None,
-        "logistic-class": (
-            (raw.get("logistic_class") or {}).get("code")
-            if isinstance(raw.get("logistic_class"), dict)
-            else None
-        ),
-        "favorite-rank": None,
+        "logistic-class": _raw_logistic_code(raw),
         "discount-start-date": None,
         "discount-end-date": None,
         "discount-price": None,
         "update-delete": "update",
-        "leadtime-to-ship": raw.get("leadtime_to_ship"),
     }
+
+    if mode == "dropship":
+        prices0 = _raw_first(raw, "prices")
+        retail0 = _raw_first(raw, "retail_prices")
+        base.update({
+            # wholesale cost - preserve whatever OF52 carried
+            "price": prices0.get("origin_price") if prices0 else raw.get("price"),
+            "msrp": raw.get("msrp"),
+            # the two columns we actually change:
+            "retail-price": decision["target_origin_price"],
+            "discount-retail-price": decision.get("target_discount_price"),
+            # preserve the retail discount campaign window
+            "discount-retail-price-start-date": retail0.get("discount_start_date"),
+            "discount-retail-price-end-date": retail0.get("discount_end_date"),
+            # preserve the wholesale discount window + price
+            "discount-start-date": prices0.get("discount_start_date") if prices0 else None,
+            "discount-end-date": prices0.get("discount_end_date") if prices0 else None,
+            "discount-price": prices0.get("unit_discount_price") if prices0 else None,
+        })
+    else:
+        base.update({
+            "price": decision["target_origin_price"],
+            "favorite-rank": None,
+            "leadtime-to-ship": raw.get("leadtime_to_ship"),
+        })
+
+    return base
 
 
 def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
@@ -329,7 +384,7 @@ def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
 # Audit log
 # =============================================================================
 
-def _log_decisions(run_id: str, decisions: List[Tuple[Dict, Dict]]):
+def _log_decisions(run_id: str, decisions: List[Tuple[Dict, Dict]], store_key: str):
     """Bulk-insert decision rows into offer_price_change_log."""
     if not decisions:
         return
@@ -352,7 +407,7 @@ def _log_decisions(run_id: str, decisions: List[Tuple[Dict, Dict]]):
         rows.append((
             run_id,
             "full_export",
-            STORE_KEY,
+            store_key,
             offer["shop_sku"],
             offer.get("warehouse_sku"),
             now,
@@ -415,18 +470,23 @@ def _log_decisions(run_id: str, decisions: List[Tuple[Dict, Dict]]):
 # Top-level entry
 # =============================================================================
 
-def run_full_export(output_dir: str) -> Dict[str, Any]:
+def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str, Any]:
     """Top-level entry. Returns a summary dict including output_file path.
     Aborts if supplier data is stale.
     """
+    scfg = get_store(store_key)               # raises if unsupported
+    mode = scfg["mode"]
+    formula_variant = scfg["formula_variant"]
+
     started = datetime.now()
-    run_id = f"full-{STORE_KEY}-{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    run_id = f"full-{store_key}-{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
     freshness = get_supplier_freshness()
     if freshness["costway_stale"] or freshness["vevor_stale"]:
         return {
             "success": False,
             "run_id": run_id,
+            "store_key": store_key,
             "msg": "supplier data stale; refusing to export",
             "freshness": {
                 "costway_max": str(freshness["costway_max"]),
@@ -436,10 +496,10 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
         }
 
     print(f"[{run_id}] preloading all data ...")
-    active_offers = _load_active_offers()
-    configs = _load_pricing_configs()
+    active_offers = _load_active_offers(store_key)
+    configs = _load_pricing_configs(store_key)
     sp_lookup = _load_supplier_prices()
-    blacklist = _load_blacklist()
+    blacklist = _load_blacklist(store_key)
     print(f"  active offers : {len(active_offers)}")
     print(f"  configs       : {len(configs)}")
     print(f"  supplier prices: {len(sp_lookup)}")
@@ -464,7 +524,8 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
     for offer in active_offers:
         wh = offer.get("warehouse_sku")
         cfg = configs.get(wh) if wh else None
-        decision = _decide(offer, cfg, sp_lookup, blacklist)
+        decision = _decide(offer, cfg, sp_lookup, blacklist,
+                           formula_variant=formula_variant)
         decisions.append((offer, decision))
         summary[decision["status"]] = summary.get(decision["status"], 0) + 1
 
@@ -475,7 +536,7 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
                     raw = json.loads(offer["raw_json"])
                 except (TypeError, ValueError):
                     raw = {}
-            xlsx_rows.append(_build_xlsx_row(offer, decision, raw))
+            xlsx_rows.append(_build_xlsx_row(offer, decision, raw, mode))
             # collect for Feishu supplier-price writeback (user uploads the
             # xlsx to Mirakl, so these prices ARE about to change)
             if wh and decision.get("supplier_price") is not None:
@@ -488,19 +549,19 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
     xlsx_rows.sort(key=lambda r: r["sku"])
 
     os.makedirs(output_dir, exist_ok=True)
-    fname = f"macy_kuyotq_repricing_{started.strftime('%Y%m%d_%H%M%S')}.xlsx"
+    fname = f"{store_key}_repricing_{started.strftime('%Y%m%d_%H%M%S')}.xlsx"
     output_path = os.path.join(output_dir, fname)
 
-    # Look for the styled base template alongside instance/
+    # Look for the store's styled base template under instance/repricing/
     base_template = os.path.join(
         os.path.dirname(os.path.dirname(output_dir)),  # instance/
         "repricing",
-        "offers_import_blank.xlsx",
+        scfg["excel_template"],
     )
 
     written = write_xlsx(xlsx_rows, output_path, base_template_path=base_template)
 
-    _log_decisions(run_id, decisions)
+    _log_decisions(run_id, decisions, store_key)
 
     # Sync the would-update SKUs' supplier prices back to Feishu so the
     # Formula columns reflect the prices that the (about-to-be-uploaded)
@@ -509,7 +570,7 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
     try:
         from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
         feishu_writeback = write_supplier_prices_to_feishu(
-            feishu_price_updates, store_key=STORE_KEY
+            feishu_price_updates, store_key=store_key
         )
     except Exception as exc:
         feishu_writeback = {"sent": 0, "error": str(exc)}
@@ -518,6 +579,7 @@ def run_full_export(output_dir: str) -> Dict[str, Any]:
     return {
         "success": True,
         "run_id": run_id,
+        "store_key": store_key,
         "output_file": output_path,
         "filename": fname,
         "rows_written": written,

@@ -2,18 +2,20 @@
 {% block title %}改价历史 - macy_kuyotq{% endblock %}
 
 {% block content %}
+{% include "repricing/_store_nav.html" %}
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3><i class="bi bi-clock-history"></i> 改价历史</h3>
         <small class="text-muted">所有 run（auto_monitor / manual_full / manual_single）的决策日志</small>
     </div>
-    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+    <a href="{{ url_for('repricing.dashboard', store=store_key) }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
 </div>
 
 <div class="mb-3">
     <div class="btn-group" role="group">
         {% for s in ['all','success','dry_run','failed','alert','skipped','blacklisted'] %}
-        <a href="{{ url_for('repricing.changes_page', status=s) }}"
+        <a href="{{ url_for('repricing.changes_page', status=s, store=store_key) }}"
            class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-outline-primary{% endif %}">
            {{ s }}
         </a>

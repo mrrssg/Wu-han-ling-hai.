@@ -5,13 +5,16 @@
 <!-- Push result banner (persists until closed) -->
 <div id="push-banner-container"></div>
 
+{% include "repricing/_store_nav.html" %}
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3><i class="bi bi-fire text-danger"></i> 待改价 (latest dry-run)</h3>
         <small class="text-muted">利润 &lt; 5% 的 active offer，按当前利润率升序排列（最亏的在最上）。<strong class="text-success">已推送的会自动从列表移除。</strong></small>
     </div>
-    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+    <a href="{{ url_for('repricing.dashboard', store=store_key) }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
 </div>
+<script>const STORE_KEY = "{{ store_key }}";</script>
 
 {% if not rows %}
 <div class="alert alert-success">
@@ -173,10 +176,10 @@ if (batchBtn) {
         batchBtn.disabled = true;
         batchBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
         try {
-            const r = await fetch('/repricing/push-batch', {
+            const r = await fetch('/repricing/push-batch?store=' + STORE_KEY, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({shop_skus: skus}),
+                body: JSON.stringify({shop_skus: skus, store: STORE_KEY}),
             });
             const data = await r.json();
             if (data.success) {
@@ -222,7 +225,7 @@ document.querySelectorAll('.push-btn').forEach(btn => {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
         try {
-            const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
+            const r = await fetch(`/repricing/push/${sku}?store=${STORE_KEY}`, {method: 'POST'});
             const data = await r.json();
             if (data.success) {
                 btn.classList.remove('btn-outline-danger');

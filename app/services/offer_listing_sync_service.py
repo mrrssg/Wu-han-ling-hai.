@@ -24,14 +24,12 @@ from app.services.mirakl_offer_api_service import (
     poll_offer_export,
     submit_offer_export,
 )
+from app.services.repricing_stores import REPRICING_STORES, is_supported
 
-
+# Backward-compat alias - STORE_CONFIGS now derived from the central config.
 STORE_CONFIGS: Dict[str, Dict[str, str]] = {
-    "macy_kuyotq": {
-        "label": "Macy-Kuyotq",
-        "platform": "Macy",
-        "shop_name": "kuyotq",
-    },
+    k: {"label": v["label"], "platform": v["platform"], "shop_name": v["shop_name"]}
+    for k, v in REPRICING_STORES.items()
 }
 
 

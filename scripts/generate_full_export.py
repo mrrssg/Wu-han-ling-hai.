@@ -31,7 +31,7 @@ def main() -> int:
     config_name = os.environ.get("FLASK_CONFIG", "production")
     app = create_app(config_name)
     with app.app_context():
-        result = run_full_export(args.output_dir)
+        result = run_full_export(args.output_dir, store_key=args.store)
 
     print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     return 0 if result.get("success") else 1

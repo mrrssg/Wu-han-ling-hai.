@@ -27,10 +27,23 @@ COST_FACTOR_VEVOR = 0.8 * 1.07 * 1.05  # = 0.8988
 
 # ----- formula constants baked into the Feishu formula -----
 RETURN_COST_RATIO = 0.10              # 退货成本预估 = 退货运费(加附加费) * 0.10
-PRICE_FORMULA_NUMERATOR_COST_FACTOR = 0.92
-PRICE_FORMULA_DIVISOR = 0.6444        # implicit (1 - commission - target_margin), do not unfold
 ROUNDED_OFFSET = 0.02                 # 折扣后价格 = ROUND(公式价格, 0) - 0.02
 DIM_FACTOR_VOLUME_WEIGHT = 225        # 体积重 = L*W*H / 225
+
+# ----- per-store "公式计算出来的Price" variants -----
+# formula_price = (cost * cost_factor + return_cost_est) / divisor
+#   macy_kuyotq : (成本 * 0.92 + 退货成本预估) / 0.6444
+#   lowes_autool: (成本 * 1.0  + 退货成本预估) / 0.73   = 总成本 / 0.73
+# The divisor is the implicit (1 - commission - target_margin); do not unfold.
+PRICE_FORMULA_VARIANTS = {
+    "macy": {"cost_factor": 0.92, "divisor": 0.6444},
+    "lowes": {"cost_factor": 1.0, "divisor": 0.73},
+}
+DEFAULT_FORMULA_VARIANT = "macy"
+
+# legacy aliases kept so any old import still resolves
+PRICE_FORMULA_NUMERATOR_COST_FACTOR = PRICE_FORMULA_VARIANTS["macy"]["cost_factor"]
+PRICE_FORMULA_DIVISOR = PRICE_FORMULA_VARIANTS["macy"]["divisor"]
 
 # ----- return shipping surcharges (Lowes-style, used by Macy too) -----
 SURCHARGE_OVERSIZE = 110
@@ -146,11 +159,21 @@ def calculate_breakdown(
     width_in: float,
     height_in: float,
     weight_lb: float,
+    formula_variant: str = DEFAULT_FORMULA_VARIANT,
 ) -> PriceBreakdown:
     """Compute every intermediate value used by the Feishu formula chain.
     Returns a structured breakdown so callers can log every number to
     offer_price_change_log.
+
+    formula_variant selects the "公式计算出来的Price" step:
+      - 'macy'  : (cost * 0.92 + return_cost_est) / 0.6444
+      - 'lowes' : (cost * 1.0  + return_cost_est) / 0.73   (= 总成本 / 0.73)
+    Everything else (surcharges, discount_price, origin_price) is identical.
     """
+    variant = PRICE_FORMULA_VARIANTS.get(formula_variant)
+    if variant is None:
+        raise ValueError(f"unknown formula_variant: {formula_variant!r}")
+
     cost = cost_from_supplier_price(supplier_price, supplier)
 
     extra = 0.0
@@ -168,8 +191,9 @@ def calculate_breakdown(
     return_cost_est = rs_total * RETURN_COST_RATIO
     total_cost = cost + return_cost_est
 
-    # NOTE: Feishu formula uses 成本 (= cost) NOT 总成本 in the numerator.
-    formula_price = (cost * PRICE_FORMULA_NUMERATOR_COST_FACTOR + return_cost_est) / PRICE_FORMULA_DIVISOR
+    formula_price = (
+        cost * variant["cost_factor"] + return_cost_est
+    ) / variant["divisor"]
     discount_price = round(formula_price, 0) - ROUNDED_OFFSET
     origin_price = discount_price / discount_factor
 

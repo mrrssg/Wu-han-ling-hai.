@@ -31,13 +31,16 @@ from app.models.db_manager import DBManager
 FEISHU_APP_ID = "cli_a940a2a1067adbd2"
 FEISHU_APP_SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
 
-# Per-store Feishu source.
+# Per-store Feishu source - derived from the central repricing_stores config.
+from app.services.repricing_stores import REPRICING_STORES, is_supported as _store_supported
+
 FEISHU_SOURCES: Dict[str, Dict[str, str]] = {
-    "macy_kuyotq": {
-        "app_token": "QEeubiXYGa83zXs3Zt8cSSJPnih",
-        "table_id": "tblfyStm2eu3hp1Q",
-        "label": "Macy-kuyotq-Mirakl",
-    },
+    k: {
+        "app_token": v["feishu_app_token"],
+        "table_id": v["feishu_table_id"],
+        "label": v["feishu_label"],
+    }
+    for k, v in REPRICING_STORES.items()
 }
 
 PAGE_SIZE = 500
@@ -331,10 +334,10 @@ def write_supplier_prices_to_feishu(
 
     Failure-tolerant: never raises - the upstream push is more important.
     """
-    if not updates or store_key != "macy_kuyotq":
+    if not updates or not _store_supported(store_key):
         return {"sent": 0, "not_found": []}
 
-    src = FEISHU_SOURCES["macy_kuyotq"]
+    src = FEISHU_SOURCES[store_key]
     app_token = src["app_token"]
     table_id = src["table_id"]
 

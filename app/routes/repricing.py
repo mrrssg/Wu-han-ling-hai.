@@ -1,16 +1,20 @@
 """
-Web routes for the macy_kuyotq automated repricing system.
+Web routes for the automated repricing system. Multi-store: every page and
+API accepts a `store` query param (macy_kuyotq | lowes_autool), defaulting to
+macy_kuyotq. Store config lives in repricing_stores.REPRICING_STORES.
 
 Pages:
-    /repricing/                  dashboard (overview + KPIs + recent activity)
-    /repricing/candidates        SKUs that would trigger Part 1 repricing
-    /repricing/alerts            all alert rows (feishu_config_missing etc.)
-    /repricing/changes           full change-log history with filters
-    /repricing/blacklist         blacklist + per-SKU alert state
+    /repricing/?store=X          dashboard (overview + KPIs + recent activity)
+    /repricing/candidates?store=X SKUs that would trigger Part 1 repricing
+    /repricing/alerts?store=X    all alert rows (feishu_config_missing etc.)
+    /repricing/changes?store=X   full change-log history with filters
+    /repricing/blacklist?store=X blacklist + per-SKU alert state
+    /repricing/full-export?store=X  Part 2 Excel generation
 
 APIs:
-    POST /repricing/push/<shop_sku>            manual single-SKU push
-    POST /repricing/blacklist/<shop_sku>/clear unblock + reset failure count
+    POST /repricing/push/<shop_sku>?store=X     manual single-SKU push
+    POST /repricing/push-batch?store=X          batched push
+    POST /repricing/blacklist/<shop_sku>/clear  unblock + reset failure count
 
 All read endpoints are GET; only writes use POST. No Mirakl API call is made
 from a GET path - GETs only read autoweb DB.
@@ -37,11 +41,30 @@ from app.services.repricing_formula import (
     cost_from_supplier_price,
     realised_margin,
 )
+from app.services.repricing_stores import (
+    REPRICING_STORES,
+    get_store,
+    is_supported,
+    store_options,
+)
 
 
 repricing_bp = Blueprint("repricing", __name__)
 
-STORE_KEY = "macy_kuyotq"
+DEFAULT_STORE = "macy_kuyotq"
+
+
+def _current_store() -> str:
+    """Resolve the active store from ?store= (GET) or form/json (POST).
+    Falls back to macy_kuyotq. Always validated against REPRICING_STORES.
+    """
+    s = (request.args.get("store") or request.form.get("store") or "").strip()
+    if not s:
+        payload = request.get_json(silent=True) or {}
+        s = (payload.get("store") or "").strip()
+    if not s or not is_supported(s):
+        return DEFAULT_STORE
+    return s
 
 
 # =============================================================================
@@ -65,38 +88,36 @@ def _query(sql: str, params=None) -> List[Dict]:
         conn.close()
 
 
-def _summary_counts() -> Dict[str, int]:
+def _summary_counts(store_key: str) -> Dict[str, int]:
     """Top-level counts for the dashboard."""
+    scfg = get_store(store_key)
+    run_like = f"mon-{store_key}-%"
+
     rows = _query(
-        """SELECT
-              SUM(active=1) AS active_,
-              COUNT(*)      AS total
-           FROM order_system.offerprice_listing
-           WHERE platform='Macy' AND shop_name='kuyotq'"""
+        """SELECT SUM(active=1) AS active_, COUNT(*) AS total
+             FROM order_system.offerprice_listing
+            WHERE platform=%s AND shop_name=%s""",
+        (scfg["platform"], scfg["shop_name"]),
     )
     base = rows[0] if rows else {}
 
-    # latest monitor run
     latest = _query(
         """SELECT MAX(run_id) AS run_id, MAX(triggered_at) AS run_at
-           FROM order_system.offer_price_change_log
-           WHERE run_id LIKE 'mon-macy_kuyotq-%'"""
+             FROM order_system.offer_price_change_log
+            WHERE run_id LIKE %s""",
+        (run_like,),
     )
     latest_run = latest[0] if latest else {}
     latest_run_id = latest_run.get("run_id")
 
-    # Raw counts in that run (skipped / alert / dry_run before any filter)
     by_status = _query(
         """SELECT status, COUNT(*) c
              FROM order_system.offer_price_change_log
-            WHERE run_id = %s
-            GROUP BY status""",
+            WHERE run_id = %s GROUP BY status""",
         (latest_run_id,),
     ) if latest_run_id else []
     status_map = {r["status"]: int(r["c"]) for r in by_status}
 
-    # Pending dry_run: exclude SKUs already pushed since their dry_run row.
-    # Matches the filter on /candidates page so the numbers stay consistent.
     pending_dry_run = 0
     if latest_run_id:
         pending_row = _query(
@@ -105,29 +126,26 @@ def _summary_counts() -> Dict[str, int]:
                   AND NOT EXISTS (
                       SELECT 1 FROM order_system.offer_price_change_log later
                        WHERE later.shop_sku = log.shop_sku
-                         AND later.store_key = 'macy_kuyotq'
+                         AND later.store_key = %s
                          AND later.triggered_at > log.triggered_at
                          AND later.status = 'success'
                   )""",
-            (latest_run_id,),
+            (latest_run_id, store_key),
         )
         pending_dry_run = int(pending_row[0]["c"]) if pending_row else 0
 
     blk = _query(
-        """SELECT COUNT(*) c
-             FROM order_system.offer_alert_state
+        """SELECT COUNT(*) c FROM order_system.offer_alert_state
             WHERE store_key=%s AND blacklisted=1""",
-        (STORE_KEY,),
+        (store_key,),
     )
     blacklist_n = int(blk[0]["c"]) if blk else 0
 
     success_today = _query(
-        """SELECT COUNT(*) c
-             FROM order_system.offer_price_change_log
-            WHERE store_key=%s
-              AND status = 'success'
+        """SELECT COUNT(*) c FROM order_system.offer_price_change_log
+            WHERE store_key=%s AND status='success'
               AND DATE(triggered_at)=CURDATE()""",
-        (STORE_KEY,),
+        (store_key,),
     )
     success_today_n = int(success_today[0]["c"]) if success_today else 0
 
@@ -139,29 +157,24 @@ def _summary_counts() -> Dict[str, int]:
         "latest_skipped": status_map.get("skipped", 0),
         "latest_alert": status_map.get("alert", 0),
         "latest_dry_run_raw": status_map.get("dry_run", 0),
-        "latest_dry_run": pending_dry_run,                # filtered = matches /candidates page
+        "latest_dry_run": pending_dry_run,
         "pushed_since_run": status_map.get("dry_run", 0) - pending_dry_run,
         "blacklist_count": blacklist_n,
         "success_today": success_today_n,
     }
 
 
-CANDIDATE_HIDE_AFTER_PUSH_STATUSES = ("success",)
-
-
-def _top_candidates(limit: int = 10) -> List[Dict]:
-    """SKUs flagged dry_run in the latest monitor run, MINUS any that have
-    since been pushed (status=success after the dry_run decision).
-    Sorted by margin_before asc.
-    """
+def _top_candidates(store_key: str, limit: int = 10) -> List[Dict]:
+    """dry_run SKUs from the latest monitor run, minus already-pushed."""
+    run_like = f"mon-{store_key}-%"
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
-           WHERE run_id LIKE 'mon-macy_kuyotq-%' AND status='dry_run'
-           ORDER BY triggered_at DESC LIMIT 1"""
+            WHERE run_id LIKE %s AND status='dry_run'
+            ORDER BY triggered_at DESC LIMIT 1""",
+        (run_like,),
     )
     if not latest:
         return []
-    latest_run_id = latest[0]["run_id"]
     return _query(
         """SELECT log.shop_sku, log.warehouse_sku, log.supplier,
                   log.old_origin_price, log.new_origin_price, log.new_cost,
@@ -172,42 +185,43 @@ def _top_candidates(limit: int = 10) -> List[Dict]:
               AND NOT EXISTS (
                   SELECT 1 FROM order_system.offer_price_change_log later
                    WHERE later.shop_sku = log.shop_sku
-                     AND later.store_key = 'macy_kuyotq'
+                     AND later.store_key = %s
                      AND later.triggered_at > log.triggered_at
                      AND later.status = 'success'
               )
             ORDER BY log.profit_margin_before ASC
             LIMIT %s""",
-        (latest_run_id, limit),
+        (latest[0]["run_id"], store_key, limit),
     )
 
 
-def _all_candidates() -> List[Dict]:
+def _all_candidates(store_key: str) -> List[Dict]:
     """Every dry_run row from the latest run not yet pushed."""
+    run_like = f"mon-{store_key}-%"
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
-           WHERE run_id LIKE 'mon-macy_kuyotq-%' AND status='dry_run'
-           ORDER BY triggered_at DESC LIMIT 1"""
+            WHERE run_id LIKE %s AND status='dry_run'
+            ORDER BY triggered_at DESC LIMIT 1""",
+        (run_like,),
     )
     if not latest:
         return []
-    latest_run_id = latest[0]["run_id"]
     return _query(
         """SELECT log.* FROM order_system.offer_price_change_log log
             WHERE log.run_id=%s AND log.status='dry_run'
               AND NOT EXISTS (
                   SELECT 1 FROM order_system.offer_price_change_log later
                    WHERE later.shop_sku = log.shop_sku
-                     AND later.store_key = 'macy_kuyotq'
+                     AND later.store_key = %s
                      AND later.triggered_at > log.triggered_at
                      AND later.status = 'success'
               )
             ORDER BY log.profit_margin_before ASC""",
-        (latest_run_id,),
+        (latest[0]["run_id"], store_key),
     )
 
 
-def _alerts() -> List[Dict]:
+def _alerts(store_key: str) -> List[Dict]:
     """Currently unresolved alert state per SKU."""
     return _query(
         """SELECT shop_sku, last_alert_type, last_alert_message, last_alert_at,
@@ -215,16 +229,18 @@ def _alerts() -> List[Dict]:
              FROM order_system.offer_alert_state
             WHERE store_key=%s AND (resolved_at IS NULL OR last_alert_at > resolved_at)
             ORDER BY last_alert_at DESC""",
-        (STORE_KEY,),
+        (store_key,),
     )
 
 
-def _alert_breakdown_latest_run() -> List[Dict]:
+def _alert_breakdown_latest_run(store_key: str) -> List[Dict]:
     """alert_type counts from the latest monitor run."""
+    run_like = f"mon-{store_key}-%"
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
-           WHERE run_id LIKE 'mon-macy_kuyotq-%' AND status='alert'
-           ORDER BY triggered_at DESC LIMIT 1"""
+            WHERE run_id LIKE %s AND status='alert'
+            ORDER BY triggered_at DESC LIMIT 1""",
+        (run_like,),
     )
     if not latest:
         return []
@@ -232,13 +248,12 @@ def _alert_breakdown_latest_run() -> List[Dict]:
         """SELECT alert_type, COUNT(*) c
              FROM order_system.offer_price_change_log
             WHERE run_id=%s AND status='alert'
-            GROUP BY alert_type
-            ORDER BY c DESC""",
+            GROUP BY alert_type ORDER BY c DESC""",
         (latest[0]["run_id"],),
     )
 
 
-def _recent_changes(limit: int = 30) -> List[Dict]:
+def _recent_changes(store_key: str, limit: int = 30) -> List[Dict]:
     """Most recent rows that actually hit Mirakl (mirakl_called=1)."""
     return _query(
         """SELECT id, run_id, run_type, shop_sku, warehouse_sku, status,
@@ -247,41 +262,31 @@ def _recent_changes(limit: int = 30) -> List[Dict]:
                   mirakl_import_id, mirakl_http_status, triggered_at,
                   verify_result
              FROM order_system.offer_price_change_log
-            WHERE store_key=%s
-              AND mirakl_called=1
-            ORDER BY triggered_at DESC
-            LIMIT %s""",
-        (STORE_KEY, limit),
+            WHERE store_key=%s AND mirakl_called=1
+            ORDER BY triggered_at DESC LIMIT %s""",
+        (store_key, limit),
     )
 
 
-def _all_changes(status_filter: Optional[str] = None, limit: int = 200) -> List[Dict]:
+def _all_changes(store_key: str, status_filter: Optional[str] = None,
+                 limit: int = 200) -> List[Dict]:
+    cols = """id, run_id, run_type, shop_sku, warehouse_sku, status,
+              alert_type, decision_reason,
+              old_origin_price, new_origin_price, old_cost, new_cost,
+              profit_margin_before, profit_margin_after,
+              mirakl_import_id, mirakl_http_status, triggered_at, verify_result"""
     if status_filter and status_filter != "all":
         return _query(
-            """SELECT id, run_id, run_type, shop_sku, warehouse_sku, status,
-                      alert_type, decision_reason,
-                      old_origin_price, new_origin_price, old_cost, new_cost,
-                      profit_margin_before, profit_margin_after,
-                      mirakl_import_id, mirakl_http_status, triggered_at,
-                      verify_result
-                 FROM order_system.offer_price_change_log
-                WHERE store_key=%s AND status=%s
-                ORDER BY triggered_at DESC
-                LIMIT %s""",
-            (STORE_KEY, status_filter, limit),
+            f"""SELECT {cols} FROM order_system.offer_price_change_log
+                 WHERE store_key=%s AND status=%s
+                 ORDER BY triggered_at DESC LIMIT %s""",
+            (store_key, status_filter, limit),
         )
     return _query(
-        """SELECT id, run_id, run_type, shop_sku, warehouse_sku, status,
-                  alert_type, decision_reason,
-                  old_origin_price, new_origin_price, old_cost, new_cost,
-                  profit_margin_before, profit_margin_after,
-                  mirakl_import_id, mirakl_http_status, triggered_at,
-                  verify_result
-             FROM order_system.offer_price_change_log
-            WHERE store_key=%s
-            ORDER BY triggered_at DESC
-            LIMIT %s""",
-        (STORE_KEY, limit),
+        f"""SELECT {cols} FROM order_system.offer_price_change_log
+             WHERE store_key=%s
+             ORDER BY triggered_at DESC LIMIT %s""",
+        (store_key, limit),
     )
 
 
@@ -291,64 +296,72 @@ def _all_changes(status_filter: Optional[str] = None, limit: int = 200) -> List[
 
 @repricing_bp.route("/")
 def dashboard():
-    summary = _summary_counts()
-    freshness = get_supplier_freshness()
-    top_candidates = _top_candidates(10)
-    alert_breakdown = _alert_breakdown_latest_run()
-    recent = _recent_changes(20)
+    store_key = _current_store()
     return render_template(
         "repricing/dashboard.html",
-        summary=summary,
-        freshness=freshness,
-        top_candidates=top_candidates,
-        alert_breakdown=alert_breakdown,
-        recent=recent,
+        store_key=store_key,
+        stores=store_options(),
+        summary=_summary_counts(store_key),
+        freshness=get_supplier_freshness(),
+        top_candidates=_top_candidates(store_key, 10),
+        alert_breakdown=_alert_breakdown_latest_run(store_key),
+        recent=_recent_changes(store_key, 20),
     )
 
 
 @repricing_bp.route("/candidates")
 def candidates_page():
-    rows = _all_candidates()
+    store_key = _current_store()
     return render_template(
         "repricing/candidates.html",
-        rows=rows,
+        store_key=store_key,
+        stores=store_options(),
+        rows=_all_candidates(store_key),
     )
 
 
 @repricing_bp.route("/alerts")
 def alerts_page():
-    rows = _alerts()
-    breakdown = _alert_breakdown_latest_run()
+    store_key = _current_store()
     return render_template(
         "repricing/alerts.html",
-        rows=rows,
-        breakdown=breakdown,
+        store_key=store_key,
+        stores=store_options(),
+        rows=_alerts(store_key),
+        breakdown=_alert_breakdown_latest_run(store_key),
     )
 
 
 @repricing_bp.route("/changes")
 def changes_page():
+    store_key = _current_store()
     status = (request.args.get("status") or "all").strip().lower()
-    rows = _all_changes(status_filter=status, limit=300)
     return render_template(
         "repricing/changes.html",
-        rows=rows,
+        store_key=store_key,
+        stores=store_options(),
+        rows=_all_changes(store_key, status_filter=status, limit=300),
         status_filter=status,
     )
 
 
 @repricing_bp.route("/blacklist")
 def blacklist_page():
+    store_key = _current_store()
     rows = _query(
         """SELECT shop_sku, failure_count, blacklisted, blacklisted_at,
                   blacklisted_reason, last_alert_type, last_alert_at
              FROM order_system.offer_alert_state
-            WHERE store_key=%s
-              AND (blacklisted=1 OR failure_count > 0)
+            WHERE store_key=%s AND (blacklisted=1 OR failure_count > 0)
             ORDER BY blacklisted DESC, last_alert_at DESC""",
-        (STORE_KEY,),
+        (store_key,),
     )
-    return render_template("repricing/blacklist.html", rows=rows)
+    return render_template(
+        "repricing/blacklist.html",
+        store_key=store_key,
+        stores=store_options(),
+        rows=rows,
+    )
 
 
 # =============================================================================
@@ -362,17 +375,22 @@ def push_one(shop_sku):
     """
     from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers
     from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
-    from app.services.repricing_monitor_service import _log
+    from app.services.repricing_monitor_service import _log, build_of24_payload
+
+    store_key = _current_store()
+    scfg = get_store(store_key)
+    mode = scfg["mode"]
+    formula_variant = scfg["formula_variant"]
 
     try:
-        offers = fetch_active_offers(STORE_KEY)
+        offers = fetch_active_offers(store_key)
         ctx = next((o for o in offers if o.shop_sku == shop_sku), None)
         if not ctx:
             return jsonify({"success": False, "msg": "shop_sku not active"}), 400
         if not ctx.warehouse_sku:
             return jsonify({"success": False, "msg": "no warehouse_sku mapping"}), 400
 
-        configs = fetch_pricing_configs(STORE_KEY)
+        configs = fetch_pricing_configs(store_key)
         cfg = configs.get(ctx.warehouse_sku)
         if not cfg or cfg.get("return_shipping_base") is None:
             return jsonify({"success": False, "msg": "missing Feishu config or return_shipping_base"}), 400
@@ -399,17 +417,24 @@ def push_one(shop_sku):
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant,
         )
         target = round(float(bd.origin_price), 2)
+        target_discount = round(float(bd.discount_price), 2)
 
-        full = get_offer_by_sku(STORE_KEY, shop_sku)
-        payload = build_of24_payload_from_of22(full, target)
-        resp = update_offers(STORE_KEY, [payload], dry_run=False)
+        if mode == "dropship":
+            # Dropship: rebuild from raw_json, change retail side only
+            payload = build_of24_payload(ctx, target, target_discount, mode="dropship")
+        else:
+            # non-Dropship: OF21 full fetch + rebuild, change `price`
+            full = get_offer_by_sku(store_key, shop_sku)
+            payload = build_of24_payload_from_of22(full, target)
+        resp = update_offers(store_key, [payload], dry_run=False)
 
         run_id = f"manual-{shop_sku}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         ok = resp.get("http_status") in (200, 201) and not resp.get("error")
 
-        _log(STORE_KEY, run_id, "manual_single", ctx, {
+        _log(store_key, run_id, "manual_single", ctx, {
             "supplier": supplier,
             "supplier_price_db": sp,
             "new_cost": round(cost, 4),
@@ -445,8 +470,8 @@ def push_one(shop_sku):
                                   last_cost_snapshot=%s,
                                   last_cost_snapshot_at=NOW()
                             WHERE shop_sku=%s
-                              AND platform='Macy' AND shop_name='kuyotq'""",
-                        (target, cost, shop_sku),
+                              AND platform=%s AND shop_name=%s""",
+                        (target, cost, shop_sku, scfg["platform"], scfg["shop_name"]),
                     )
                 conn.commit()
             finally:
@@ -459,7 +484,7 @@ def push_one(shop_sku):
                 from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
                 feishu_writeback = write_supplier_prices_to_feishu(
                     [{"warehouse_sku": ctx.warehouse_sku, "supplier_price": sp}],
-                    store_key=STORE_KEY,
+                    store_key=store_key,
                 )
             except Exception as exc:
                 feishu_writeback = {"sent": 0, "error": str(exc)}
@@ -482,6 +507,7 @@ def push_one(shop_sku):
 
 @repricing_bp.route("/blacklist/<shop_sku>/clear", methods=["POST"])
 def blacklist_clear(shop_sku):
+    store_key = _current_store()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
@@ -489,14 +515,14 @@ def blacklist_clear(shop_sku):
                 """UPDATE order_system.offer_alert_state
                       SET blacklisted=0, blacklisted_at=NULL, blacklisted_reason=NULL,
                           failure_count=0, resolved_at=NOW()
-                    WHERE shop_sku=%s""",
-                (shop_sku,),
+                    WHERE shop_sku=%s AND store_key=%s""",
+                (shop_sku, store_key),
             )
         conn.commit()
     finally:
         conn.close()
     flash(f"已解除 {shop_sku} 的黑名单", "success")
-    return redirect(url_for("repricing.blacklist_page"))
+    return redirect(url_for("repricing.blacklist_page", store=store_key))
 
 
 # =============================================================================
@@ -505,28 +531,36 @@ def blacklist_clear(shop_sku):
 
 @repricing_bp.route("/full-export", methods=["GET"])
 def full_export_page():
-    # Show most recent run + download link
+    store_key = _current_store()
+    # Show most recent runs for THIS store (run_id encodes the store)
     latest = _query(
         """SELECT run_id, MIN(triggered_at) started_at, MAX(triggered_at) finished_at,
                   COUNT(*) total
              FROM order_system.offer_price_change_log
-            WHERE run_type='full_export'
+            WHERE run_type='full_export' AND store_key=%s
             GROUP BY run_id
             ORDER BY MAX(triggered_at) DESC
-            LIMIT 5"""
+            LIMIT 5""",
+        (store_key,),
     )
-    return render_template("repricing/full_export.html", latest_runs=latest)
+    return render_template(
+        "repricing/full_export.html",
+        store_key=store_key,
+        stores=store_options(),
+        latest_runs=latest,
+    )
 
 
 @repricing_bp.route("/full-export/run", methods=["POST"])
 def full_export_run():
     from app.services.repricing_full_export_service import run_full_export
+    store_key = _current_store()
     out_dir = os.path.join(
         current_app.config.get("BASE_DIR", current_app.root_path),
         "instance", "exports", "repricing",
     )
     try:
-        result = run_full_export(out_dir)
+        result = run_full_export(out_dir, store_key=store_key)
     except Exception as exc:
         return jsonify({"success": False, "msg": str(exc)}), 500
     return jsonify(result)
@@ -536,25 +570,25 @@ def full_export_run():
 def full_export_download(run_id):
     """Download the xlsx generated for a given run_id."""
     from flask import send_file
+    store_key = _current_store()
     out_dir = os.path.join(
         current_app.config.get("BASE_DIR", current_app.root_path),
         "instance", "exports", "repricing",
     )
-    # Find the file matching this run_id - filename has the timestamp embedded
-    # Easier: scan the dir for files mentioning the run_id's timestamp
     if not os.path.isdir(out_dir):
         flash("export directory missing", "danger")
-        return redirect(url_for("repricing.full_export_page"))
-    # run_id format: full-macy_kuyotq-YYYYMMDD-HHMMSS-xxxxxx
+        return redirect(url_for("repricing.full_export_page", store=store_key))
+    # run_id format: full-<store_key>-YYYYMMDD-HHMMSS-xxxxxx
+    # the xlsx filename is <store_key>_repricing_YYYYMMDD_HHMMSS.xlsx
     parts = run_id.split("-")
-    timestamp = "_".join(parts[2:4]) if len(parts) >= 4 else ""
+    timestamp = "_".join(parts[-3:-1]) if len(parts) >= 3 else ""
     candidates = sorted(
         [f for f in os.listdir(out_dir)
-         if f.endswith(".xlsx") and timestamp in f.replace("-", "_")]
+         if f.endswith(".xlsx") and timestamp in f]
     )
     if not candidates:
         flash(f"no export file found for {run_id}", "warning")
-        return redirect(url_for("repricing.full_export_page"))
+        return redirect(url_for("repricing.full_export_page", store=store_key))
     return send_file(
         os.path.join(out_dir, candidates[-1]),
         as_attachment=True,
@@ -584,7 +618,12 @@ def push_batch():
     """
     from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers, OF24_DEFAULT_BATCH_SIZE
     from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
-    from app.services.repricing_monitor_service import _log
+    from app.services.repricing_monitor_service import _log, build_of24_payload
+
+    store_key = _current_store()
+    scfg = get_store(store_key)
+    mode = scfg["mode"]
+    formula_variant = scfg["formula_variant"]
 
     payload = request.get_json(silent=True) or {}
     skus_in = payload.get("shop_skus") or []
@@ -596,12 +635,12 @@ def push_batch():
             "msg": f"batch too large: {len(skus_in)} > {OF24_DEFAULT_BATCH_SIZE} (chunk on the caller)",
         }), 400
 
-    run_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    run_id = f"batch-{store_key}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
     # Pre-load shared context once
-    offers = fetch_active_offers(STORE_KEY)
+    offers = fetch_active_offers(store_key)
     by_sku = {o.shop_sku: o for o in offers}
-    configs = fetch_pricing_configs(STORE_KEY)
+    configs = fetch_pricing_configs(store_key)
 
     payloads = []
     rejections = []         # (sku, reason)
@@ -652,26 +691,36 @@ def push_batch():
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant,
         )
         target = round(float(bd.origin_price), 2)
+        target_discount = round(float(bd.discount_price), 2)
         targets_by_sku[sku] = {
-            "ctx": ctx, "target": target, "margin": margin,
+            "ctx": ctx, "target": target, "target_discount": target_discount,
+            "margin": margin,
             "supplier": supplier, "sp": sp, "cost": cost, "bd": bd,
             "df": df, "cr": cr, "rb": rb,
         }
 
-    # Now OF21 each sku in order to build payloads.
-    # OF21 is not rate-capped; we fetch sequentially to be polite (~2s each).
+    # Build OF24 payloads.
+    #  - dropship: rebuild from raw_json, change the retail side only.
+    #  - non_dropship: OF21 full-fetch + rebuild, change `price`.
     of21_failures = []
     for sku, info in list(targets_by_sku.items()):
-        try:
-            full = get_offer_by_sku(STORE_KEY, sku)
-        except Exception as exc:
-            of21_failures.append((sku, str(exc)))
-            del targets_by_sku[sku]
-            continue
-        info["full"] = full
-        info["payload"] = build_of24_payload_from_of22(full, info["target"])
+        if mode == "dropship":
+            info["payload"] = build_of24_payload(
+                info["ctx"], info["target"], info["target_discount"],
+                mode="dropship",
+            )
+        else:
+            try:
+                full = get_offer_by_sku(store_key, sku)
+            except Exception as exc:
+                of21_failures.append((sku, str(exc)))
+                del targets_by_sku[sku]
+                continue
+            info["full"] = full
+            info["payload"] = build_of24_payload_from_of22(full, info["target"])
         payloads.append(info["payload"])
 
     if not payloads:
@@ -684,7 +733,7 @@ def push_batch():
         }), 400
 
     # Single OF24 batched call
-    resp = update_offers(STORE_KEY, payloads, dry_run=False)
+    resp = update_offers(store_key, payloads, dry_run=False)
     http_status = resp.get("http_status")
     ok = http_status in (200, 201) and not resp.get("error")
     import_id = resp.get("import_id")
@@ -692,7 +741,7 @@ def push_batch():
     # Persist a log row per pushed SKU + per rejection
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for sku, info in targets_by_sku.items():
-        _log(STORE_KEY, run_id, "batch_push", info["ctx"], {
+        _log(store_key, run_id, "batch_push", info["ctx"], {
             "supplier": info["supplier"],
             "supplier_price_db": info["sp"],
             "new_cost": round(info["cost"], 4),
@@ -730,8 +779,9 @@ def push_batch():
                                   last_cost_snapshot=%s,
                                   last_cost_snapshot_at=NOW()
                             WHERE shop_sku=%s
-                              AND platform='Macy' AND shop_name='kuyotq'""",
-                        (info["target"], info["cost"], sku),
+                              AND platform=%s AND shop_name=%s""",
+                        (info["target"], info["cost"], sku,
+                         scfg["platform"], scfg["shop_name"]),
                     )
             conn.commit()
         finally:
@@ -747,7 +797,7 @@ def push_batch():
                     for info in targets_by_sku.values()
                     if info["ctx"].warehouse_sku
                 ],
-                store_key=STORE_KEY,
+                store_key=store_key,
             )
         except Exception as exc:
             feishu_writeback = {"sent": 0, "error": str(exc)}

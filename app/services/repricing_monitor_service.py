@@ -21,7 +21,7 @@ For every active offer:
    12. Every decision (including SKIPPED ones) gets a row in
        offer_price_change_log so the audit trail is comprehensive.
 
-Only macy_kuyotq is wired up for now.
+Stores: macy_kuyotq + lowes_autool (see repricing_stores.REPRICING_STORES).
 """
 import hashlib
 import json
@@ -131,8 +131,10 @@ def lookup_supplier_price(warehouse_sku: str, supplier: str) -> Tuple[Optional[f
 # =============================================================================
 
 def fetch_active_offers(store_key: str = "macy_kuyotq") -> List[OfferContext]:
-    platform = "Macy"
-    shop_name = "kuyotq"
+    from app.services.repricing_stores import get_store
+    scfg = get_store(store_key)
+    platform = scfg["platform"]
+    shop_name = scfg["shop_name"]
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
@@ -405,7 +407,21 @@ def _update_origin_price(shop_sku: str, new_origin: float, new_discount: float,
 # with one or two SKUs.
 # =============================================================================
 
-def build_of24_payload(ctx: OfferContext, new_origin: float, new_discount: Optional[float]) -> Dict[str, Any]:
+def build_of24_payload(ctx: OfferContext, new_origin: float,
+                        new_discount: Optional[float],
+                        mode: str = "non_dropship") -> Dict[str, Any]:
+    """Build a minimal OF24 update payload.
+
+    NOTE: this is the monitor's lightweight builder (raw_json only). The
+    canonical push path is the web routes' OF21 + build_of24_payload_from_full_offer
+    which preserves every field. This builder is mode-aware so the rare
+    `--live` monitor run does not write the wrong column for Dropship stores.
+
+    - non_dropship (Macy): `price` IS the customer price.
+    - dropship (Lowes): `price` is the wholesale cost (keep raw value);
+      the customer price goes into retail_prices[].unit_origin_price /
+      unit_discount_price.
+    """
     raw = {}
     if ctx.raw_json:
         try:
@@ -417,13 +433,27 @@ def build_of24_payload(ctx: OfferContext, new_origin: float, new_discount: Optio
         "shop_sku": ctx.shop_sku,
         "state_code": ctx.state_code or raw.get("state_code") or "11",
         "update_delete": "update",
-        "price": round(float(new_origin), 2),
         "quantity": ctx.quantity if ctx.quantity is not None else raw.get("quantity") or 0,
         "leadtime_to_ship": raw.get("leadtime_to_ship"),
         "logistic_class": (raw.get("logistic_class") or {}).get("code")
             if isinstance(raw.get("logistic_class"), dict)
             else raw.get("logistic_class"),
     }
+
+    if mode == "dropship":
+        # keep wholesale price as-is, change the retail side
+        if raw.get("price") is not None:
+            offer["price"] = round(float(raw["price"]), 2)
+        retail_entry = {
+            "channel_code": None,
+            "unit_origin_price": round(float(new_origin), 2),
+        }
+        if new_discount is not None:
+            retail_entry["unit_discount_price"] = round(float(new_discount), 2)
+        offer["retail_prices"] = [retail_entry]
+    else:
+        offer["price"] = round(float(new_origin), 2)
+
     # drop keys whose value is None to avoid Mirakl rejecting nulls
     offer = {k: v for k, v in offer.items() if v is not None}
     return offer
@@ -439,8 +469,10 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     dry_run=True (default): no OF24 call, but full audit log is still written
     with status='dry_run'.
     """
-    if store_key != "macy_kuyotq":
+    from app.services.repricing_stores import get_store, is_supported
+    if not is_supported(store_key):
         return {"success": False, "msg": f"store not supported: {store_key}"}
+    formula_variant = get_store(store_key)["formula_variant"]
 
     started = datetime.now()
     run_id = f"mon-{store_key}-{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -661,12 +693,16 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             return_shipping_base=return_base,
             discount_factor=discount_factor,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant,
         )
         target_origin = round(bd.origin_price, 2)
         target_discount = round(bd.discount_price, 2)
 
         # OF24 payload + dry-run gate
-        of24_offer = build_of24_payload(ctx, target_origin, target_discount)
+        of24_offer = build_of24_payload(
+            ctx, target_origin, target_discount,
+            mode=get_store(store_key)["mode"],
+        )
         payload_hash = _hash_payload(of24_offer)
 
         api_call_seq += 1

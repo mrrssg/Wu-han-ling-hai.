@@ -5,17 +5,19 @@
 <!-- Push result banner (persists until closed) -->
 <div id="push-banner-container"></div>
 
+{% include "repricing/_store_nav.html" %}
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3 class="mb-0"><i class="bi bi-currency-dollar"></i> 价格监控仪表盘</h3>
-        <small class="text-muted">店铺: macy_kuyotq</small>
+        <small class="text-muted">店铺: {{ store_key }}</small>
     </div>
     <div>
-        <a href="{{ url_for('repricing.candidates_page') }}" class="btn btn-sm btn-outline-danger me-2"><i class="bi bi-fire"></i> 待改价</a>
-        <a href="{{ url_for('repricing.full_export_page') }}" class="btn btn-sm btn-outline-primary me-2"><i class="bi bi-file-earmark-spreadsheet"></i> 整体导出</a>
-        <a href="{{ url_for('repricing.alerts_page') }}" class="btn btn-sm btn-outline-warning me-2"><i class="bi bi-exclamation-triangle"></i> 告警</a>
-        <a href="{{ url_for('repricing.changes_page') }}" class="btn btn-sm btn-outline-secondary me-2"><i class="bi bi-clock-history"></i> 历史</a>
-        <a href="{{ url_for('repricing.blacklist_page') }}" class="btn btn-sm btn-outline-dark"><i class="bi bi-shield-x"></i> 黑名单</a>
+        <a href="{{ url_for('repricing.candidates_page', store=store_key) }}" class="btn btn-sm btn-outline-danger me-2"><i class="bi bi-fire"></i> 待改价</a>
+        <a href="{{ url_for('repricing.full_export_page', store=store_key) }}" class="btn btn-sm btn-outline-primary me-2"><i class="bi bi-file-earmark-spreadsheet"></i> 整体导出</a>
+        <a href="{{ url_for('repricing.alerts_page', store=store_key) }}" class="btn btn-sm btn-outline-warning me-2"><i class="bi bi-exclamation-triangle"></i> 告警</a>
+        <a href="{{ url_for('repricing.changes_page', store=store_key) }}" class="btn btn-sm btn-outline-secondary me-2"><i class="bi bi-clock-history"></i> 历史</a>
+        <a href="{{ url_for('repricing.blacklist_page', store=store_key) }}" class="btn btn-sm btn-outline-dark"><i class="bi bi-shield-x"></i> 黑名单</a>
     </div>
 </div>
 
@@ -36,7 +38,7 @@
                 <div class="text-muted small">待改价 <span class="badge bg-danger">利润 &lt; 5%</span></div>
                 <div class="display-5 fw-bold text-danger">{{ summary.latest_dry_run }}</div>
                 <small>
-                    <a href="{{ url_for('repricing.candidates_page') }}">查看明细 →</a>
+                    <a href="{{ url_for('repricing.candidates_page', store=store_key) }}">查看明细 →</a>
                     {% if summary.pushed_since_run > 0 %}
                     <br><span class="text-muted">原 {{ summary.latest_dry_run_raw }}，已推过 {{ summary.pushed_since_run }}</span>
                     {% endif %}
@@ -49,7 +51,7 @@
             <div class="card-body">
                 <div class="text-muted small">告警 <span class="badge bg-warning text-dark">需补数据</span></div>
                 <div class="display-5 fw-bold text-warning">{{ summary.latest_alert }}</div>
-                <small><a href="{{ url_for('repricing.alerts_page') }}">查看明细 →</a></small>
+                <small><a href="{{ url_for('repricing.alerts_page', store=store_key) }}">查看明细 →</a></small>
             </div>
         </div>
     </div>
@@ -106,7 +108,7 @@
 <div class="card mb-4">
     <div class="card-header bg-danger bg-opacity-10 d-flex justify-content-between align-items-center">
         <div><i class="bi bi-fire text-danger"></i> <strong>Top 10 待改价（按亏损程度排序）</strong></div>
-        <a href="{{ url_for('repricing.candidates_page') }}" class="btn btn-sm btn-outline-danger">查看全部 →</a>
+        <a href="{{ url_for('repricing.candidates_page', store=store_key) }}" class="btn btn-sm btn-outline-danger">查看全部 →</a>
     </div>
     {% if top_candidates %}
     <div class="table-responsive">
@@ -192,7 +194,7 @@
 <div class="card mb-4">
     <div class="card-header bg-secondary bg-opacity-10 d-flex justify-content-between align-items-center">
         <div><i class="bi bi-clock-history"></i> <strong>最近 20 条改价记录</strong></div>
-        <a href="{{ url_for('repricing.changes_page') }}" class="btn btn-sm btn-outline-secondary">完整历史 →</a>
+        <a href="{{ url_for('repricing.changes_page', store=store_key) }}" class="btn btn-sm btn-outline-secondary">完整历史 →</a>
     </div>
     {% if recent %}
     <div class="table-responsive">
@@ -258,7 +260,7 @@ document.querySelectorAll('.push-btn').forEach(btn => {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 推送中...';
         try {
-            const r = await fetch(`/repricing/push/${sku}`, {method: 'POST'});
+            const r = await fetch(`/repricing/push/${sku}?store={{ store_key }}`, {method: 'POST'});
             const data = await r.json();
             if (data.success) {
                 showBanner('success',

@@ -2,12 +2,14 @@
 {% block title %}黑名单 - macy_kuyotq{% endblock %}
 
 {% block content %}
+{% include "repricing/_store_nav.html" %}
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h3><i class="bi bi-shield-x"></i> 黑名单 + 失败计数</h3>
         <small class="text-muted">连续失败 3 次自动入黑名单；只有人工解除</small>
     </div>
-    <a href="{{ url_for('repricing.dashboard') }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
+    <a href="{{ url_for('repricing.dashboard', store=store_key) }}" class="btn btn-sm btn-outline-secondary">← 返回仪表盘</a>
 </div>
 
 {% if not rows %}
@@ -43,7 +45,7 @@
                     <td class="small">{{ r.last_alert_type or '-' }} ({{ r.last_alert_at or '-' }})</td>
                     <td>
                         {% if r.blacklisted or r.failure_count > 0 %}
-                        <form method="POST" action="{{ url_for('repricing.blacklist_clear', shop_sku=r.shop_sku) }}" class="d-inline">
+                        <form method="POST" action="{{ url_for('repricing.blacklist_clear', shop_sku=r.shop_sku, store=store_key) }}" class="d-inline">
                             <button type="submit" class="btn btn-sm btn-outline-success"
                                     onclick="return confirm('确认解除 {{ r.shop_sku }} 的黑名单和失败计数？')">
                                 <i class="bi bi-check"></i> 解除
