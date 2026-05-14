@@ -85,7 +85,7 @@ def _summary_counts() -> Dict[str, int]:
     latest_run = latest[0] if latest else {}
     latest_run_id = latest_run.get("run_id")
 
-    # counts in that run
+    # Raw counts in that run (skipped / alert / dry_run before any filter)
     by_status = _query(
         """SELECT status, COUNT(*) c
              FROM order_system.offer_price_change_log
@@ -94,6 +94,24 @@ def _summary_counts() -> Dict[str, int]:
         (latest_run_id,),
     ) if latest_run_id else []
     status_map = {r["status"]: int(r["c"]) for r in by_status}
+
+    # Pending dry_run: exclude SKUs already pushed since their dry_run row.
+    # Matches the filter on /candidates page so the numbers stay consistent.
+    pending_dry_run = 0
+    if latest_run_id:
+        pending_row = _query(
+            """SELECT COUNT(*) c FROM order_system.offer_price_change_log log
+                WHERE log.run_id=%s AND log.status='dry_run'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM order_system.offer_price_change_log later
+                       WHERE later.shop_sku = log.shop_sku
+                         AND later.store_key = 'macy_kuyotq'
+                         AND later.triggered_at > log.triggered_at
+                         AND later.status IN ('success','pending_verify')
+                  )""",
+            (latest_run_id,),
+        )
+        pending_dry_run = int(pending_row[0]["c"]) if pending_row else 0
 
     blk = _query(
         """SELECT COUNT(*) c
@@ -120,7 +138,9 @@ def _summary_counts() -> Dict[str, int]:
         "latest_run_at": latest_run.get("run_at"),
         "latest_skipped": status_map.get("skipped", 0),
         "latest_alert": status_map.get("alert", 0),
-        "latest_dry_run": status_map.get("dry_run", 0),
+        "latest_dry_run_raw": status_map.get("dry_run", 0),
+        "latest_dry_run": pending_dry_run,                # filtered = matches /candidates page
+        "pushed_since_run": status_map.get("dry_run", 0) - pending_dry_run,
         "blacklist_count": blacklist_n,
         "success_today": success_today_n,
     }

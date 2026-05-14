@@ -35,7 +35,12 @@
             <div class="card-body">
                 <div class="text-muted small">待改价 <span class="badge bg-danger">利润 &lt; 5%</span></div>
                 <div class="display-5 fw-bold text-danger">{{ summary.latest_dry_run }}</div>
-                <small><a href="{{ url_for('repricing.candidates_page') }}">查看明细 →</a></small>
+                <small>
+                    <a href="{{ url_for('repricing.candidates_page') }}">查看明细 →</a>
+                    {% if summary.pushed_since_run > 0 %}
+                    <br><span class="text-muted">原 {{ summary.latest_dry_run_raw }}，已推过 {{ summary.pushed_since_run }}</span>
+                    {% endif %}
+                </small>
             </div>
         </div>
     </div>
