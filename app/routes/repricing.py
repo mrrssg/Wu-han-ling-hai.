@@ -107,7 +107,7 @@ def _summary_counts() -> Dict[str, int]:
                        WHERE later.shop_sku = log.shop_sku
                          AND later.store_key = 'macy_kuyotq'
                          AND later.triggered_at > log.triggered_at
-                         AND later.status IN ('success','pending_verify')
+                         AND later.status = 'success'
                   )""",
             (latest_run_id,),
         )
@@ -125,7 +125,7 @@ def _summary_counts() -> Dict[str, int]:
         """SELECT COUNT(*) c
              FROM order_system.offer_price_change_log
             WHERE store_key=%s
-              AND status IN ('success','pending_verify')
+              AND status = 'success'
               AND DATE(triggered_at)=CURDATE()""",
         (STORE_KEY,),
     )
@@ -146,13 +146,13 @@ def _summary_counts() -> Dict[str, int]:
     }
 
 
-CANDIDATE_HIDE_AFTER_PUSH_STATUSES = ("success", "pending_verify")
+CANDIDATE_HIDE_AFTER_PUSH_STATUSES = ("success",)
 
 
 def _top_candidates(limit: int = 10) -> List[Dict]:
     """SKUs flagged dry_run in the latest monitor run, MINUS any that have
-    since been pushed (status success / pending_verify after the dry_run
-    decision). Sorted by margin_before asc.
+    since been pushed (status=success after the dry_run decision).
+    Sorted by margin_before asc.
     """
     latest = _query(
         """SELECT run_id FROM order_system.offer_price_change_log
@@ -174,7 +174,7 @@ def _top_candidates(limit: int = 10) -> List[Dict]:
                    WHERE later.shop_sku = log.shop_sku
                      AND later.store_key = 'macy_kuyotq'
                      AND later.triggered_at > log.triggered_at
-                     AND later.status IN ('success','pending_verify')
+                     AND later.status = 'success'
               )
             ORDER BY log.profit_margin_before ASC
             LIMIT %s""",
@@ -200,7 +200,7 @@ def _all_candidates() -> List[Dict]:
                    WHERE later.shop_sku = log.shop_sku
                      AND later.store_key = 'macy_kuyotq'
                      AND later.triggered_at > log.triggered_at
-                     AND later.status IN ('success','pending_verify')
+                     AND later.status = 'success'
               )
             ORDER BY log.profit_margin_before ASC""",
         (latest_run_id,),
@@ -239,7 +239,7 @@ def _alert_breakdown_latest_run() -> List[Dict]:
 
 
 def _recent_changes(limit: int = 30) -> List[Dict]:
-    """Most recent rows with mirakl_called=1 (actually pushed) or pending_verify."""
+    """Most recent rows that actually hit Mirakl (mirakl_called=1)."""
     return _query(
         """SELECT id, run_id, run_type, shop_sku, warehouse_sku, status,
                   old_origin_price, new_origin_price, old_cost, new_cost,
@@ -248,7 +248,7 @@ def _recent_changes(limit: int = 30) -> List[Dict]:
                   verify_result
              FROM order_system.offer_price_change_log
             WHERE store_key=%s
-              AND (mirakl_called=1 OR status IN ('success','pending_verify','verification_failed'))
+              AND mirakl_called=1
             ORDER BY triggered_at DESC
             LIMIT %s""",
         (STORE_KEY, limit),

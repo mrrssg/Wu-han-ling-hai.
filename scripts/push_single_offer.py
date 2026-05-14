@@ -239,7 +239,7 @@ def push_one(store_key: str, shop_sku: str, confirm_live: bool) -> dict:
     run_id = f"single-{shop_sku}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     http_status = resp.get("http_status")
     success = http_status in (200, 201) and not resp.get("error")
-    status_str = "pending_verify" if success else "failed"
+    status_str = "success" if success else "failed"
 
     _log(store_key, run_id, "manual_single", ctx, {
         "supplier": supplier,
@@ -367,15 +367,16 @@ def main() -> int:
         except Exception as exc:
             result = {"success": False, "error": str(exc)}
 
-        # Post-verify only if push succeeded and user asked for it
+        # Optional post-verify: re-call OF21 after N seconds to sanity-check
+        # that Mirakl applied the new price. Status is already 'success' regardless;
+        # this just attaches verify info to the result.
         if (
             args.confirm_live
             and args.post_verify_seconds > 0
             and result.get("success")
-            and result.get("status") == "pending_verify"
+            and result.get("status") == "success"
         ):
             try:
-                # Need the offer_id for OF22
                 offers = fetch_active_offers(args.store)
                 ctx = next((o for o in offers if o.shop_sku == args.shop_sku), None)
                 if ctx and ctx.raw_json:
@@ -387,7 +388,7 @@ def main() -> int:
                         )
                         result["post_verify"] = verify
 
-                        # If matched, flip log status to success and clear pending_verify
+                        # Annotate the log row with the verify result for the audit trail
                         if verify.get("matched"):
                             conn = DBManager.get_connection()
                             try:

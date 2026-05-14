@@ -16,7 +16,7 @@ For every active offer:
     8. Compute target origin_price via the standard Feishu formula.
     9. Call OF24 (dry_run by default; production wiring lives in the cron).
    10. On 200/201: update offerprice_listing.origin_price + last_cost_snapshot,
-       reset failure_count. Status = pending_verify.
+       reset failure_count. Status = success.
        On non-2xx: increment failure_count; >= 3 -> blacklist.
    12. Every decision (including SKIPPED ones) gets a row in
        offer_price_change_log so the audit trail is comprehensive.
@@ -747,15 +747,15 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             summary["mirakl_failed"] += 1
             continue
 
-        # success - update DB (pending_verify until tomorrow's sync confirms)
+        # OF24 HTTP 2xx = success (no separate verify step - the next-day OF52
+        # cron pulling new origin_price is the existing sanity check).
         _update_origin_price(ctx.shop_sku, target_origin, target_discount, new_cost)
         _reset_failure(ctx.shop_sku)
         _log(store_key, run_id, "auto_monitor", ctx, {
             **common_log,
-            "status": "pending_verify",
+            "status": "success",
             "decision_reason": (
-                f"margin {margin:.4%} < {PROFIT_THRESHOLD:.0%}; pushed OF24, "
-                "awaiting next-day verify"
+                f"margin {margin:.4%} < {PROFIT_THRESHOLD:.0%}; pushed OF24 HTTP 2xx"
             ),
             "new_origin_price": target_origin,
             "new_discount_price": target_discount,

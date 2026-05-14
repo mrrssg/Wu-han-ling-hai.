@@ -12,7 +12,7 @@
 
 <div class="mb-3">
     <div class="btn-group" role="group">
-        {% for s in ['all','success','pending_verify','verification_failed','dry_run','failed','alert','skipped','blacklisted'] %}
+        {% for s in ['all','success','dry_run','failed','alert','skipped','blacklisted'] %}
         <a href="{{ url_for('repricing.changes_page', status=s) }}"
            class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-outline-primary{% endif %}">
            {{ s }}
