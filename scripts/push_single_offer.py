@@ -125,6 +125,53 @@ def build_of24_payload_from_of22(of22: dict, new_price: float) -> dict:
 build_of24_payload_from_full_offer = build_of24_payload_from_of22
 
 
+def build_of24_payload_with_discount(of22: dict, new_origin: float,
+                                     new_discount: float) -> dict:
+    """OF24 update payload that pushes BOTH the origin price and the
+    discounted price in one go.
+
+    For stores with push_discount=True (Lowes-Autool): repricing must move
+    the 活动前原价 (`price`) and the 折扣后价格 (`discount`) together. The
+    discount window (start/end dates) is reused verbatim from the live offer
+    per the user's rule "日期沿用现有的".
+
+    OF24's `discount` schema differs from OF21/OF22's: it wants
+    {start_date, end_date, ranges:[{quantity_threshold, price}]} - NOT the
+    OF21-shaped {discount_price, origin_price, ranges, ...}. So we cannot copy
+    it verbatim; we rebuild it.
+
+    If the live offer has no discount at all, there is nothing to reshape and
+    nothing to reuse dates from - we fall back to an origin-price-only payload
+    (build_of24_payload_from_of22 already stripped the empty discount).
+    """
+    payload = build_of24_payload_from_of22(of22, new_origin)
+
+    existing = of22.get("discount") or {}
+    existing_ranges = existing.get("ranges") or []
+    has_discount = bool(existing_ranges) or existing.get("discount_price") is not None
+    if not has_discount:
+        return payload
+
+    new_d = round(float(new_discount), 2)
+    # Mirror the live range structure (quantity thresholds) but swap in the
+    # new discounted price. A single threshold-1 range == a flat discount.
+    if existing_ranges:
+        ranges = [
+            {"quantity_threshold": r.get("quantity_threshold", 1), "price": new_d}
+            for r in existing_ranges
+        ]
+    else:
+        ranges = [{"quantity_threshold": 1, "price": new_d}]
+
+    discount = {"ranges": ranges}
+    if existing.get("start_date"):
+        discount["start_date"] = existing["start_date"]
+    if existing.get("end_date"):
+        discount["end_date"] = existing["end_date"]
+    payload["discount"] = discount
+    return payload
+
+
 # =============================================================================
 # Single SKU pipeline
 # =============================================================================

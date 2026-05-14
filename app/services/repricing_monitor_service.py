@@ -266,6 +266,7 @@ def _log(store_key: str, run_id: str, run_type: str, ctx: OfferContext,
         "mirakl_http_status": decision.get("mirakl_http_status"),
         "mirakl_response_body": decision.get("mirakl_response_body"),
         "mirakl_payload_hash": decision.get("mirakl_payload_hash"),
+        "mirakl_request_payload": decision.get("mirakl_request_payload"),
 
         "ip_used": decision.get("ip_used"),
         "api_call_seq": decision.get("api_call_seq"),
@@ -472,7 +473,22 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     from app.services.repricing_stores import get_store, is_supported
     if not is_supported(store_key):
         return {"success": False, "msg": f"store not supported: {store_key}"}
-    formula_variant = get_store(store_key)["formula_variant"]
+    scfg = get_store(store_key)
+    formula_variant = scfg["formula_variant"]
+
+    # The monitor's lightweight build_of24_payload only knows how to set
+    # `price`. For push_discount stores (Lowes) a live push must ALSO move the
+    # discounted price - sending a price-only payload would reset the offer's
+    # discount. Refuse --live for those stores; the web dashboard's
+    # OF21 + build_of24_payload_with_discount path is the supported route.
+    if not dry_run and scfg.get("push_discount"):
+        return {
+            "success": False,
+            "store_key": store_key,
+            "msg": (f"--live not supported for push_discount store {store_key}; "
+                    f"push from the /repricing/ web dashboard instead"),
+            "aborted": True,
+        }
 
     started = datetime.now()
     run_id = f"mon-{store_key}-{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"

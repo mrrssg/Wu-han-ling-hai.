@@ -7,13 +7,19 @@ one-place change.
 
 mode:
   - 'non_dropship' : Mirakl marketplace where `price` IS the customer-facing
-                     price (Macy-kuyotq). OF52 export carries the customer
-                     price at prices[0].origin_price; OF24/Excel write the
-                     single `price` field.
-  - 'dropship'     : Mirakl Dropship marketplace where `price` is the
-                     wholesale cost and the customer-facing price lives in
-                     retail_prices / the `retail-price` Excel column
-                     (Lowes-Autool). We only ever touch the retail side.
+                     price. OF52 export carries the customer price at
+                     prices[0].origin_price. Both current stores (Macy-kuyotq
+                     and Lowes-Autool) are non_dropship - verified via OF21:
+                     `retail_prices` is null, pricing lives in prices/
+                     all_prices/discount. ('dropship' is kept as a possible
+                     future value but no store uses it today.)
+
+push_discount:    whether a repricing push writes BOTH the origin price and
+                  the discounted price (+ reuses the existing discount
+                  start/end dates).
+                    - False (Macy)  : push the single `price` (活动前原价).
+                    - True  (Lowes) : push `price` (活动前原价) AND `discount`
+                      (折扣后价格 via ranges), dates copied from the live offer.
 
 formula_variant:  selects the "公式计算出来的Price" step in repricing_formula
                   ('macy' = (cost*0.92+rc)/0.6444, 'lowes' = (cost+rc)/0.73).
@@ -33,6 +39,7 @@ REPRICING_STORES: Dict[str, Dict] = {
         "platform": "Macy",            # offerprice_listing.platform
         "shop_name": "kuyotq",         # offerprice_listing.shop_name
         "mode": "non_dropship",
+        "push_discount": False,
         "formula_variant": "macy",
         "feishu_app_token": FEISHU_APP_TOKEN,
         "feishu_table_id": "tblfyStm2eu3hp1Q",   # Macy-kuyotq-Mirakl
@@ -43,7 +50,8 @@ REPRICING_STORES: Dict[str, Dict] = {
         "label": "Lowes-Autool",
         "platform": "Lowes",
         "shop_name": "autool",
-        "mode": "dropship",
+        "mode": "non_dropship",
+        "push_discount": True,
         "formula_variant": "lowes",
         "feishu_app_token": FEISHU_APP_TOKEN,
         "feishu_table_id": "tblGp3uvtOe99vjY",   # Lowes-Autool-Mirakl

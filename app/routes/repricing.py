@@ -374,12 +374,15 @@ def push_one(shop_sku):
     Synchronous; blocks for ~67 seconds (OF21 ~2s + OF24 cooldown 65s).
     """
     from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers
-    from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
-    from app.services.repricing_monitor_service import _log, build_of24_payload
+    from scripts.push_single_offer import (  # type: ignore
+        build_of24_payload_from_of22,
+        build_of24_payload_with_discount,
+    )
+    from app.services.repricing_monitor_service import _log
 
     store_key = _current_store()
     scfg = get_store(store_key)
-    mode = scfg["mode"]
+    push_discount = scfg["push_discount"]
     formula_variant = scfg["formula_variant"]
 
     try:
@@ -422,12 +425,14 @@ def push_one(shop_sku):
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
 
-        if mode == "dropship":
-            # Dropship: rebuild from raw_json, change retail side only
-            payload = build_of24_payload(ctx, target, target_discount, mode="dropship")
+        # Both stores are non_dropship: always OF21 full-fetch + rebuild so
+        # every field is preserved (OF24 resets anything not sent).
+        full = get_offer_by_sku(store_key, shop_sku)
+        if push_discount:
+            # Lowes: push 活动前原价 + 折扣后价格 together, reuse discount dates
+            payload = build_of24_payload_with_discount(full, target, target_discount)
         else:
-            # non-Dropship: OF21 full fetch + rebuild, change `price`
-            full = get_offer_by_sku(store_key, shop_sku)
+            # Macy: push the single `price` (活动前原价)
             payload = build_of24_payload_from_of22(full, target)
         resp = update_offers(store_key, [payload], dry_run=False)
 
@@ -439,7 +444,7 @@ def push_one(shop_sku):
             "supplier_price_db": sp,
             "new_cost": round(cost, 4),
             "new_origin_price": target,
-            "new_discount_price": round(target * df, 2),
+            "new_discount_price": target_discount,
             "discount_factor": df, "commission_rate": cr,
             "return_shipping_base": rb,
             "return_shipping_extra": bd.return_shipping_extra,
@@ -453,6 +458,7 @@ def push_one(shop_sku):
             "mirakl_import_id": resp.get("import_id"),
             "mirakl_http_status": resp.get("http_status"),
             "mirakl_response_body": resp.get("response_body"),
+            "mirakl_request_payload": json.dumps(payload, ensure_ascii=False),
             "ip_used": resp.get("ip_used"),
             "status": "success" if ok else "failed",
             "decision_reason": "manual web push (OF24 HTTP 2xx = success; next-day OF52 cron will catch the rare async-import failure)",
@@ -617,12 +623,15 @@ def push_batch():
     call itself: if Mirakl rejects the batch we mark everyone failed.
     """
     from app.services.mirakl_offer_api_service import get_offer_by_sku, update_offers, OF24_DEFAULT_BATCH_SIZE
-    from scripts.push_single_offer import build_of24_payload_from_of22  # type: ignore
-    from app.services.repricing_monitor_service import _log, build_of24_payload
+    from scripts.push_single_offer import (  # type: ignore
+        build_of24_payload_from_of22,
+        build_of24_payload_with_discount,
+    )
+    from app.services.repricing_monitor_service import _log
 
     store_key = _current_store()
     scfg = get_store(store_key)
-    mode = scfg["mode"]
+    push_discount = scfg["push_discount"]
     formula_variant = scfg["formula_variant"]
 
     payload = request.get_json(silent=True) or {}
@@ -702,24 +711,24 @@ def push_batch():
             "df": df, "cr": cr, "rb": rb,
         }
 
-    # Build OF24 payloads.
-    #  - dropship: rebuild from raw_json, change the retail side only.
-    #  - non_dropship: OF21 full-fetch + rebuild, change `price`.
+    # Build OF24 payloads. Both stores are non_dropship: OF21 full-fetch +
+    # rebuild so every field is preserved (OF24 resets anything not sent).
+    # push_discount stores (Lowes) also move the 折扣后价格; price-only stores
+    # (Macy) move just `price`.
     of21_failures = []
     for sku, info in list(targets_by_sku.items()):
-        if mode == "dropship":
-            info["payload"] = build_of24_payload(
-                info["ctx"], info["target"], info["target_discount"],
-                mode="dropship",
+        try:
+            full = get_offer_by_sku(store_key, sku)
+        except Exception as exc:
+            of21_failures.append((sku, str(exc)))
+            del targets_by_sku[sku]
+            continue
+        info["full"] = full
+        if push_discount:
+            info["payload"] = build_of24_payload_with_discount(
+                full, info["target"], info["target_discount"],
             )
         else:
-            try:
-                full = get_offer_by_sku(store_key, sku)
-            except Exception as exc:
-                of21_failures.append((sku, str(exc)))
-                del targets_by_sku[sku]
-                continue
-            info["full"] = full
             info["payload"] = build_of24_payload_from_of22(full, info["target"])
         payloads.append(info["payload"])
 
@@ -746,7 +755,7 @@ def push_batch():
             "supplier_price_db": info["sp"],
             "new_cost": round(info["cost"], 4),
             "new_origin_price": info["target"],
-            "new_discount_price": round(info["target"] * info["df"], 2),
+            "new_discount_price": info["target_discount"],
             "discount_factor": info["df"], "commission_rate": info["cr"],
             "return_shipping_base": info["rb"],
             "return_shipping_extra": info["bd"].return_shipping_extra,
@@ -760,6 +769,7 @@ def push_batch():
             "mirakl_import_id": import_id,
             "mirakl_http_status": http_status,
             "mirakl_response_body": resp.get("response_body"),
+            "mirakl_request_payload": json.dumps(info["payload"], ensure_ascii=False),
             "ip_used": resp.get("ip_used"),
             "status": "success" if ok else "failed",
             "decision_reason": f"batch_push run_id={run_id} (OF24 HTTP 2xx = success)",
