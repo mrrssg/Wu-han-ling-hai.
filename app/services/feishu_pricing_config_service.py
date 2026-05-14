@@ -20,7 +20,7 @@ This module does NOT call any Mirakl API. It only talks to Feishu + autoweb DB.
 import os
 import time
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 from flask import current_app
