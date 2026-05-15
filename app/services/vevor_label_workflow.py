@@ -203,6 +203,40 @@ def enrich_orders(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # already-purchased labels from our DB
     existing_map = get_existing_records([o.get("TxnId") for o in orders if o.get("TxnId")])
 
+    # Self-healing sync: if a txn appears in TP's unshipped list while we have
+    # status='success' locally, the label was cancelled in the TP UI (or the
+    # purchase was rolled back). Reconcile by marking those rows cancelled so
+    # the index page no longer claims they're shipped.
+    stale_success = [
+        txn for txn, rec in existing_map.items()
+        if rec and rec.get("status") == "success"
+    ]
+    if stale_success:
+        log.info("Auto-sync: %d local-success txn(s) reappeared in TP unshipped list, "
+                 "marking cancelled: %s", len(stale_success), stale_success)
+        placeholders = ",".join(["%s"] * len(stale_success))
+        try:
+            conn = DBManager.get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE hd_label_records "
+                        f"   SET status='cancelled', cancelled_at=NOW(), "
+                        f"       cancel_reason=CONCAT(COALESCE(cancel_reason,''), "
+                        f"           ' [auto-synced: reappeared in TP unshipped list]') "
+                        f" WHERE status='success' AND txn_id IN ({placeholders})",
+                        tuple(stale_success),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+            # Reflect the change in the in-memory map so the UI doesn't show "已发"
+            for txn in stale_success:
+                if existing_map.get(txn):
+                    existing_map[txn]["status"] = "cancelled"
+        except Exception as e:
+            log.warning("Auto-sync UPDATE failed: %s", e)
+
     rows: List[Dict[str, Any]] = []
     for o in orders:
         txn = o.get("TxnId") or ""
