@@ -59,7 +59,8 @@ FIXED_FIELDS = {
     "AG": "wuhanlinghai@163.com",  # 用户邮箱
 }
 
-BATCH_LIMIT = 50  # frontend hard limit; Teapplix has no documented bulk endpoint
+BATCH_LIMIT = 20  # per-request hard limit; frontend chunks larger selections
+                  # into multiple sequential POSTs to dodge nginx 60s timeout
 
 
 # -- DB helpers ---------------------------------------------------------------
@@ -399,39 +400,6 @@ def build_excel_tsv(enriched: Dict[str, Any],
 
 # -- Persist + write back -----------------------------------------------------
 
-def _write_back_order_tracking(txn_id: str, tracking: str) -> None:
-    """Best-effort: stamp Tracking + Status='SHIPPED' on the matching order
-    record. We try each known order table since AutoWeb has tables for
-    macy/bestbuy/walmart/lowes but no dedicated HD table; on Teapplix the
-    txn_id has its own prefix scheme. If no row matches in any table we
-    just log and move on - the source-of-truth is hd_label_records itself."""
-    candidates = ["macyorder", "bestbuyorder", "walmartorder", "lowesorder"]
-    conn = DBManager.get_connection()
-    try:
-        updated_any = False
-        with conn.cursor() as cur:
-            for tbl in candidates:
-                try:
-                    cur.execute(
-                        f"UPDATE {tbl} SET Tracking=%s, Status='SHIPPED' "
-                        f"WHERE Order_ID=%s AND (Tracking IS NULL OR Tracking='')",
-                        (tracking, txn_id),
-                    )
-                    if cur.rowcount:
-                        updated_any = True
-                        log.info("Tracking written to %s for %s", tbl, txn_id)
-                        break
-                except Exception as e:
-                    log.debug("update %s skipped: %s", tbl, e)
-        conn.commit()
-        if not updated_any:
-            log.info("No order-table row matched txn %s (HD orders may not be mirrored)", txn_id)
-    except Exception:
-        conn.rollback()
-    finally:
-        conn.close()
-
-
 def _save_record(rec: Dict[str, Any]) -> None:
     """Upsert into hd_label_records by txn_id PK."""
     sql = """
@@ -484,7 +452,13 @@ def purchase_one(txn_id: str) -> Dict[str, Any]:
     persist + write back. Returns a JSON-serialisable result dict for the UI.
 
     Idempotent on hd_label_records — if there's already a success record we
-    refuse to re-purchase (avoids double-charging postage)."""
+    refuse to re-purchase (avoids double-charging postage). We also refuse to
+    re-purchase after a cancellation: the cancel audit trail
+    (cancelled_at / cancel_reason) would be silently overwritten by the
+    INSERT...ON DUPLICATE KEY UPDATE in _save_record. Operators who genuinely
+    need to re-ship a previously cancelled txn must manually clear the row
+    (UPDATE hd_label_records SET status='deleted' WHERE txn_id=...) — this is
+    rare and deliberate, not a one-click action."""
     existing = get_existing_record(txn_id)
     if existing and existing.get("status") == "success":
         return {
@@ -492,6 +466,15 @@ def purchase_one(txn_id: str) -> Dict[str, Any]:
             "tracking_number": existing.get("tracking_number"),
             "label_url": existing.get("label_url"),
             "excel_row_tsv": existing.get("excel_row_tsv"),
+        }
+    if existing and existing.get("status") == "cancelled":
+        cancelled_at = existing.get("cancelled_at")
+        cancelled_at_str = cancelled_at.isoformat() if hasattr(cancelled_at, "isoformat") \
+                           else (str(cancelled_at) if cancelled_at else None)
+        return {
+            "ok": False, "txn_id": txn_id, "reason": "previously_cancelled",
+            "cancelled_at": cancelled_at_str,
+            "cancel_reason": existing.get("cancel_reason"),
         }
 
     order = tp.get_order(txn_id)
@@ -557,8 +540,11 @@ def purchase_one(txn_id: str) -> Dict[str, Any]:
             "excel_row_tsv": tsv,
         }
         _save_record(record)
-        if tracking:
-            _write_back_order_tracking(txn_id, tracking)
+        # NOTE: HD orders don't live in any AutoWeb order table (macy/bestbuy/
+        # walmart/lowes are the only ones; HD orders come from Teapplix's own
+        # commercehub sync). Tracking is therefore only stored in
+        # hd_label_records.tracking_number — the previous attempt to write it
+        # back to those 4 tables was a no-op and has been removed.
         return {
             "ok": True, "txn_id": txn_id,
             "tracking_number": tracking, "label_url": label_url,

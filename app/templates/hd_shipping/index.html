@@ -379,6 +379,7 @@ function renderSuccess(r) {
 function renderFailure(txn, r) {
   const reasonMap = {
     already_shipped: '该订单已经出过单',
+    previously_cancelled: '该订单的面单曾被取消，需先在数据库清理记录才能重出',
     order_not_found: 'Teapplix 找不到此订单',
     not_vevor: '非 Vevor 货（mapping_table → newestdropship_vevor 未命中）',
     missing_dims: '飞书未配重量/尺寸',
@@ -387,6 +388,8 @@ function renderFailure(txn, r) {
     exception: '内部异常',
     cancel_failed: 'Teapplix 取消失败',
     no_active_label: '没有可取消的成功面单',
+    batch_failed: '本批整体失败',
+    network_error: '网络/HTTP 错误',
   };
   const reasonText = reasonMap[r.reason] || (r.reason || '未知原因');
   let detail = '';
@@ -470,26 +473,100 @@ document.querySelectorAll('.btn-view').forEach(btn => {
 });
 
 // =================== batch ===================
+//
+// Why chunked: a single PurchaseLabel call to Teapplix takes ~2-3s, and nginx
+// in front of gunicorn has a default 60s read timeout. To send N > 20 labels
+// without risking a 502, we chunk the user's selection into BATCH_LIMIT-size
+// sub-requests, each POSTed sequentially, with a live progress bar.
 btnBatch.addEventListener('click', async () => {
   const txns = [...document.querySelectorAll('.row-check')]
     .filter(c => c.checked && c.closest('tr').style.display !== 'none')
     .map(c => c.value);
   if (!txns.length) return;
-  if (txns.length > BATCH_LIMIT) {
-    alert(`一次最多 ${BATCH_LIMIT} 单，当前选了 ${txns.length}`);
-    return;
+
+  const chunks = [];
+  for (let i = 0; i < txns.length; i += BATCH_LIMIT) {
+    chunks.push(txns.slice(i, i + BATCH_LIMIT));
   }
-  if (!confirm(`将批量为 ${txns.length} 笔订单出 UPS 面单，确认?`)) return;
+  const msg = chunks.length > 1
+    ? `将分 ${chunks.length} 批共 ${txns.length} 单出 UPS 面单 (每批最多 ${BATCH_LIMIT}), 确认?`
+    : `将为 ${txns.length} 单出 UPS 面单, 确认?`;
+  if (!confirm(msg)) return;
 
   btnBatch.disabled = true;
   btnBatch.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 处理中…';
 
-  const {body} = await postJSON('/hd-shipping/labels/batch', {txn_ids: txns});
-  showBatchResult(body);
+  // Open the result modal up front with a progress bar so the user can watch.
+  const modalEl = document.getElementById('batch-modal');
+  const modal = new bootstrap.Modal(modalEl);
+  document.getElementById('batch-body').innerHTML = renderBatchProgress(0, txns.length, 0, 0);
+  modal.show();
+
+  const aggregated = {
+    total: 0, success_count: 0, fail_count: 0,
+    results: [], combined_excel_tsv: '',
+  };
+
+  for (let b = 0; b < chunks.length; b++) {
+    const chunk = chunks[b];
+    try {
+      const {body} = await postJSON('/hd-shipping/labels/batch', {txn_ids: chunk});
+      if (!body || body.ok === false) {
+        // server-level failure for this whole chunk (rare); mark each as failed
+        for (const txn of chunk) {
+          aggregated.results.push({ok: false, txn_id: txn, reason: 'batch_failed',
+                                    error_msg: (body && body.error) || 'unknown'});
+        }
+        aggregated.fail_count += chunk.length;
+      } else {
+        aggregated.success_count += body.success_count || 0;
+        aggregated.fail_count += body.fail_count || 0;
+        aggregated.results.push(...(body.results || []));
+        if (body.combined_excel_tsv) {
+          aggregated.combined_excel_tsv = aggregated.combined_excel_tsv
+            ? aggregated.combined_excel_tsv + '\n' + body.combined_excel_tsv
+            : body.combined_excel_tsv;
+        }
+      }
+    } catch (e) {
+      for (const txn of chunk) {
+        aggregated.results.push({ok: false, txn_id: txn, reason: 'network_error',
+                                  error_msg: String(e)});
+      }
+      aggregated.fail_count += chunk.length;
+    }
+    aggregated.total = aggregated.results.length;
+    document.getElementById('batch-body').innerHTML = renderBatchProgress(
+      aggregated.total, txns.length, aggregated.success_count, aggregated.fail_count,
+      b + 1, chunks.length
+    );
+  }
+
+  // Done — render the full results table (replaces the progress UI).
+  showBatchResult(aggregated);
 
   btnBatch.disabled = false;
   btnBatch.innerHTML = '<i class="bi bi-printer"></i> 批量出面单';
 });
+
+function renderBatchProgress(done, total, ok, fail, batchIdx, batchCount) {
+  const pct = total ? Math.floor((done / total) * 100) : 0;
+  const batchInfo = batchIdx && batchCount
+    ? `第 ${batchIdx}/${batchCount} 批已完成 · `
+    : '正在准备…';
+  return `
+    <div class="mb-2"><strong>${batchInfo}</strong> ${done}/${total} 单已处理</div>
+    <div class="progress mb-3" style="height: 22px">
+      <div class="progress-bar progress-bar-striped progress-bar-animated"
+           role="progressbar" style="width: ${pct}%">${pct}%</div>
+    </div>
+    <div class="d-flex gap-3">
+      <span class="badge bg-success">✓ 成功 ${ok}</span>
+      <span class="badge bg-danger">✗ 失败 ${fail}</span>
+      <span class="text-muted small">每批最多 ${BATCH_LIMIT} 单, 每单约 2-3s</span>
+    </div>
+  `;
+}
 
 function showBatchResult(body) {
   const modal = new bootstrap.Modal(document.getElementById('batch-modal'));
