@@ -2,10 +2,20 @@
 {% block title %}HD Vevor 发货 - 历史{% endblock %}
 
 {% block content %}
+<style>
+  .col-mono { font-family: monospace; font-size: 12px; }
+  .tsv-cell { font-family: monospace; font-size: 11px; max-width: 380px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+              background: #f8f9fa; padding: 4px 6px; border-radius: 3px; }
+  .tsv-modal-content { font-family: monospace; font-size: 12px; white-space: pre;
+                       background: #f5f5f5; padding: 8px; border-radius: 4px;
+                       max-height: 200px; overflow: auto; }
+</style>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h3 class="mb-0"><i class="bi bi-clock-history"></i> 出单历史</h3>
-    <small class="text-muted">最近 500 条 hd_label_records</small>
+    <small class="text-muted">最近 500 条 hd_label_records · 35 列 TSV 可一键复制粘贴 Vevor信息.xlsx</small>
   </div>
   <div>
     <a href="{{ url_for('hd_shipping.index') }}" class="btn btn-sm btn-outline-primary">
@@ -15,49 +25,90 @@
 </div>
 
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle">
+  <table class="table table-sm table-hover align-middle" id="history-table">
     <thead class="table-light">
       <tr>
         <th>时间</th>
         <th>TxnId</th>
-        <th>店铺</th>
-        <th>Shop SKU</th>
-        <th>仓库</th>
+        <th>店铺/仓库</th>
+        <th>SKU</th>
         <th>追踪号</th>
         <th>面单</th>
         <th>邮资</th>
         <th>状态</th>
-        <th>取消时间</th>
-        <th>错误</th>
+        <th>35 列 (Excel)</th>
+        <th>操作</th>
       </tr>
     </thead>
     <tbody>
     {% for r in rows %}
-      <tr>
-        <td><small>{{ r.created_at }}</small></td>
-        <td style="font-family:monospace; font-size:12px">{{ r.txn_id }}</td>
-        <td><span class="badge bg-secondary">{{ r.store_key }}</span></td>
-        <td style="font-family:monospace; font-size:12px">
-          {{ r.shop_sku }}<br>
-          <small class="text-muted">{{ r.warehouse_sku }}</small>
+      <tr data-txn="{{ r.txn_id }}">
+        <td><small>{{ r.created_at.strftime('%m-%d %H:%M') if r.created_at else '' }}</small></td>
+        <td class="col-mono">{{ r.txn_id }}</td>
+        <td>
+          <span class="badge bg-secondary">{{ r.store_key or '-' }}</span>
+          {% if r.profile_id %}
+            <span class="badge bg-primary">P{{ r.profile_id }}</span>
+          {% endif %}
+          {% if r.warehouse_id %}
+            <small class="text-muted">({{ r.warehouse_id }})</small>
+          {% endif %}
+        </td>
+        <td class="col-mono">
+          {{ r.shop_sku or '—' }}<br>
+          <small class="text-muted">{{ r.warehouse_sku or '' }}</small>
         </td>
         <td>
-          {% if r.profile_id %}<span class="badge bg-primary">P{{ r.profile_id }}</span>{% endif %}
-          {% if r.warehouse_id %}<small class="text-muted">({{ r.warehouse_id }})</small>{% endif %}
+          {% if r.tracking_number %}
+            <span class="col-mono">{{ r.tracking_number }}</span>
+            <button class="btn btn-sm btn-outline-primary btn-copy py-0 px-1"
+                    data-text="{{ r.tracking_number }}" title="复制追踪号">
+              <i class="bi bi-clipboard"></i>
+            </button>
+          {% else %}—{% endif %}
         </td>
-        <td style="font-family:monospace; font-size:12px">{{ r.tracking_number or '—' }}</td>
         <td>
-          {% if r.label_url %}<a href="{{ r.label_url }}" target="_blank">PDF</a>{% else %}—{% endif %}
+          {% if r.label_url %}
+            <a href="{{ url_for('hd_shipping.download_pdf', txn_id=r.txn_id) }}"
+               target="_blank" class="btn btn-sm btn-outline-info py-0 px-2">
+              <i class="bi bi-file-earmark-pdf"></i> PDF
+            </a>
+          {% else %}—{% endif %}
         </td>
-        <td>{% if r.postage %}${{ '%.2f'|format(r.postage) }}{% endif %}</td>
+        <td>
+          {% if r.postage %}${{ '%.2f'|format(r.postage) }}{% else %}—{% endif %}
+        </td>
         <td>
           {% if r.status == 'success' %}<span class="badge bg-success">成功</span>
-          {% elif r.status == 'cancelled' %}<span class="badge bg-warning text-dark">已取消</span>
-          {% elif r.status == 'failed' %}<span class="badge bg-danger">失败</span>
+          {% elif r.status == 'cancelled' %}
+            <span class="badge bg-warning text-dark">已取消</span>
+            {% if r.cancelled_at %}<br><small>{{ r.cancelled_at.strftime('%m-%d %H:%M') }}</small>{% endif %}
+          {% elif r.status == 'failed' %}
+            <span class="badge bg-danger">失败</span>
+            {% if r.error_msg %}<br><small class="text-danger">{{ r.error_msg|truncate(60) }}</small>{% endif %}
           {% else %}<span class="badge bg-light text-dark">{{ r.status }}</span>{% endif %}
         </td>
-        <td><small>{{ r.cancelled_at or '' }}</small></td>
-        <td><small class="text-danger">{{ r.error_msg or '' }}</small></td>
+        <td>
+          {% if r.excel_row_tsv %}
+            <div class="tsv-cell" title="点[复制]按钮拷整行">{{ r.excel_row_tsv }}</div>
+            <button class="btn btn-sm btn-primary btn-copy mt-1 py-0 px-2"
+                    data-text="{{ r.excel_row_tsv }}">
+              <i class="bi bi-clipboard"></i> 复制 35 列
+            </button>
+            <button class="btn btn-sm btn-outline-secondary btn-preview mt-1 py-0 px-2"
+                    data-tsv="{{ r.excel_row_tsv }}" data-txn="{{ r.txn_id }}">
+              <i class="bi bi-eye"></i> 预览
+            </button>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if r.status == 'success' %}
+            <button class="btn btn-sm btn-outline-danger btn-cancel py-0 px-2"
+                    data-txn="{{ r.txn_id }}">
+              <i class="bi bi-x-circle"></i> 取消
+            </button>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
@@ -67,4 +118,121 @@
 {% if not rows %}
   <div class="alert alert-info">尚无出单记录</div>
 {% endif %}
+
+<!-- ===== Preview modal (show full 35-col TSV split into table) ===== -->
+<div class="modal fade" id="preview-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">完整 35 列预览 - <span id="preview-txn"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="tsv-modal-content mb-3" id="preview-raw"></div>
+        <h6>按列展开 (粘贴到 Excel 时 35 列会自动拆开)</h6>
+        <table class="table table-sm table-bordered">
+          <thead class="table-light"><tr><th style="width:60px">列</th><th>标题</th><th>值</th></tr></thead>
+          <tbody id="preview-rows"></tbody>
+        </table>
+        <button class="btn btn-primary btn-copy" id="preview-copy-btn" data-text="">
+          <i class="bi bi-clipboard"></i> 复制整行 (35 列 tab 分隔)
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COL_LABELS = [
+  ["A","第三方订单号"], ["B","订单号"], ["C","订单金额"], ["D","站点"],
+  ["E","币种"], ["F","促销码"], ["G","支付方式"], ["H","生单时间"],
+  ["I","商品数量"], ["J","商品单价"], ["K","SKU"], ["L","商品价格税"],
+  ["M","税种"], ["N","税率%"], ["O","折扣税金额"], ["P","折扣金额"],
+  ["Q","运费"], ["R","订单发货仓ID"], ["S","仓配物流渠道ID"],
+  ["T","提货面单"], ["U","订单物流运单号"], ["V","收货人姓"],
+  ["W","收货邮箱"], ["X","国家"], ["Y","国家简码"], ["Z","收货人名"],
+  ["AA","详细地址1"], ["AB","详细地址2"], ["AC","城市"], ["AD","州省"],
+  ["AE","邮编"], ["AF","联系电话"], ["AG","用户邮箱"],
+  ["AH","折扣率"], ["AI","商品折扣含税单价"],
+];
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const original = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-check2"></i> 已复制';
+      btn.classList.add('btn-success');
+      setTimeout(() => { btn.innerHTML = original; btn.classList.remove('btn-success'); }, 1500);
+    }
+  } catch (e) { alert('复制失败：' + e); }
+}
+
+document.querySelectorAll('.btn-copy').forEach(btn => {
+  btn.addEventListener('click', () => copyToClipboard(btn.dataset.text || '', btn));
+});
+
+document.querySelectorAll('.btn-preview').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tsv = btn.dataset.tsv || '';
+    const txn = btn.dataset.txn || '';
+    const cells = tsv.split('\t');
+    document.getElementById('preview-txn').textContent = txn;
+    document.getElementById('preview-raw').textContent = tsv;
+    document.getElementById('preview-copy-btn').dataset.text = tsv;
+    const tbody = document.getElementById('preview-rows');
+    tbody.innerHTML = COL_LABELS.map(([col, label], i) => {
+      const v = cells[i] !== undefined ? cells[i] : '';
+      return `<tr><td><strong>${col}</strong></td><td>${escapeHtml(label)}</td>
+              <td style="font-family:monospace; font-size:12px">${escapeHtml(v) || '<span class="text-muted">(空)</span>'}</td></tr>`;
+    }).join('');
+    new bootstrap.Modal(document.getElementById('preview-modal')).show();
+  });
+});
+
+// rebind copy for preview's button (it's outside the initial loop's elements)
+document.getElementById('preview-copy-btn').addEventListener('click', (e) => {
+  copyToClipboard(e.currentTarget.dataset.text || '', e.currentTarget);
+});
+
+document.querySelectorAll('.btn-cancel').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const txn = btn.dataset.txn;
+    const reason = prompt('取消原因（可留空）：') ?? null;
+    if (reason === null) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    try {
+      const r = await fetch(`/hd-shipping/label/${encodeURIComponent(txn)}/cancel`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason})
+      }).then(r => r.json());
+      if (r.ok) { alert('已取消'); location.reload(); }
+      else {
+        if (confirm(`取消失败：${r.error_msg || r.reason}\n是否强制取消？`)) {
+          const r2 = await fetch(`/hd-shipping/label/${encodeURIComponent(txn)}/cancel`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({reason, force: true})
+          }).then(r => r.json());
+          if (r2.ok) { alert('已强制取消'); location.reload(); }
+          else { alert('强制取消仍失败：' + (r2.error_msg || r2.reason)); }
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> 取消';
+      }
+    } catch (e) {
+      alert('请求失败：' + e);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-x-circle"></i> 取消';
+    }
+  });
+});
+</script>
 {% endblock %}

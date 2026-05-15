@@ -145,6 +145,17 @@ def purchase_label(
     return {"request": payload, **res}
 
 
+def download_label(label_url: str) -> Tuple[int, bytes, str]:
+    """Fetch the PDF (or other format) at a Teapplix LabelData URL with the
+    APIToken header. Returns (status_code, raw_bytes, content_type).
+    The URL points to DownloadLabel/* which is gated by the API token."""
+    if not label_url:
+        return 400, b"missing label_url", "text/plain"
+    headers = {"APIToken": _load_token()}
+    r = requests.get(label_url, headers=headers, timeout=DEFAULT_TIMEOUT, stream=False)
+    return r.status_code, r.content, r.headers.get("Content-Type", "application/pdf")
+
+
 def cancel_label(txn_id: str, force: bool = False) -> Dict[str, Any]:
     """POST /CancelLabel by TxnId. force=True is needed for UPS/FedEx when
     the carrier cancellation errors out."""

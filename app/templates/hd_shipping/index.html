@@ -332,10 +332,15 @@ function renderSuccess(r) {
           <td><code>${escapeHtml(r.tracking_number || '')}</code>
               <button class="btn btn-sm btn-outline-primary btn-copy-text"
                       data-text="${escapeHtml(r.tracking_number || '')}">复制</button></td></tr>
-      <tr><th>面单 URL</th>
-          <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">${escapeHtml(r.label_url || '')}</a>
-              <button class="btn btn-sm btn-outline-primary btn-copy-text"
-                      data-text="${escapeHtml(r.label_url || '')}">复制</button></td></tr>
+      <tr><th>面单 PDF</th>
+          <td>
+            <a href="/hd-shipping/label/${encodeURIComponent(r.txn_id)}/pdf" target="_blank"
+               class="btn btn-sm btn-outline-info">
+              <i class="bi bi-file-earmark-pdf"></i> 打开 PDF
+            </a>
+            <button class="btn btn-sm btn-outline-secondary btn-copy-text"
+                    data-text="${escapeHtml(r.label_url || '')}">复制原始 URL</button>
+          </td></tr>
       <tr><th>邮资</th><td>${fmtMoney(r.postage)}</td></tr>
       <tr><th>仓库</th><td>Profile ${escapeHtml(r.profile_id)} (仓库ID ${escapeHtml(r.warehouse_id)})</td></tr>
       <tr><th>方式</th><td>${escapeHtml(r.method || '')}</td></tr>
@@ -347,7 +352,7 @@ function renderSuccess(r) {
               data-text="${escapeHtml(r.excel_row_tsv || '')}">
         <i class="bi bi-clipboard"></i> 复制整行到剪贴板
       </button>
-      <a class="btn btn-outline-info" href="${escapeHtml(r.label_url || '')}" target="_blank">
+      <a class="btn btn-outline-info" href="/hd-shipping/label/${encodeURIComponent(r.txn_id)}/pdf" target="_blank">
         <i class="bi bi-file-earmark-pdf"></i> 打开面单 PDF
       </a>
       <button class="btn btn-outline-danger btn-cancel" data-txn="${escapeHtml(r.txn_id)}">
@@ -506,7 +511,7 @@ function showBatchResult(body) {
                   data-text="${escapeHtml(r.tracking_number || '')}">复制</button>
         </td>
         <td>${fmtMoney(r.postage)}</td>
-        <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">PDF</a></td>
+        <td><a href="/hd-shipping/label/${encodeURIComponent(r.txn_id)}/pdf" target="_blank">PDF</a></td>
       </tr>`;
     } else {
       const reasonStr = r.error_msg || r.reason || '';

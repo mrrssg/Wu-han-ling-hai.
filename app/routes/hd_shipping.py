@@ -10,7 +10,7 @@ GET  /hd-shipping/label/<txn_id>         JSON: read persisted record (post-morte
 GET  /hd-shipping/history                page: list past hd_label_records
 """
 import logging
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, Response, abort
 
 from app.models.db_manager import DBManager
 from app.services import teapplix_label_service as tp
@@ -135,8 +135,27 @@ def history():
     rows = _fetchall(
         "SELECT txn_id, store_key, shop_sku, warehouse_sku, profile_id, "
         "       warehouse_id, tracking_number, label_url, postage, status, "
-        "       error_msg, created_at, cancelled_at "
+        "       error_msg, excel_row_tsv, created_at, cancelled_at "
         "  FROM hd_label_records "
         " ORDER BY created_at DESC LIMIT 500"
     )
     return render_template("hd_shipping/history.html", rows=rows)
+
+
+@hd_shipping_bp.route("/label/<path:txn_id>/pdf", methods=["GET"])
+def download_pdf(txn_id):
+    """Server-side proxy for Teapplix LabelData URLs. The Teapplix download
+    endpoint requires the APIToken header, which the browser can't supply
+    directly, so we relay the request and stream the bytes back."""
+    rec = wf.get_existing_record(txn_id)
+    if not rec or not rec.get("label_url"):
+        abort(404)
+    status, payload, ctype = tp.download_label(rec["label_url"])
+    if status != 200:
+        return Response(payload, status=status, mimetype=ctype or "text/plain")
+    resp = Response(payload, mimetype=ctype or "application/pdf")
+    # Inline so the browser previews the PDF in a new tab
+    resp.headers["Content-Disposition"] = (
+        f'inline; filename="label-{txn_id}.pdf"'
+    )
+    return resp
