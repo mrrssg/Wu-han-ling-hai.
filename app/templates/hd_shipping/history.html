@@ -68,11 +68,13 @@
           {% else %}—{% endif %}
         </td>
         <td>
-          {% if r.label_url %}
+          {% if r.label_url and r.status == 'success' %}
             <a href="{{ url_for('hd_shipping.download_pdf', txn_id=r.txn_id) }}"
                target="_blank" class="btn btn-sm btn-outline-info py-0 px-2">
               <i class="bi bi-file-earmark-pdf"></i> PDF
             </a>
+          {% elif r.label_url and r.status == 'cancelled' %}
+            <span class="badge bg-light text-muted" title="TP 端已删除该面单">面单已失效</span>
           {% else %}—{% endif %}
         </td>
         <td>
