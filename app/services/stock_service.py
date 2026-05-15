@@ -50,6 +50,8 @@ class StockService:
 
     URL_VEVOR = "https://ads-feed.s3.us-west-2.amazonaws.com/ads/business/553/vevor-553.xlsx"
 
+    URL_VEVOR_WAREHOUSE = "https://ads-feed.s3.us-west-2.amazonaws.com/ads/US-INVENROTY/646/vevor-646.xlsx"
+
     URL_SONGMICS = "https://emes-us.songmics.com/us/songmics-product-2b.csv"
 
     HD_BASE_URL = "https://api.teapplix.com/api2/ProductQuantity"
@@ -161,6 +163,38 @@ class StockService:
         except Exception as e:
 
             msgs.append(f"Vevor异常: {str(e)}")
+
+
+
+        # 2b. 更新 Vevor 分仓库存（10 号 NJ + 432 号 CA）
+
+        try:
+
+            t2b = time.time()
+
+            print("==[2b] VEVOR WAREHOUSE start==")
+
+            xlsx_bytes_wh = StockService.download_xlsx(StockService.URL_VEVOR_WAREHOUSE)
+
+            print(f"==[2b] VEVOR WAREHOUSE download done, {time.time() - t2b:.2f}s ==")
+
+            if xlsx_bytes_wh:
+
+                t2c = time.time()
+
+                success_wh, msg_wh = StockService.process_vevor_warehouse_data(xlsx_bytes_wh)
+
+                print(f"==[2b] VEVOR WAREHOUSE db done, {time.time() - t2c:.2f}s ==")
+
+                msgs.append(f"Vevor分仓: {msg_wh}")
+
+            else:
+
+                msgs.append("Vevor分仓: 下载失败")
+
+        except Exception as e:
+
+            msgs.append(f"Vevor分仓异常: {str(e)}")
 
 
 
@@ -971,6 +1005,194 @@ class StockService:
             traceback.print_exc()
 
             return False, f"Vevor处理异常: {str(e)}"
+
+
+
+    @staticmethod
+
+    def process_vevor_warehouse_data(file_content) -> Tuple[bool, str]:
+
+        """
+
+        解析 vevor-646.xlsx，按 SKU 更新分仓库存：
+
+          - Stock_W10  ← 列名含 "(10)"  美东NJ-谷仓 美国新泽西仓
+
+          - Stock_W432 ← 列名含 "(432)" 美西CA-谷仓 美国洛杉矶9仓
+
+        仅 UPDATE 已存在于 newestdropship_vevor 的 SKU；646 独有的 SKU 跳过。
+
+        """
+
+        try:
+
+            print("==[2b] VEVOR WH openpyxl read_only loading...==")
+
+            wb = load_workbook(file_content, read_only=True, data_only=True)
+
+            ws = wb.active
+
+            # vevor-646.xlsx 的 dimension metadata 不对 (会报 1x1)，
+
+            # 必须 reset_dimensions 强制按实际内容扫描，否则 iter_rows 只能拿到第 1 列。
+
+            try:
+
+                ws.reset_dimensions()
+
+            except Exception:
+
+                pass
+
+
+
+            rows = ws.iter_rows(values_only=True)
+
+            header = next(rows, None)
+
+            if not header:
+
+                return False, "VEVOR WH Excel 表头为空"
+
+
+
+            # 按 "(<num>)" 匹配仓库列；不依赖中文名 / 列固定位置
+
+            def find_col(hdr, marker):
+
+                for i, h in enumerate(hdr):
+
+                    if h is None:
+
+                        continue
+
+                    if marker in str(h):
+
+                        return i
+
+                return None
+
+
+
+            sku_idx = None
+
+            for i, h in enumerate(header):
+
+                if h is not None and str(h).strip().lower() == "sku":
+
+                    sku_idx = i
+
+                    break
+
+
+
+            w10_idx  = find_col(header, "(10)")
+
+            w432_idx = find_col(header, "(432)")
+
+
+
+            if sku_idx is None or w10_idx is None or w432_idx is None:
+
+                return False, (
+
+                    f"缺少必要列 SKU/(10)/(432)，"
+
+                    f"sku_idx={sku_idx} w10_idx={w10_idx} w432_idx={w432_idx}"
+
+                )
+
+
+
+            data_tuples = []
+
+            seen = set()
+
+            n = 0
+
+            for r in rows:
+
+                n += 1
+
+                if n % 5000 == 0:
+
+                    print(f"==[2b] VEVOR WH reading... rows={n}, valid={len(data_tuples)} ==")
+
+
+
+                sku = r[sku_idx]
+
+                if not sku:
+
+                    continue
+
+                sku = str(sku).strip()
+
+                if not sku or sku.lower() == "nan":
+
+                    continue
+
+                if sku in seen:
+
+                    continue
+
+                seen.add(sku)
+
+
+
+                w10 = r[w10_idx]
+
+                w432 = r[w432_idx]
+
+
+
+                try:
+
+                    w10 = int(w10) if w10 is not None and w10 != "" else 0
+
+                except Exception:
+
+                    w10 = 0
+
+
+
+                try:
+
+                    w432 = int(w432) if w432 is not None and w432 != "" else 0
+
+                except Exception:
+
+                    w432 = 0
+
+
+
+                data_tuples.append((sku, w10, w432))
+
+
+
+            if not data_tuples:
+
+                return False, "无有效分仓数据"
+
+
+
+            print(f"==[2b] VEVOR WH read done. rows={n}, valid={len(data_tuples)} ==")
+
+
+
+            updated = DBManager.update_vevor_warehouse_stock(data_tuples)
+
+            return True, f"成功更新 {updated} 条（646行={len(data_tuples)}，553之外的SKU已跳过）"
+
+
+
+        except Exception as e:
+
+            import traceback
+
+            traceback.print_exc()
+
+            return False, f"Vevor分仓处理异常: {str(e)}"
 
 
 

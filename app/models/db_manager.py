@@ -552,6 +552,43 @@ class DBManager:
         finally:
             conn.close()
 
+    @staticmethod
+    def update_vevor_warehouse_stock(data_tuples, batch_size=2000):
+        """
+        Update per-warehouse stock for existing Vevor SKUs only.
+
+        data_tuples: [(sku, stock_w10, stock_w432), ...]
+        SKUs not present in newestdropship_vevor are silently skipped
+        (per business rule: only track SKUs that exist in the 553 feed).
+        Returns: number of rows actually updated.
+        """
+        if not data_tuples:
+            return 0
+
+        conn = DBManager.get_connection()
+        total_updated = 0
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    UPDATE newestdropship_vevor
+                    SET Stock_W10 = %s, Stock_W432 = %s
+                    WHERE SKU = %s
+                """
+                # rearrange to (w10, w432, sku) for UPDATE param order
+                params = [(w10, w432, sku) for (sku, w10, w432) in data_tuples]
+                total = len(params)
+                for i in range(0, total, batch_size):
+                    chunk = params[i:i + batch_size]
+                    cursor.executemany(sql, chunk)
+                    total_updated += cursor.rowcount or 0
+                    conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+        return total_updated
+
     # =======================
     # ✅ GIGA
     # =======================
