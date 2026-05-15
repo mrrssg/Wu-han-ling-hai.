@@ -211,6 +211,11 @@
 const BATCH_LIMIT = {{ batch_limit }};
 
 // =================== utilities ===================
+function fmtMoney(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return '$' + n.toFixed(2);
+}
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({
@@ -331,7 +336,7 @@ function renderSuccess(r) {
           <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">${escapeHtml(r.label_url || '')}</a>
               <button class="btn btn-sm btn-outline-primary btn-copy-text"
                       data-text="${escapeHtml(r.label_url || '')}">复制</button></td></tr>
-      <tr><th>邮资</th><td>$${(r.postage || 0).toFixed ? (r.postage).toFixed(2) : r.postage}</td></tr>
+      <tr><th>邮资</th><td>${fmtMoney(r.postage)}</td></tr>
       <tr><th>仓库</th><td>Profile ${escapeHtml(r.profile_id)} (仓库ID ${escapeHtml(r.warehouse_id)})</td></tr>
       <tr><th>方式</th><td>${escapeHtml(r.method || '')}</td></tr>
     </table>
@@ -500,7 +505,7 @@ function showBatchResult(body) {
           <button class="btn btn-sm btn-outline-primary btn-copy-text py-0 px-1"
                   data-text="${escapeHtml(r.tracking_number || '')}">复制</button>
         </td>
-        <td>$${(r.postage || 0).toFixed ? r.postage.toFixed(2) : r.postage}</td>
+        <td>${fmtMoney(r.postage)}</td>
         <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">PDF</a></td>
       </tr>`;
     } else {
