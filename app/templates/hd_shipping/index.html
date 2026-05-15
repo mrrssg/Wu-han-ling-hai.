@@ -1,0 +1,528 @@
+{% extends "base.html" %}
+{% block title %}HD Vevor 发货{% endblock %}
+
+{% block content %}
+<style>
+  .row-shipped td { background: #e8f5e9; }
+  .row-warn td    { background: #fff8e1; }
+  .row-blocked td { background: #ffebee; }
+  .badge-prof  { font-family: monospace; }
+  .tsv-row     { font-family: monospace; font-size: 12px; white-space: pre;
+                 background: #f5f5f5; padding: 8px; border-radius: 4px;
+                 max-height: 120px; overflow: auto; }
+  .col-sku     { font-family: monospace; font-size: 12px; }
+  .col-tracking{ font-family: monospace; font-size: 12px; }
+  .small-help  { font-size: 11px; color: #888; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="mb-0"><i class="bi bi-truck"></i> HD Vevor 发货</h3>
+    <small class="text-muted">Teapplix UPS_GROUND · 司顺(Vevor) only · 批量上限 {{ batch_limit }}</small>
+  </div>
+  <div>
+    <a href="{{ url_for('hd_shipping.history') }}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-clock-history"></i> 出单历史
+    </a>
+    <button class="btn btn-sm btn-outline-primary" id="btn-refresh">
+      <i class="bi bi-arrow-clockwise"></i> 刷新
+    </button>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">拉取 Teapplix 订单失败: {{ error }}</div>
+{% endif %}
+
+<!-- KPI -->
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="card bg-light"><div class="card-body py-2">
+      <div class="text-muted small">Vevor 未发货</div>
+      <div class="h4 mb-0">{{ summary.total }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-success bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">可立即出单</div>
+      <div class="h4 mb-0 text-success">{{ summary.eligible }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-warning bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">缺重量/尺寸</div>
+      <div class="h4 mb-0 text-warning">{{ summary.missing_dims }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-info bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">已出单</div>
+      <div class="h4 mb-0 text-info">{{ summary.already_shipped }}</div>
+    </div></div>
+  </div>
+</div>
+
+<!-- 工具栏 -->
+<div class="d-flex align-items-center gap-2 mb-2">
+  <input type="text" class="form-control form-control-sm" style="max-width:300px" id="filter-input"
+         placeholder="按 TxnId / SKU / 收件人/邮编 过滤...">
+  <div class="form-check">
+    <input class="form-check-input" type="checkbox" id="filter-eligible-only">
+    <label class="form-check-label" for="filter-eligible-only">只看可立即出单</label>
+  </div>
+  <div class="ms-auto">
+    <span class="text-muted small me-2">已选 <span id="selected-count">0</span></span>
+    <button class="btn btn-sm btn-success" id="btn-batch" disabled>
+      <i class="bi bi-printer"></i> 批量出面单
+    </button>
+  </div>
+</div>
+
+<!-- 表格 -->
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle" id="orders-table">
+    <thead class="table-light">
+      <tr>
+        <th style="width:32px"><input type="checkbox" id="check-all"></th>
+        <th>TxnId</th>
+        <th>店铺</th>
+        <th>Shop SKU<br><span class="small-help">仓库 SKU</span></th>
+        <th>仓库<br><span class="small-help">库存</span></th>
+        <th>尺寸×重(ceil)</th>
+        <th>数量</th>
+        <th>收件人</th>
+        <th>状态</th>
+        <th style="width:130px">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      {% set blocked = not r.is_eligible %}
+      {% set shipped = r.existing_status == 'success' %}
+      <tr data-txn="{{ r.txn_id }}"
+          data-search="{{ r.txn_id }} {{ r.shop_sku }} {{ r.warehouse_sku }} {{ r.recipient_name }} {{ r.recipient_zip }}"
+          data-eligible="{{ '1' if r.is_eligible else '0' }}"
+          class="{% if shipped %}row-shipped{% elif blocked %}row-blocked{% elif r.warnings %}row-warn{% endif %}">
+        <td>
+          {% if r.is_eligible and not shipped %}
+            <input type="checkbox" class="row-check" value="{{ r.txn_id }}">
+          {% endif %}
+        </td>
+        <td class="col-sku">{{ r.txn_id }}</td>
+        <td><span class="badge bg-secondary">{{ r.store_key }}</span></td>
+        <td class="col-sku">
+          {{ r.shop_sku }}<br>
+          <span class="small-help">{{ r.warehouse_sku or '—' }}</span>
+          {% if r.owner %}<br><span class="small-help">owner: {{ r.owner }}</span>{% endif %}
+        </td>
+        <td>
+          {% if r.profile_id %}
+            <span class="badge bg-primary badge-prof">Profile {{ r.profile_id }}</span>
+            <span class="small-help">
+              {% if r.warehouse_col == 'W10' %}NJ3(10){% else %}CA6(432){% endif %}
+            </span><br>
+            <span class="small-help">
+              W10={{ r.stock_w10 }} / W432={{ r.stock_w432 }}
+            </span>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.has_dims %}
+            {{ r.length_in_ceil }}×{{ r.width_in_ceil }}×{{ r.depth_in_ceil }} in<br>
+            <strong>{{ r.weight_lb_ceil }} lb</strong>
+          {% else %}
+            <span class="text-danger">缺数据</span>
+          {% endif %}
+        </td>
+        <td>{{ r.quantity }}</td>
+        <td>
+          {{ r.recipient_name }}<br>
+          <span class="small-help">{{ r.recipient_state }} {{ r.recipient_zip }}</span>
+        </td>
+        <td>
+          {% if shipped %}
+            <span class="badge bg-success">已发</span>
+          {% elif r.warnings %}
+            {% for w in r.warnings %}
+              <div class="small text-warning">⚠ {{ w }}</div>
+            {% endfor %}
+          {% else %}
+            <span class="badge bg-light text-dark">待发</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if shipped %}
+            <button class="btn btn-sm btn-outline-info btn-view" data-txn="{{ r.txn_id }}">
+              <i class="bi bi-eye"></i> 查看
+            </button>
+          {% elif r.is_eligible %}
+            <button class="btn btn-sm btn-primary btn-purchase" data-txn="{{ r.txn_id }}">
+              <i class="bi bi-printer"></i> 出面单
+            </button>
+          {% else %}
+            <button class="btn btn-sm btn-outline-secondary" disabled>无法出单</button>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if not rows %}
+  <div class="alert alert-info">{% if show_all %}没有未发货订单{% else %}没有未发货的 Vevor 订单 — <a href="?all=1">显示全部</a>{% endif %}</div>
+{% endif %}
+
+<!-- ===== Single-result modal ===== -->
+<div class="modal fade" id="result-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">出面单结果</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="result-body"><!-- filled by JS --></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Batch-result modal ===== -->
+<div class="modal fade" id="batch-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">批量出面单结果</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="batch-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BATCH_LIMIT = {{ batch_limit }};
+
+// =================== utilities ===================
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const original = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-check2"></i> 已复制';
+      btn.classList.add('btn-success');
+      btn.classList.remove('btn-outline-primary');
+      setTimeout(() => {
+        btn.innerHTML = original;
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-outline-primary');
+      }, 1500);
+    }
+  } catch (e) {
+    alert('复制失败：' + e);
+  }
+}
+function postJSON(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body ? JSON.stringify(body) : '{}'
+  }).then(r => r.json().then(d => ({status: r.status, body: d})));
+}
+
+// =================== filter + select ===================
+const checkAll = document.getElementById('check-all');
+const filterInput = document.getElementById('filter-input');
+const filterEligibleOnly = document.getElementById('filter-eligible-only');
+const selectedCount = document.getElementById('selected-count');
+const btnBatch = document.getElementById('btn-batch');
+
+function applyFilter() {
+  const q = (filterInput.value || '').toLowerCase().trim();
+  const eligibleOnly = filterEligibleOnly.checked;
+  document.querySelectorAll('#orders-table tbody tr').forEach(tr => {
+    const matchQ = !q || (tr.dataset.search || '').toLowerCase().includes(q);
+    const matchE = !eligibleOnly || tr.dataset.eligible === '1';
+    tr.style.display = (matchQ && matchE) ? '' : 'none';
+  });
+  updateSelectedCount();
+}
+function updateSelectedCount() {
+  const visible = [...document.querySelectorAll('.row-check')].filter(c => {
+    return c.checked && c.closest('tr').style.display !== 'none';
+  });
+  selectedCount.textContent = visible.length;
+  btnBatch.disabled = visible.length === 0;
+}
+filterInput.addEventListener('input', applyFilter);
+filterEligibleOnly.addEventListener('change', applyFilter);
+
+checkAll.addEventListener('change', () => {
+  document.querySelectorAll('.row-check').forEach(c => {
+    if (c.closest('tr').style.display === 'none') return;
+    c.checked = checkAll.checked;
+  });
+  updateSelectedCount();
+});
+document.querySelectorAll('.row-check').forEach(c => {
+  c.addEventListener('change', updateSelectedCount);
+});
+
+// =================== refresh ===================
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  location.reload();
+});
+
+// =================== single purchase ===================
+document.querySelectorAll('.btn-purchase').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const txn = btn.dataset.txn;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 出单中...';
+    try {
+      const {status, body} = await postJSON(`/hd-shipping/label/${encodeURIComponent(txn)}`);
+      showSingleResult(txn, body);
+      // refresh row state after a moment to reflect new status
+      if (body.ok) setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+      alert('请求失败：' + e);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-printer"></i> 出面单';
+    }
+  });
+});
+
+function showSingleResult(txn, body) {
+  const modal = new bootstrap.Modal(document.getElementById('result-modal'));
+  const html = body.ok
+    ? renderSuccess(body)
+    : renderFailure(txn, body);
+  document.getElementById('result-body').innerHTML = html;
+  wireCopyButtons(document.getElementById('result-body'));
+  wireCancelButtons(document.getElementById('result-body'));
+  modal.show();
+}
+function renderSuccess(r) {
+  return `
+    <div class="alert alert-success mb-3">
+      <strong>✓ 出单成功</strong>
+      &nbsp;&nbsp; TxnId: <code>${escapeHtml(r.txn_id)}</code>
+    </div>
+    <table class="table table-sm">
+      <tr><th style="width:140px">追踪号</th>
+          <td><code>${escapeHtml(r.tracking_number || '')}</code>
+              <button class="btn btn-sm btn-outline-primary btn-copy-text"
+                      data-text="${escapeHtml(r.tracking_number || '')}">复制</button></td></tr>
+      <tr><th>面单 URL</th>
+          <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">${escapeHtml(r.label_url || '')}</a>
+              <button class="btn btn-sm btn-outline-primary btn-copy-text"
+                      data-text="${escapeHtml(r.label_url || '')}">复制</button></td></tr>
+      <tr><th>邮资</th><td>$${(r.postage || 0).toFixed ? (r.postage).toFixed(2) : r.postage}</td></tr>
+      <tr><th>仓库</th><td>Profile ${escapeHtml(r.profile_id)} (仓库ID ${escapeHtml(r.warehouse_id)})</td></tr>
+      <tr><th>方式</th><td>${escapeHtml(r.method || '')}</td></tr>
+    </table>
+    <h6 class="mt-3">Vevor信息.xlsx 整行（35 列，tab 分隔）</h6>
+    <div class="tsv-row">${escapeHtml(r.excel_row_tsv || '')}</div>
+    <div class="mt-2 d-flex gap-2">
+      <button class="btn btn-primary btn-copy-text"
+              data-text="${escapeHtml(r.excel_row_tsv || '')}">
+        <i class="bi bi-clipboard"></i> 复制整行到剪贴板
+      </button>
+      <a class="btn btn-outline-info" href="${escapeHtml(r.label_url || '')}" target="_blank">
+        <i class="bi bi-file-earmark-pdf"></i> 打开面单 PDF
+      </a>
+      <button class="btn btn-outline-danger btn-cancel" data-txn="${escapeHtml(r.txn_id)}">
+        <i class="bi bi-x-circle"></i> 取消此面单
+      </button>
+    </div>
+  `;
+}
+function renderFailure(txn, r) {
+  const reasonMap = {
+    already_shipped: '该订单已经出过单',
+    order_not_found: 'Teapplix 找不到此订单',
+    not_vevor: '非 Vevor 货（mapping_table → newestdropship_vevor 未命中）',
+    missing_dims: '飞书未配重量/尺寸',
+    no_profile: '店铺不在已知映射（TOP/DEL）',
+    teapplix_error: 'Teapplix 出单失败',
+    exception: '内部异常',
+    cancel_failed: 'Teapplix 取消失败',
+    no_active_label: '没有可取消的成功面单',
+  };
+  const reasonText = reasonMap[r.reason] || (r.reason || '未知原因');
+  let detail = '';
+  if (r.warnings && r.warnings.length) {
+    detail += '<ul>' + r.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul>';
+  }
+  if (r.error_code || r.error_msg) {
+    detail += `<div>错误码: <code>${escapeHtml(r.error_code)}</code></div>`;
+    detail += `<div>错误: ${escapeHtml(r.error_msg)}</div>`;
+  }
+  if (r.tracking_number) {
+    detail += `<div class="mt-2">已存在追踪号: <code>${escapeHtml(r.tracking_number)}</code></div>`;
+  }
+  if (r.excel_row_tsv) {
+    detail += `<div class="mt-2"><div class="tsv-row">${escapeHtml(r.excel_row_tsv)}</div>
+        <button class="btn btn-sm btn-outline-primary mt-1 btn-copy-text"
+                data-text="${escapeHtml(r.excel_row_tsv)}">复制整行</button></div>`;
+  }
+  return `
+    <div class="alert alert-danger mb-3">
+      <strong>✗ 出单失败</strong>
+      &nbsp;&nbsp; TxnId: <code>${escapeHtml(txn)}</code>
+    </div>
+    <div><strong>原因:</strong> ${escapeHtml(reasonText)}</div>
+    ${detail}
+  `;
+}
+
+function wireCopyButtons(scope) {
+  scope.querySelectorAll('.btn-copy-text').forEach(b => {
+    b.addEventListener('click', () => copyToClipboard(b.dataset.text || '', b));
+  });
+}
+function wireCancelButtons(scope) {
+  scope.querySelectorAll('.btn-cancel').forEach(b => {
+    b.addEventListener('click', async () => {
+      const txn = b.dataset.txn;
+      const reason = prompt('取消原因（可留空）：') ?? '';
+      if (reason === null) return;
+      b.disabled = true;
+      b.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      const {body} = await postJSON(`/hd-shipping/label/${encodeURIComponent(txn)}/cancel`,
+                                     {reason});
+      if (body.ok) {
+        alert('已取消');
+        location.reload();
+      } else {
+        alert('取消失败：' + (body.error_msg || body.error || body.reason));
+        if (confirm('要尝试强制取消吗？(Force=true)')) {
+          const r2 = await postJSON(`/hd-shipping/label/${encodeURIComponent(txn)}/cancel`,
+                                     {reason, force: true});
+          if (r2.body.ok) { alert('已强制取消'); location.reload(); }
+          else alert('强制取消仍失败：' + (r2.body.error_msg || r2.body.reason));
+        }
+        b.disabled = false;
+        b.innerHTML = '<i class="bi bi-x-circle"></i> 取消此面单';
+      }
+    });
+  });
+}
+
+// =================== view existing label ===================
+document.querySelectorAll('.btn-view').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const txn = btn.dataset.txn;
+    const r = await fetch(`/hd-shipping/label/${encodeURIComponent(txn)}`).then(r => r.json());
+    if (!r.ok) { alert('查询失败：' + (r.error || '')); return; }
+    const rec = r.record;
+    showSingleResult(txn, {
+      ok: true,
+      txn_id: rec.txn_id,
+      tracking_number: rec.tracking_number,
+      label_url: rec.label_url,
+      postage: rec.postage,
+      profile_id: rec.profile_id,
+      warehouse_id: rec.warehouse_id,
+      method: rec.method,
+      excel_row_tsv: rec.excel_row_tsv,
+    });
+  });
+});
+
+// =================== batch ===================
+btnBatch.addEventListener('click', async () => {
+  const txns = [...document.querySelectorAll('.row-check')]
+    .filter(c => c.checked && c.closest('tr').style.display !== 'none')
+    .map(c => c.value);
+  if (!txns.length) return;
+  if (txns.length > BATCH_LIMIT) {
+    alert(`一次最多 ${BATCH_LIMIT} 单，当前选了 ${txns.length}`);
+    return;
+  }
+  if (!confirm(`将批量为 ${txns.length} 笔订单出 UPS 面单，确认?`)) return;
+
+  btnBatch.disabled = true;
+  btnBatch.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 处理中…';
+
+  const {body} = await postJSON('/hd-shipping/labels/batch', {txn_ids: txns});
+  showBatchResult(body);
+
+  btnBatch.disabled = false;
+  btnBatch.innerHTML = '<i class="bi bi-printer"></i> 批量出面单';
+});
+
+function showBatchResult(body) {
+  const modal = new bootstrap.Modal(document.getElementById('batch-modal'));
+  const results = body.results || [];
+  const success = results.filter(r => r.ok);
+  const fail = results.filter(r => !r.ok);
+  let html = `
+    <div class="alert alert-${body.fail_count === 0 ? 'success' : 'warning'} mb-3">
+      <strong>总计 ${body.total} · 成功 ${body.success_count} · 失败 ${body.fail_count}</strong>
+    </div>
+  `;
+  if (body.combined_excel_tsv) {
+    html += `
+      <h6>所有成功单合并的 Excel 行（每行一单，可直接粘贴 Vevor信息.xlsx）</h6>
+      <div class="tsv-row">${escapeHtml(body.combined_excel_tsv)}</div>
+      <div class="mt-2 mb-3">
+        <button class="btn btn-primary btn-copy-text"
+                data-text="${escapeHtml(body.combined_excel_tsv)}">
+          <i class="bi bi-clipboard"></i> 复制全部 ${success.length} 行
+        </button>
+      </div>
+    `;
+  }
+  html += `<h6>明细</h6><table class="table table-sm">
+    <thead><tr><th>TxnId</th><th>结果</th><th>追踪号</th><th>邮资</th><th>原因</th></tr></thead><tbody>`;
+  for (const r of results) {
+    if (r.ok) {
+      html += `<tr class="table-success">
+        <td class="col-sku">${escapeHtml(r.txn_id)}</td>
+        <td>✓ 成功</td>
+        <td class="col-tracking">
+          <code>${escapeHtml(r.tracking_number || '')}</code>
+          <button class="btn btn-sm btn-outline-primary btn-copy-text py-0 px-1"
+                  data-text="${escapeHtml(r.tracking_number || '')}">复制</button>
+        </td>
+        <td>$${(r.postage || 0).toFixed ? r.postage.toFixed(2) : r.postage}</td>
+        <td><a href="${escapeHtml(r.label_url || '')}" target="_blank">PDF</a></td>
+      </tr>`;
+    } else {
+      const reasonStr = r.error_msg || r.reason || '';
+      html += `<tr class="table-danger">
+        <td class="col-sku">${escapeHtml(r.txn_id)}</td>
+        <td>✗ 失败</td>
+        <td>—</td>
+        <td>—</td>
+        <td>${escapeHtml(reasonStr)}</td>
+      </tr>`;
+    }
+  }
+  html += `</tbody></table>`;
+  document.getElementById('batch-body').innerHTML = html;
+  wireCopyButtons(document.getElementById('batch-body'));
+  modal.show();
+  // refresh in 3s so the page reflects new statuses
+  setTimeout(() => location.reload(), 4000);
+}
+
+// initial state
+applyFilter();
+</script>
+{% endblock %}

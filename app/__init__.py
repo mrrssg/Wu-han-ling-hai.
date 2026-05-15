@@ -28,6 +28,9 @@ def create_app(config_name='default'):
     from app.routes.repricing import repricing_bp
     app.register_blueprint(repricing_bp, url_prefix='/repricing')
 
+    from app.routes.hd_shipping import hd_shipping_bp
+    app.register_blueprint(hd_shipping_bp, url_prefix='/hd-shipping')
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

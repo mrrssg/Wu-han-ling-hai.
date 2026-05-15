@@ -33,6 +33,7 @@ instance/*_key.txt
 instance/*_url.txt
 instance/openai_key.txt
 instance/hd_api_token.txt
+instance/feishu_app.json
 
 # Local data / generated files
 instance/uploads/
