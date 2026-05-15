@@ -164,15 +164,32 @@ function escapeHtml(s) {
 }
 
 async function copyToClipboard(text, btn) {
-  try {
-    await navigator.clipboard.writeText(text);
-    if (btn) {
-      const original = btn.innerHTML;
-      btn.innerHTML = '<i class="bi bi-check2"></i> 已复制';
-      btn.classList.add('btn-success');
-      setTimeout(() => { btn.innerHTML = original; btn.classList.remove('btn-success'); }, 1500);
-    }
-  } catch (e) { alert('复制失败：' + e); }
+  let ok = false;
+  // Modern API only works on https:// or localhost
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch(_) {}
+  }
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch(_) {}
+    document.body.removeChild(ta);
+  }
+  if (!ok) { alert('复制失败：请手动选中复制'); return; }
+  if (btn) {
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2"></i> 已复制';
+    btn.classList.add('btn-success');
+    setTimeout(() => { btn.innerHTML = original; btn.classList.remove('btn-success'); }, 1500);
+  }
 }
 
 document.querySelectorAll('.btn-copy').forEach(btn => {

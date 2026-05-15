@@ -601,7 +601,9 @@ def purchase_many(txn_ids: List[str]) -> Dict[str, Any]:
 
 def cancel_one(txn_id: str, reason: Optional[str] = None,
                force: bool = False) -> Dict[str, Any]:
-    """Cancel a previously purchased label."""
+    """Cancel a previously purchased label. If Teapplix reports the batch is
+    already gone (Code 25004 'Batch is not found'), treat it as a successful
+    sync — the label was likely cancelled directly in the Teapplix UI."""
     existing = get_existing_record(txn_id)
     if not existing or existing.get("status") != "success":
         return {"ok": False, "txn_id": txn_id, "reason": "no_active_label"}
@@ -609,16 +611,26 @@ def cancel_one(txn_id: str, reason: Optional[str] = None,
     res = tp.cancel_label(txn_id, force=force)
     body = res.get("body") or {}
     status_code = res.get("status")
-    if status_code == 200 and (body.get("Status") == "Cancelled"):
+    code, msg = tp.extract_error(body)
+
+    is_cancelled_ok = (status_code == 200 and body.get("Status") == "Cancelled")
+    is_already_gone = (code == 25004)  # "Batch is not found" - cancelled in TP UI
+
+    if is_cancelled_ok or is_already_gone:
+        note = (reason or "") + (
+            "" if is_cancelled_ok else " [auto-synced: already cancelled in Teapplix]"
+        )
         _exec(
             "UPDATE hd_label_records SET status='cancelled', "
             "cancelled_at=NOW(), cancel_reason=%s, "
             "response_json=%s "
             "WHERE txn_id=%s",
-            (reason or "", json.dumps(body, ensure_ascii=False), txn_id),
+            (note.strip(), json.dumps(body, ensure_ascii=False), txn_id),
         )
-        return {"ok": True, "txn_id": txn_id, "status": "cancelled"}
-    code, msg = tp.extract_error(body)
+        return {
+            "ok": True, "txn_id": txn_id, "status": "cancelled",
+            "synced_from_teapplix": is_already_gone,
+        }
     return {
         "ok": False, "txn_id": txn_id, "reason": "cancel_failed",
         "http_status": status_code, "error_code": code, "error_msg": msg,
