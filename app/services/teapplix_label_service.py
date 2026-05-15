@@ -14,6 +14,7 @@ Endpoints we use:
 import os
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -24,6 +25,11 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.teapplix.com/api2"
 DEFAULT_TIMEOUT = 60  # PurchaseLabel can take 20-30s
+
+# Retry on transient 5xx / network errors. 1s + 3s back-off keeps the user
+# wait under ~5s while surviving a typical Teapplix nginx blip.
+RETRY_BACKOFF = (1.0, 3.0)
+RETRY_STATUSES = {502, 503, 504}
 
 
 def _load_token(base_dir: Optional[str] = None) -> str:
@@ -49,29 +55,59 @@ def _headers() -> Dict[str, str]:
     }
 
 
-def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _request_with_retry(method: str, path: str,
+                        params: Optional[Dict[str, Any]] = None,
+                        json_body: Optional[Dict[str, Any]] = None,
+                        retry_on_post: bool = False) -> Dict[str, Any]:
+    """GET is always retried on 5xx. POST is only retried if explicitly opted-in
+    (label purchase is NOT retried — we don't want to double-charge postage)."""
     url = f"{BASE_URL}{path}"
-    r = requests.get(url, headers=_headers(), params=params, timeout=DEFAULT_TIMEOUT)
-    try:
-        body = r.json()
-    except ValueError:
-        body = {"raw": r.text}
-    if r.status_code >= 400:
-        log.warning("Teapplix GET %s -> %s %s", path, r.status_code, body)
-    return {"status": r.status_code, "body": body}
+    attempts = len(RETRY_BACKOFF) + 1
+    last_resp = None
+    for attempt in range(attempts):
+        try:
+            if method == "GET":
+                r = requests.get(url, headers=_headers(), params=params,
+                                 timeout=DEFAULT_TIMEOUT)
+            else:
+                r = requests.post(url, headers=_headers(),
+                                  data=json.dumps(json_body or {}).encode("utf-8"),
+                                  timeout=DEFAULT_TIMEOUT)
+        except requests.RequestException as e:
+            log.warning("Teapplix %s %s network error attempt %d: %s",
+                        method, path, attempt + 1, e)
+            if attempt == attempts - 1:
+                return {"status": 0, "body": {"raw": f"network error: {e}"}}
+            time.sleep(RETRY_BACKOFF[attempt])
+            continue
+
+        try:
+            body = r.json()
+        except ValueError:
+            body = {"raw": r.text}
+        last_resp = {"status": r.status_code, "body": body}
+
+        retriable = r.status_code in RETRY_STATUSES and (method == "GET" or retry_on_post)
+        if not retriable or attempt == attempts - 1:
+            if r.status_code >= 400:
+                log.warning("Teapplix %s %s -> %s (attempt %d)",
+                            method, path, r.status_code, attempt + 1)
+            return last_resp
+        log.info("Teapplix %s %s got %s, retrying after %.1fs",
+                 method, path, r.status_code, RETRY_BACKOFF[attempt])
+        time.sleep(RETRY_BACKOFF[attempt])
+    return last_resp
+
+
+def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return _request_with_retry("GET", path, params=params)
 
 
 def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    url = f"{BASE_URL}{path}"
-    r = requests.post(url, headers=_headers(), data=json.dumps(payload).encode("utf-8"),
-                      timeout=DEFAULT_TIMEOUT)
-    try:
-        body = r.json()
-    except ValueError:
-        body = {"raw": r.text}
-    if r.status_code >= 400:
-        log.warning("Teapplix POST %s -> %s %s", path, r.status_code, body)
-    return {"status": r.status_code, "body": body}
+    # POST is non-idempotent for PurchaseLabel (could double-charge) so we do
+    # NOT retry by default. CancelLabel is idempotent so we could but err on
+    # the side of caution and let the caller see the error.
+    return _request_with_retry("POST", path, json_body=payload, retry_on_post=False)
 
 
 # =============================================================================
