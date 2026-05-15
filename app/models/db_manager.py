@@ -816,7 +816,7 @@ class DBManager:
                 FROM (
                     SELECT Stock AS stock_val, 'haoya' AS source FROM newestdropship WHERE SKU = %s
                     UNION ALL
-                    SELECT Stock AS stock_val, 'sishun' AS source FROM newestdropship_vevor WHERE SKU = %s
+                    SELECT (Stock_W10 + Stock_W432) AS stock_val, 'sishun' AS source FROM newestdropship_vevor WHERE SKU = %s
                     UNION ALL
                     SELECT Stock AS stock_val, 'dajian' AS source FROM newestdropship_dajian WHERE SKU = %s
                     UNION ALL
