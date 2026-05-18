@@ -327,7 +327,7 @@ def submit_shipments(
                     "order_id": s["order_id"],
                     "shipped": True,
                     "tracking": {
-                        "carrier_code": str(s["carrier"]).strip().lower(),
+                        "carrier_standard_code": str(s["carrier"]).strip().lower(),
                         "tracking_number": s["tracking"],
                     },
                     "shipment_lines": [
