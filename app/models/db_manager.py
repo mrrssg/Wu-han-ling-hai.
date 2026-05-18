@@ -1469,7 +1469,10 @@ class DBManager:
                         JSON_UNQUOTE(JSON_EXTRACT(ld.raw_json, '$.customer.shipping_address.phone')),
                         '[^0-9]', ''
                     ) AS phone,
-                    'lowes_autool' AS store_key
+                    CASE
+                        WHEN ld.shop_id = 11 THEN 'lowes_yasonic'
+                        ELSE 'lowes_autool'
+                    END AS store_key
                 FROM lowesorder lo
                 LEFT JOIN order_system.lowes_order_data ld
                   ON ld.order_line_id = lo.`Order line no.`

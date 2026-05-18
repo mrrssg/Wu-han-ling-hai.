@@ -36,6 +36,12 @@ STORE_CONFIGS: Dict[str, Dict[str, str]] = {
         "seller": "Autool",
         "seller_id": "4599",
     },
+    "lowes_yasonic": {
+        "label": "Lowes-Yasonic",
+        "table": "lowes_yasonic_transaction_logs",
+        "seller": "Yasonic",
+        "seller_id": "4618",
+    },
 }
 
 TYPE_MAP = {

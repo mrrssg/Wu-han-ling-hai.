@@ -72,6 +72,11 @@ STORE_CONFIG = {
         "table": "lowes_autool_transaction_logs",
         "seller": "Autool",
     },
+    "lowes_yasonic": {
+        "label": "Lowes-Yasonic",
+        "table": "lowes_yasonic_transaction_logs",
+        "seller": "Yasonic",
+    },
 }
 
 

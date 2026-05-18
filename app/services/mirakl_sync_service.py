@@ -40,6 +40,12 @@ SYNC_STORE_CONFIGS: Dict[str, Dict[str, str]] = {
         "shop_name": "autool",
         "target_table": "order_system.lowes_order_data",
     },
+    "lowes_yasonic": {
+        "label": "Lowes-Yasonic",
+        "platform": "lowes-yasonic",
+        "shop_name": "yasonic",
+        "target_table": "order_system.lowes_order_data",
+    },
 }
 
 DEFAULT_MAX = 100

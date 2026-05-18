@@ -313,6 +313,7 @@ MIRAKL_BESTBUY_STORES = {
 
 MIRAKL_LOWES_STORES = {
     "lowes_autool": "Lowes-Autool",
+    "lowes_yasonic": "Lowes-Yasonic",
 }
 
 MIRAKL_STORES = {**MIRAKL_MACY_STORES, **MIRAKL_BESTBUY_STORES, **MIRAKL_LOWES_STORES}

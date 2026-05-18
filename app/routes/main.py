@@ -6,9 +6,10 @@ main_bp = Blueprint('main', __name__)
 
 
 # 各店铺 cursor 不更新的告警阈值（小时）。
-# lowes_autool 订单量极少,放宽到 7 天;其它店 6 小时。
+# lowes 店订单量极少,放宽到 7 天;其它店 6 小时。
 STALE_THRESHOLD_HOURS = {
     "lowes_autool": 168,
+    "lowes_yasonic": 168,
 }
 DEFAULT_STALE_HOURS = 6
 
