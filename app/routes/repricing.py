@@ -840,6 +840,57 @@ def push_batch():
     })
 
 
+@repricing_bp.route("/full-export/mark-uploaded/<run_id>", methods=["POST"])
+def full_export_mark_uploaded(run_id):
+    """Operator confirms the xlsx for this run has been uploaded to Mirakl.
+    Async writes the supplier_price for every `would_update` SKU in this run
+    back to Feishu so the Formula cost/profit columns reflect the now-live
+    Mirakl state.
+
+    Returns immediately; the Feishu writeback runs in a background thread
+    (full-table scan ~20s) so the HTTP response doesn't block.
+    """
+    store_key = _current_store()
+    rows = _query(
+        """SELECT warehouse_sku, supplier_price_db
+             FROM order_system.offer_price_change_log
+            WHERE run_id=%s
+              AND run_type='full_export'
+              AND status='dry_run'
+              AND warehouse_sku IS NOT NULL
+              AND supplier_price_db IS NOT NULL""",
+        (run_id,),
+    )
+    if not rows:
+        return jsonify({
+            "success": False,
+            "msg": f"no would-update rows found for run_id={run_id}",
+        }), 400
+
+    updates = [
+        {"warehouse_sku": r["warehouse_sku"],
+         "supplier_price": float(r["supplier_price_db"])}
+        for r in rows
+    ]
+
+    def _bg(updates_, store_key_, run_id_):
+        try:
+            from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu
+            result = write_supplier_prices_to_feishu(updates_, store_key=store_key_)
+            print(f"[full_export.mark_uploaded] {run_id_}: {result}")
+        except Exception as exc:
+            print(f"[full_export.mark_uploaded] {run_id_} exception: {exc}")
+
+    threading.Thread(target=_bg, args=(updates, store_key, run_id), daemon=True).start()
+
+    return jsonify({
+        "success": True,
+        "run_id": run_id,
+        "sku_count": len(updates),
+        "msg": "飞书写回已在后台执行（~20-30 秒），可在 gunicorn.log 查结果",
+    })
+
+
 @repricing_bp.route("/full-export/latest-file", methods=["GET"])
 def full_export_latest_file():
     """Just download the most recent xlsx without specifying run_id."""

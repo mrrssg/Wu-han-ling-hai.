@@ -41,7 +41,7 @@
                     <th>开始时间</th>
                     <th>结束时间</th>
                     <th class="text-end">总扫描</th>
-                    <th>下载</th>
+                    <th>下载 / 上传完成后回写飞书</th>
                 </tr>
             </thead>
             <tbody>
@@ -56,6 +56,10 @@
                            class="btn btn-sm btn-outline-success">
                             <i class="bi bi-download"></i> 下载 xlsx
                         </a>
+                        <button class="btn btn-sm btn-outline-primary mark-uploaded-btn"
+                                data-run-id="{{ r.run_id }}">
+                            <i class="bi bi-check2-circle"></i> 已上传 Mirakl,回写飞书
+                        </button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -97,20 +101,13 @@ document.getElementById('run-btn').addEventListener('click', async (e) => {
             if (s.alert_unsupported_supplier) summaryHtml += ' 供应商不支持 ' + s.alert_unsupported_supplier + ';';
             summaryHtml += '</li>';
             summaryHtml += '</ul>';
-            if (data.feishu_writeback) {
-                const fw = data.feishu_writeback;
-                if (fw.error) {
-                    summaryHtml += '<p class="text-warning mb-2">⚠️ 飞书供应商价回写出错: ' + fw.error + '</p>';
-                } else {
-                    summaryHtml += '<p class="mb-2">📋 飞书供应商价已同步: <strong>' + (fw.sent || 0) + '</strong> 个';
-                    if (fw.not_found && fw.not_found.length) {
-                        summaryHtml += '（' + fw.not_found.length + ' 个飞书无 record_id 跳过）';
-                    }
-                    summaryHtml += '</p>';
-                }
-            }
-            summaryHtml += '<a href="/repricing/full-export/download/' + data.run_id + '?store=' + STORE_KEY + '" class="btn btn-success">';
+            summaryHtml += '<p class="text-muted small mb-2">';
+            summaryHtml += '导出仅生成 Excel,Mirakl 未生效。下载后手动上传 Mirakl,完成后请点下方"已上传 Mirakl"按钮触发飞书回写。';
+            summaryHtml += '</p>';
+            summaryHtml += '<a href="/repricing/full-export/download/' + data.run_id + '?store=' + STORE_KEY + '" class="btn btn-success me-2">';
             summaryHtml += '<i class="bi bi-download"></i> 立即下载 ' + data.filename + '</a>';
+            summaryHtml += '<button class="btn btn-outline-primary mark-uploaded-btn" data-run-id="' + data.run_id + '">';
+            summaryHtml += '<i class="bi bi-check2-circle"></i> 已上传 Mirakl,回写飞书</button>';
             summaryHtml += '</div>';
             resultDiv.innerHTML = summaryHtml;
             // refresh page after 3s so the latest_runs table updates
@@ -122,6 +119,36 @@ document.getElementById('run-btn').addEventListener('click', async (e) => {
     resultDiv.style.display = 'block';
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> 重新生成';
+});
+
+document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.mark-uploaded-btn');
+    if (!btn) return;
+    const runId = btn.dataset.runId;
+    if (!confirm('确认这份 Excel 已经上传到 Mirakl?\n点确认后会把这次涉及的供应商价格回写飞书 (后台执行 ~20-30 秒)')) {
+        return;
+    }
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 已触发,后台执行';
+    try {
+        const r = await fetch('/repricing/full-export/mark-uploaded/' + encodeURIComponent(runId) + '?store=' + STORE_KEY,
+                              {method: 'POST'});
+        const data = await r.json();
+        if (!data.success) {
+            alert('失败: ' + (data.msg || JSON.stringify(data)));
+            btn.disabled = false;
+            btn.innerHTML = original;
+            return;
+        }
+        btn.classList.remove('btn-outline-primary');
+        btn.classList.add('btn-success');
+        btn.innerHTML = '<i class="bi bi-check2-all"></i> 已触发回写 (' + data.sku_count + ' 个 SKU)';
+    } catch (err) {
+        alert('JS 错误: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = original;
+    }
 });
 </script>
 {% endblock %}
