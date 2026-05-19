@@ -26,6 +26,14 @@ formula_variant:  selects the "公式计算出来的Price" step in repricing_for
 
 excel_template:   filename under instance/repricing/ used as the styled base
                   for Part 2 export.
+
+discount_factor_override:
+                  if set (e.g. 0.4 for Macy), the repricing pipeline ignores
+                  per-SKU `discount_factor` from offer_pricing_config and uses
+                  this store-level constant instead. Use this when Feishu's
+                  "活动折扣" column has stale/dirty data and the store actually
+                  runs a uniform promo factor. Set to None to read per-SKU
+                  from Feishu config as before.
 """
 from typing import Dict, List, Optional
 
@@ -45,6 +53,7 @@ REPRICING_STORES: Dict[str, Dict] = {
         "feishu_table_id": "tblfyStm2eu3hp1Q",   # Macy-kuyotq-Mirakl
         "feishu_label": "Macy-kuyotq-Mirakl",
         "excel_template": "offers_import_blank.xlsx",
+        "discount_factor_override": 0.4,
     },
     "lowes_autool": {
         "label": "Lowes-Autool",
@@ -59,6 +68,7 @@ REPRICING_STORES: Dict[str, Dict] = {
         # non-Dropship. Lowes template = 18 cols: same as Macy's 19-col
         # offers-import minus `favorite-rank`.
         "excel_template": "offers_import_lowes_blank.xlsx",
+        "discount_factor_override": None,
     },
 }
 

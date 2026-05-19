@@ -158,7 +158,8 @@ def _load_blacklist(store_key: str) -> set:
 # =============================================================================
 
 def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
-            formula_variant: str = "macy") -> Dict[str, Any]:
+            formula_variant: str = "macy",
+            discount_factor_override: Optional[float] = None) -> Dict[str, Any]:
     """Decide what to do with one offer; returns a result dict with one of
     these statuses:
       - 'skipped_blacklist'
@@ -203,8 +204,16 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
     supplier_price, supplier_updated = sp_info
 
     new_cost = cost_from_supplier_price(supplier_price, supplier)
-    df = float(cfg["discount_factor"])
-    cr = float(cfg["commission_rate"])
+    # Store-level override (e.g. macy_kuyotq fixed at 0.4) wins over Feishu
+    # per-SKU value to neutralise stale/dirty Feishu data.
+    if discount_factor_override is not None:
+        df = float(discount_factor_override)
+    else:
+        feishu_df = cfg.get("discount_factor")
+        if feishu_df is None:
+            return {"status": "alert_no_config", "alert_type": "discount_factor_missing"}
+        df = float(feishu_df)
+    cr = float(cfg["commission_rate"]) if cfg.get("commission_rate") is not None else 0.0
 
     bd = calculate_breakdown(
         supplier=supplier,
@@ -454,6 +463,7 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
     scfg = get_store(store_key)               # raises if unsupported
     push_discount = scfg["push_discount"]
     formula_variant = scfg["formula_variant"]
+    discount_factor_override = scfg.get("discount_factor_override")
 
     started = datetime.now()
     run_id = f"full-{store_key}-{started.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -502,7 +512,8 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
         wh = offer.get("warehouse_sku")
         cfg = configs.get(wh) if wh else None
         decision = _decide(offer, cfg, sp_lookup, blacklist,
-                           formula_variant=formula_variant)
+                           formula_variant=formula_variant,
+                           discount_factor_override=discount_factor_override)
         decisions.append((offer, decision))
         summary[decision["status"]] = summary.get(decision["status"], 0) + 1
 

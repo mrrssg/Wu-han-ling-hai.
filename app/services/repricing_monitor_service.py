@@ -564,7 +564,13 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
 
         supplier = cfg.get("supplier")
         return_base = _to_float(cfg.get("return_shipping_base"))
-        discount_factor = _to_float(cfg.get("discount_factor"))
+        # Store-level override (e.g. macy_kuyotq fixed at 0.4) wins over Feishu
+        # per-SKU value to neutralise stale/dirty Feishu data.
+        df_override = scfg.get("discount_factor_override")
+        discount_factor = (
+            float(df_override) if df_override is not None
+            else _to_float(cfg.get("discount_factor"))
+        )
         commission_rate = _to_float(cfg.get("commission_rate"))
         L = _to_float(cfg.get("length_in"))
         W = _to_float(cfg.get("width_in"))

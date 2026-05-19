@@ -291,33 +291,53 @@ def freshness_status(store_key: str = "macy_kuyotq") -> Dict:
 # Push the latest supplier_price back into the Feishu Mirakl table's
 # `供应商价格` field. Called after a successful OF24 push so the Feishu
 # `成本/利润` Formula columns stay in sync with what Mirakl actually sees.
+#
+# IMPORTANT: we resolve record_id LIVE from Feishu (not from our DB cache).
+# Reason: 2026-05-19 incident - the Feishu table was rebuilt by operations
+# (record_ids changed), our DB cache held stale ids, and every batch_update
+# silently failed with code 1254043 RecordIdNotFound. The print-and-continue
+# error handler hid this from the operator.
 # =============================================================================
 
-def _get_feishu_record_ids(warehouse_skus: List[str], store_key: str) -> Dict[str, str]:
-    """warehouse_sku -> feishu_record_id from our DB cache (no Feishu lookup)."""
-    if not warehouse_skus:
-        return {}
-    conn = DBManager.get_connection()
+def _build_live_sku_to_rid_map(store_key: str) -> Dict[str, str]:
+    """Hit Feishu now (full table scan) and return the latest
+    warehouse_sku -> record_id mapping. ~20s for a 7000-row table.
+    """
+    items = fetch_all_records(store_key)
+    out: Dict[str, str] = {}
+    for it in items:
+        f = it.get("fields", {})
+        sku_raw = _unwrap_text(f.get("供应商SKU"))
+        if not sku_raw:
+            continue
+        sku = str(sku_raw).strip()
+        rid = it.get("record_id")
+        if sku and rid:
+            out[sku] = rid
+    return out
+
+
+def _persist_record_ids(pairs: List[Tuple[str, str]], store_key: str):
+    """Best-effort: refresh offer_pricing_config.feishu_record_id with the
+    record_ids we just resolved live. Idempotent. Never raises.
+    """
+    if not pairs:
+        return
     try:
-        with conn.cursor() as cursor:
-            chunk = 1000
-            out: Dict[str, str] = {}
-            for i in range(0, len(warehouse_skus), chunk):
-                part = warehouse_skus[i:i + chunk]
-                placeholders = ",".join(["%s"] * len(part))
-                cursor.execute(
-                    f"SELECT warehouse_sku, feishu_record_id "
-                    f"FROM order_system.offer_pricing_config "
-                    f"WHERE store_key=%s AND warehouse_sku IN ({placeholders})",
-                    [store_key] + part,
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """UPDATE order_system.offer_pricing_config
+                          SET feishu_record_id = %s
+                        WHERE store_key = %s AND warehouse_sku = %s""",
+                    [(rid, store_key, wh) for (wh, rid) in pairs],
                 )
-                for r in cursor.fetchall():
-                    rid = r.get("feishu_record_id")
-                    if rid:
-                        out[r["warehouse_sku"]] = rid
-            return out
-    finally:
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[feishu_writeback] DB rid persist failed (non-fatal): {exc}")
 
 
 def write_supplier_prices_to_feishu(
@@ -326,13 +346,22 @@ def write_supplier_prices_to_feishu(
 ) -> Dict[str, Any]:
     """`updates`: list of {"warehouse_sku": str, "supplier_price": float}.
 
-    Writes each value into the Feishu Mirakl table's `供应商价格` field by
-    record_id (cached in our DB at offer_pricing_config.feishu_record_id).
+    Writes each value into the Feishu Mirakl table's `供应商价格` field.
+    record_id is resolved LIVE from Feishu each call (not from DB cache),
+    so the writeback survives Feishu-side table rebuilds.
 
-    Returns:
-        {"sent": int, "not_found": [warehouse_sku, ...]}
+    Returns dict with:
+      - sent           : int  (records flushed via batch_update successfully)
+      - not_found      : [warehouse_sku, ...] (SKU exists in our DB but Feishu
+                          has no record with that SKU - real data gap)
+      - failed_chunks  : [str, ...] (batch_update calls Feishu accepted the
+                          HTTP but returned non-zero code; surface so caller
+                          can alert)
+      - error          : str (only set on a hard exception)
 
-    Failure-tolerant: never raises - the upstream push is more important.
+    Failure-tolerant: never raises - upstream price push is what matters.
+    But unlike before, problems are SURFACED in the return value instead
+    of being silently print-and-swallowed.
     """
     if not updates or not _store_supported(store_key):
         return {"sent": 0, "not_found": []}
@@ -341,11 +370,20 @@ def write_supplier_prices_to_feishu(
     app_token = src["app_token"]
     table_id = src["table_id"]
 
-    skus = [u.get("warehouse_sku") for u in updates if u.get("warehouse_sku")]
-    record_map = _get_feishu_record_ids(skus, store_key)
+    # Pull the latest sku->record_id from Feishu directly.
+    try:
+        record_map = _build_live_sku_to_rid_map(store_key)
+    except Exception as exc:
+        print(f"[feishu_writeback] fetch_all_records failed: {exc}")
+        return {
+            "sent": 0,
+            "not_found": [u.get("warehouse_sku") for u in updates if u.get("warehouse_sku")],
+            "error": f"fetch_all_records failed: {exc}",
+        }
 
-    payload_records = []
-    not_found = []
+    payload_records: List[Dict[str, Any]] = []
+    rids_to_persist: List[Tuple[str, str]] = []
+    not_found: List[str] = []
     for u in updates:
         wh = u.get("warehouse_sku")
         sp = u.get("supplier_price")
@@ -363,10 +401,13 @@ def write_supplier_prices_to_feishu(
             "record_id": rid,
             "fields": {"供应商价格": sp_f},
         })
+        rids_to_persist.append((wh, rid))
 
     if not payload_records:
         return {"sent": 0, "not_found": not_found}
 
+    sent_total = 0
+    failed_chunks: List[str] = []
     try:
         token = _get_tenant_token()
         H = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -374,20 +415,38 @@ def write_supplier_prices_to_feishu(
             f"https://open.feishu.cn/open-apis/bitable/v1/apps/"
             f"{app_token}/tables/{table_id}/records/batch_update"
         )
-        sent_total = 0
         chunk = 500
         for i in range(0, len(payload_records), chunk):
             body = {"records": payload_records[i:i + chunk]}
             r = requests.post(url, headers=H, json=body, timeout=60)
-            data = r.json() if r.content else {}
+            try:
+                data = r.json() if r.content else {}
+            except Exception:
+                data = {"_non_json": r.text[:500]}
             if data.get("code") != 0:
-                # log and continue with next chunk - don't break the world
-                print(f"[feishu_writeback] chunk failed: {data}")
+                msg = (f"chunk {i // chunk + 1}: http={r.status_code} "
+                       f"resp={data}")
+                print(f"[feishu_writeback] {msg}")
+                failed_chunks.append(msg)
                 continue
             sent_total += len(body["records"])
             time.sleep(0.2)
     except Exception as exc:
         print(f"[feishu_writeback] exception: {exc}")
-        return {"sent": 0, "not_found": not_found, "error": str(exc)}
+        return {
+            "sent": sent_total,
+            "not_found": not_found,
+            "failed_chunks": failed_chunks,
+            "error": str(exc),
+        }
 
-    return {"sent": sent_total, "not_found": not_found}
+    # Persist the live record_ids back to DB so future cache lookups (and
+    # any other consumer reading offer_pricing_config.feishu_record_id) see
+    # the current values.
+    if sent_total > 0:
+        _persist_record_ids(rids_to_persist, store_key)
+
+    result: Dict[str, Any] = {"sent": sent_total, "not_found": not_found}
+    if failed_chunks:
+        result["failed_chunks"] = failed_chunks
+    return result
