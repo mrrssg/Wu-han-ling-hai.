@@ -406,8 +406,14 @@ def push_one(shop_sku):
         L = float(cfg["length_in"]); W = float(cfg["width_in"])
         H = float(cfg["height_in"]); wt = float(cfg["weight_lb"])
         rb = float(cfg["return_shipping_base"])
-        df = float(cfg["discount_factor"])
-        cr = float(cfg["commission_rate"])
+        df_override = scfg.get("discount_factor_override")
+        if df_override is not None:
+            df = float(df_override)
+        elif cfg.get("discount_factor") is not None:
+            df = float(cfg["discount_factor"])
+        else:
+            return jsonify({"success": False, "msg": "missing discount_factor"}), 400
+        cr = float(cfg["commission_rate"]) if cfg.get("commission_rate") is not None else 0.0
 
         cost = cost_from_supplier_price(sp, supplier)
         margin = realised_margin(
@@ -683,8 +689,15 @@ def push_batch():
             L = float(cfg["length_in"]); W = float(cfg["width_in"])
             H = float(cfg["height_in"]); wt = float(cfg["weight_lb"])
             rb = float(cfg["return_shipping_base"])
-            df = float(cfg["discount_factor"])
-            cr = float(cfg["commission_rate"])
+            df_override = scfg.get("discount_factor_override")
+            if df_override is not None:
+                df = float(df_override)
+            elif cfg.get("discount_factor") is not None:
+                df = float(cfg["discount_factor"])
+            else:
+                rejections.append((sku, "missing_discount_factor"))
+                continue
+            cr = float(cfg["commission_rate"]) if cfg.get("commission_rate") is not None else 0.0
         except (TypeError, ValueError):
             rejections.append((sku, "bad_numeric_cfg"))
             continue
