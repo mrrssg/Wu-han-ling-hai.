@@ -1,12 +1,18 @@
 """
 One-shot migration: switch 4 active shop_configs to Brightdata proxy.
 
+Each shop is HARD-PINNED to one of the 4 static ISP IPs in the
+isp_proxy5 zone. Session-based sticky was tried first but the zone
+only has 4 IPs total and sessions hash into them, causing collisions
+(two shops would share the same exit IP). Pinning via `-ip-X.X.X.X`
+in the proxy username guarantees a 1:1 shop->IP mapping.
+
 Steps:
   1. Backup current rows to instance/shop_configs_backup_<ts>.json
   2. UPDATE 4 active shops (Kuyotq/Wopet/autool/yasonic) to Brightdata
      - host  = brd.superproxy.io
      - port  = 33335
-     - user  = brd-customer-hl_14404d60-zone-isp_proxy5-country-us-session-<shop>
+     - user  = brd-customer-hl_14404d60-zone-isp_proxy5-ip-<pinned_ip>
      - pass  = f73vfek34d52
   3. Print final state and reachability check via the new proxy.
 
@@ -33,16 +39,16 @@ from config import Config  # noqa: E402
 
 
 SHOPS = [
-    # (platform, shop_name, session_suffix)
-    ("Macys-Kuyotq", "Kuyotq", "kuyotq"),
-    ("Macys-Wopet", "Wopet", "wopet"),
-    ("lowes-autool", "autool", "autool"),
-    ("lowes-yasonic", "yasonic", "yasonic"),
+    # (platform, shop_name, pinned_exit_ip)
+    ("Macys-Kuyotq", "Kuyotq", "109.203.161.49"),
+    ("Macys-Wopet", "Wopet", "72.56.175.171"),
+    ("lowes-autool", "autool", "31.105.174.42"),
+    ("lowes-yasonic", "yasonic", "31.98.211.161"),
 ]
 
 BRD_HOST = "brd.superproxy.io"
 BRD_PORT = "33335"
-BRD_USER_TPL = "brd-customer-hl_14404d60-zone-isp_proxy5-country-us-session-{}"
+BRD_USER_TPL = "brd-customer-hl_14404d60-zone-isp_proxy5-ip-{}"
 BRD_PASS = "f73vfek34d52"
 
 
@@ -79,8 +85,8 @@ def _backup(conn) -> Path:
 
 def _update_shops(conn) -> None:
     with conn.cursor() as cur:
-        for platform, shop_name, session in SHOPS:
-            user = BRD_USER_TPL.format(session)
+        for platform, shop_name, pinned_ip in SHOPS:
+            user = BRD_USER_TPL.format(pinned_ip)
             affected = cur.execute(
                 """
                 UPDATE shop_configs
@@ -97,7 +103,7 @@ def _update_shops(conn) -> None:
                     f"[update] expected 1 row for {platform}/{shop_name}, "
                     f"got {affected} -- ABORTING"
                 )
-            print(f"[update] {platform:18s} {shop_name:10s} -> session-{session}")
+            print(f"[update] {platform:18s} {shop_name:10s} -> pinned {pinned_ip}")
     conn.commit()
     print("[commit] all 4 shops updated")
 
@@ -122,21 +128,28 @@ def _print_final_state(conn) -> None:
 
 
 def _reachability_check() -> None:
-    print("\n[reachability check] hitting geo.brdtest.com via each shop's session")
-    for _, _, session in SHOPS:
-        user = quote(BRD_USER_TPL.format(session), safe="")
+    print("\n[reachability check] hitting api.ipify.org via each pinned IP")
+    for platform, shop_name, pinned_ip in SHOPS:
+        user = quote(BRD_USER_TPL.format(pinned_ip), safe="")
         pwd = quote(BRD_PASS, safe="")
         proxy_url = f"http://{user}:{pwd}@{BRD_HOST}:{BRD_PORT}"
         try:
             resp = requests.get(
-                "https://geo.brdtest.com/welcome.txt?product=isp",
+                "https://api.ipify.org?format=json",
                 proxies={"http": proxy_url, "https": proxy_url},
                 timeout=20,
             )
-            exit_ip = resp.headers.get("x-brd-ip", "?")
-            print(f"  session-{session:8s} HTTP {resp.status_code}  exit_ip={exit_ip}")
+            try:
+                observed = resp.json().get("ip", "?")
+            except Exception:
+                observed = resp.text.strip()[:20]
+            match = "OK" if observed == pinned_ip else "MISMATCH"
+            print(
+                f"  {platform:18s} {shop_name:10s} requested={pinned_ip:16s} "
+                f"observed={observed:16s} {match}"
+            )
         except Exception as exc:
-            print(f"  session-{session:8s} ERROR {exc}")
+            print(f"  {platform:18s} {shop_name:10s} ERROR {exc}")
 
 
 def main() -> int:
