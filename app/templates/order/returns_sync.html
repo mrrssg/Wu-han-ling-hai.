@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}退货同步状态{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h3 class="fw-light mb-1">退货同步状态</h3>
+            <div class="text-muted small">
+                Mirakl RT11 退货数据,每店每小时同步一次 (cron)。本页每 5 秒自动刷新。
+                数据库: <code>order_system.mirakl_returns</code>
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="small text-muted" id="lastFetchedAt">—</span>
+            <button class="btn btn-outline-secondary btn-sm" onclick="loadStatus()">手动刷新</button>
+        </div>
+    </div>
+
+    <div class="row g-3" id="cards">
+        <div class="col-12 text-muted small">加载中...</div>
+    </div>
+</div>
+
+<style>
+    .health-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+    }
+    .health-green   { background: #28a745; }
+    .health-red     { background: #dc3545; }
+    .health-unknown { background: #adb5bd; }
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        font-size: 13px;
+    }
+    .stat-row .stat-label { color: #6c757d; }
+    .stat-row .stat-value { color: #212529; font-weight: 500; }
+</style>
+
+<script>
+function fmt(n) {
+    if (n === null || n === undefined) return '—';
+    return new Intl.NumberFormat('en-US').format(n);
+}
+
+function relativeMinutes(min) {
+    if (min === null || min === undefined) return '—';
+    if (min < 1)   return '刚刚';
+    if (min < 60)  return min + ' 分钟前';
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return h + ' 小时' + (m ? ' ' + m + ' 分' : '') + '前';
+}
+
+function relativeUntil(min) {
+    if (min === null || min === undefined) return '—';
+    if (min < 1)  return '即将';
+    if (min < 60) return min + ' 分钟后';
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return h + ' 小时' + (m ? ' ' + m + ' 分' : '') + '后';
+}
+
+function healthBadge(h) {
+    const cls = 'health-dot health-' + h;
+    let label = h === 'green' ? '正常' : (h === 'red' ? '异常' : '未知');
+    return `<span class="${cls}"></span><span class="small text-muted">${label}</span>`;
+}
+
+function renderCard(s) {
+    const statusLine = s.last_status && s.last_status.startsWith('failed')
+        ? `<div class="small text-danger mt-2" title="${s.last_status}">⚠ ${s.last_status}</div>`
+        : '';
+    return `
+    <div class="col-lg-3 col-md-6">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <div class="fw-semibold">${s.label}</div>
+                        <div class="small text-muted">${s.store_key}</div>
+                    </div>
+                    <div>${healthBadge(s.health)}</div>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">上次同步</span>
+                    <span class="stat-value" title="${s.last_run_at || ''}">
+                        ${relativeMinutes(s.minutes_since_run)}
+                    </span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">本次拉取</span>
+                    <span class="stat-value">
+                        ${fmt(s.last_records_fetched)} / 新增 ${fmt(s.last_records_inserted)}
+                    </span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">累计退货</span>
+                    <span class="stat-value">${fmt(s.total_returns)}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">下次同步</span>
+                    <span class="stat-value">${s.next_cron_at} (${relativeUntil(s.minutes_until_next)})</span>
+                </div>
+                ${statusLine}
+            </div>
+        </div>
+    </div>`;
+}
+
+async function loadStatus() {
+    try {
+        const res = await fetch('/returns/sync/status', { cache: 'no-store' });
+        const json = await res.json();
+        if (!json.success) {
+            document.getElementById('cards').innerHTML =
+                `<div class="col-12 text-danger">加载失败: ${json.msg || 'unknown'}</div>`;
+            return;
+        }
+        const html = json.stores.map(renderCard).join('');
+        document.getElementById('cards').innerHTML = html;
+        const now = new Date();
+        document.getElementById('lastFetchedAt').textContent =
+            '最后获取: ' + now.toLocaleTimeString();
+    } catch (e) {
+        document.getElementById('cards').innerHTML =
+            `<div class="col-12 text-danger">网络错误: ${e.message}</div>`;
+    }
+}
+
+loadStatus();
+setInterval(loadStatus, 5000);
+</script>
+{% endblock %}

@@ -45,6 +45,9 @@ from app.services.transaction_log_import_service import (
     import_transaction_log_csv,
     list_recent_import_jobs,
 )
+from app.services.returns_sync_service import (
+    get_sync_status_for_all_stores as get_returns_sync_status,
+)
 
 
 @orders_bp.route('/import', methods=['GET', 'POST'])
@@ -565,5 +568,21 @@ def transaction_logs_import():
             os.remove(saved_path)
         except Exception:
             pass
+
+
+@orders_bp.route("/returns/sync", methods=["GET"])
+def returns_sync_page():
+    """Dashboard: per-store RT11 returns sync status (4 cards, auto-refresh)."""
+    return render_template("order/returns_sync.html")
+
+
+@orders_bp.route("/returns/sync/status", methods=["GET"])
+def returns_sync_status_json():
+    """JSON feed for the dashboard's 5-second auto-refresh."""
+    try:
+        rows = get_returns_sync_status()
+        return jsonify({"success": True, "stores": rows})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)}), 500
 
     return redirect(url_for("orders.transaction_logs_page", store=store_key))

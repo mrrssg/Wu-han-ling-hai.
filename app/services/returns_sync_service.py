@@ -134,6 +134,24 @@ def _ensure_schema():
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            # idempotent column add: 4 columns for the web dashboard
+            for col_def in [
+                ("last_run_at", "DATETIME NULL"),
+                ("last_records_fetched", "INT DEFAULT 0"),
+                ("last_records_inserted", "INT DEFAULT 0"),
+                ("last_status", "VARCHAR(64) NULL"),
+            ]:
+                cursor.execute("""
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='order_system'
+                       AND table_name='returns_sync_cursor'
+                       AND column_name=%s LIMIT 1
+                """, (col_def[0],))
+                if not cursor.fetchone():
+                    cursor.execute(
+                        f"ALTER TABLE order_system.returns_sync_cursor "
+                        f"ADD COLUMN {col_def[0]} {col_def[1]}"
+                    )
         conn.commit()
     finally:
         conn.close()
@@ -153,15 +171,50 @@ def _load_cursor(store_key: str) -> Optional[str]:
         conn.close()
 
 
-def _save_cursor(store_key: str, last_synced_at: str):
+def _save_cursor(store_key: str, last_synced_at: str,
+                 records_fetched: int = 0, records_inserted: int = 0,
+                 status: str = "completed"):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
-                INSERT INTO order_system.returns_sync_cursor (store_key, last_synced_at)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE last_synced_at = VALUES(last_synced_at)
-            """, (store_key, last_synced_at))
+                INSERT INTO order_system.returns_sync_cursor
+                    (store_key, last_synced_at, last_run_at,
+                     last_records_fetched, last_records_inserted, last_status)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    last_synced_at = VALUES(last_synced_at),
+                    last_run_at = VALUES(last_run_at),
+                    last_records_fetched = VALUES(last_records_fetched),
+                    last_records_inserted = VALUES(last_records_inserted),
+                    last_status = VALUES(last_status)
+            """, (store_key, last_synced_at, now,
+                  records_fetched, records_inserted, status))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _save_run_failure(store_key: str, error_msg: str):
+    """Write a 'failed' run-record even when nothing got inserted, so the
+    dashboard can show the failure instead of an outdated 'completed' from
+    yesterday."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO order_system.returns_sync_cursor
+                    (store_key, last_synced_at, last_run_at,
+                     last_records_fetched, last_records_inserted, last_status)
+                VALUES (%s, NULL, %s, 0, 0, %s)
+                ON DUPLICATE KEY UPDATE
+                    last_run_at = VALUES(last_run_at),
+                    last_records_fetched = 0,
+                    last_records_inserted = 0,
+                    last_status = VALUES(last_status)
+            """, (store_key, now, f"failed: {error_msg[:200]}"))
         conn.commit()
     finally:
         conn.close()
@@ -340,8 +393,17 @@ def run_returns_sync(
     finally:
         conn.close()
 
-    if latest_updated and not error_msg:
-        _save_cursor(store_key, latest_updated)
+    if not error_msg:
+        # Always update run-record on success (even when 0 rows: shows "still alive")
+        _save_cursor(
+            store_key,
+            latest_updated or (cursor_val or ""),
+            records_fetched=records_fetched,
+            records_inserted=records_inserted,
+            status="completed" if (not page_token) else "partial",
+        )
+    else:
+        _save_run_failure(store_key, error_msg)
 
     success = not error_msg
     reached_end = not page_token
@@ -361,3 +423,100 @@ def run_returns_sync(
         "latest_updated": latest_updated,
         "ip_used": f"{network['proxy_ip']}:{network['proxy_port']}",
     }
+
+
+# =============================================================================
+# Dashboard helpers - feed the /returns/sync web page
+# =============================================================================
+
+# Per-store cron minute, mirrored from server admin crontab. Used to compute
+# "next sync at" on the dashboard so the operator does not have to remember
+# the schedule.
+CRON_MINUTE_BY_STORE: Dict[str, int] = {
+    "macy_kuyotq":   7,
+    "macy_wopet":    22,
+    "lowes_autool":  42,
+    "lowes_yasonic": 57,
+}
+
+
+def _next_cron_time(cron_minute: int, now: datetime) -> datetime:
+    """Return the next datetime when minute==cron_minute strikes."""
+    candidate = now.replace(minute=cron_minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(hours=1)
+    return candidate
+
+
+def get_sync_status_for_all_stores() -> List[Dict[str, Any]]:
+    """Return per-store sync status for the dashboard page. One row per store
+    even when the store has never synced (so the card always renders).
+    """
+    # ensure tables exist on a fresh deploy - cheap idempotent call
+    _ensure_schema()
+
+    conn = DBManager.get_connection()
+    cursors: Dict[str, Dict[str, Any]] = {}
+    totals: Dict[tuple, int] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT store_key, last_synced_at, last_run_at,
+                       last_records_fetched, last_records_inserted, last_status
+                  FROM order_system.returns_sync_cursor
+            """)
+            for row in cur.fetchall():
+                cursors[row["store_key"]] = row
+
+            cur.execute(f"""
+                SELECT platform, shop_name, COUNT(*) AS c
+                  FROM order_system.`{RETURNS_TABLE}`
+                 GROUP BY platform, shop_name
+            """)
+            for row in cur.fetchall():
+                totals[(row["platform"], row["shop_name"])] = int(row["c"] or 0)
+    finally:
+        conn.close()
+
+    now = datetime.now()
+    status_list: List[Dict[str, Any]] = []
+    for store_key, store_cfg in STORE_CONFIGS.items():
+        c = cursors.get(store_key, {}) or {}
+        total = totals.get((store_cfg["platform"], store_cfg["shop_name"]), 0)
+        last_run_at = c.get("last_run_at")
+        last_status = c.get("last_status") or "no_runs_yet"
+
+        # Health: green if last successful run within the last 2 hours,
+        # red otherwise (cron is hourly, so 2h missed = something wrong).
+        health = "unknown"
+        minutes_since = None
+        if last_run_at:
+            delta = (now - last_run_at).total_seconds()
+            minutes_since = int(delta / 60)
+            if last_status.startswith("failed"):
+                health = "red"
+            elif delta > 2 * 3600:
+                health = "red"
+            else:
+                health = "green"
+
+        next_cron = _next_cron_time(CRON_MINUTE_BY_STORE[store_key], now)
+        minutes_until = int((next_cron - now).total_seconds() / 60)
+
+        status_list.append({
+            "store_key": store_key,
+            "label": store_cfg["label"],
+            "platform": store_cfg["platform"],
+            "shop_name": store_cfg["shop_name"],
+            "health": health,
+            "last_run_at": last_run_at.strftime("%Y-%m-%d %H:%M:%S") if last_run_at else None,
+            "minutes_since_run": minutes_since,
+            "last_synced_at": c.get("last_synced_at"),
+            "last_records_fetched": int(c.get("last_records_fetched") or 0),
+            "last_records_inserted": int(c.get("last_records_inserted") or 0),
+            "last_status": last_status,
+            "total_returns": total,
+            "next_cron_at": next_cron.strftime("%H:%M"),
+            "minutes_until_next": minutes_until,
+        })
+    return status_list
