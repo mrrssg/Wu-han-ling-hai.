@@ -456,21 +456,20 @@ LISTING_UPSERT_COLUMNS = [
 ]
 
 
-def _upsert_listing_row(store_cfg: Dict[str, str], offer: Dict[str, Any]) -> int:
-    """Insert/update one mirakl_listing row from a full OF21 offer payload."""
+def _build_listing_row(store_cfg: Dict[str, str], offer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pure: OF21 offer dict -> mirakl_listing row dict. Used by single-sku
+    and bulk paths. Returns None if shop_sku missing."""
     shop_sku = str(offer.get("shop_sku") or "").strip()
     if not shop_sku:
-        return 0
+        return None
     refs = offer.get("product_references") or []
     logistic = offer.get("logistic_class") or {}
     if not isinstance(logistic, dict):
         logistic = {}
-
     active_val = offer.get("active")
     if active_val is None:
         active_val = (offer.get("state_code") or "").upper() == "ACTIVE"
-
-    row = {
+    return {
         "platform": store_cfg["platform"],
         "shop_name": store_cfg["shop_name"],
         "shop_sku": shop_sku,
@@ -503,25 +502,90 @@ def _upsert_listing_row(store_cfg: Dict[str, str], offer: Dict[str, Any]) -> int
         "warehouses_json": json.dumps(offer.get("warehouses") or [], ensure_ascii=False),
         "raw_json": json.dumps(offer, ensure_ascii=False),
     }
+
+
+def _listing_upsert_sql() -> str:
     col_expr = ", ".join(f"`{c}`" for c in LISTING_UPSERT_COLUMNS)
     placeholders = ", ".join(["%s"] * len(LISTING_UPSERT_COLUMNS))
-    # UPSERT: on duplicate (platform, shop_name, shop_sku) -> update all non-key cols
     update_clause = ", ".join(
         f"`{c}` = VALUES(`{c}`)"
         for c in LISTING_UPSERT_COLUMNS
         if c not in ("platform", "shop_name", "shop_sku")
     )
-    sql = (
+    return (
         f"INSERT INTO order_system.mirakl_listing ({col_expr}) "
         f"VALUES ({placeholders}) "
         f"ON DUPLICATE KEY UPDATE {update_clause}"
     )
-    values = tuple(row.get(c) for c in LISTING_UPSERT_COLUMNS)
 
+
+def _upsert_listing_row(store_cfg: Dict[str, str], offer: Dict[str, Any]) -> int:
+    """Insert/update one mirakl_listing row from a full OF21 offer payload."""
+    row = _build_listing_row(store_cfg, offer)
+    if row is None:
+        return 0
+    values = tuple(row.get(c) for c in LISTING_UPSERT_COLUMNS)
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, values)
+            cursor.execute(_listing_upsert_sql(), values)
+            affected = cursor.rowcount or 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
+def _bulk_upsert_listing(store_cfg: Dict[str, str], offers: List[Dict[str, Any]]) -> int:
+    """Batch UPSERT mirakl_listing for a page of offers (executemany).
+    Used by the fast OF21-list path."""
+    rows = []
+    for offer in offers:
+        r = _build_listing_row(store_cfg, offer)
+        if r is None:
+            continue
+        rows.append(tuple(r.get(c) for c in LISTING_UPSERT_COLUMNS))
+    if not rows:
+        return 0
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.executemany(_listing_upsert_sql(), rows)
+            affected = cursor.rowcount or 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
+def _bulk_update_category(store_cfg: Dict[str, str], offers: List[Dict[str, Any]]) -> int:
+    """Batch UPDATE offerprice_listing.category for a page of offers
+    (executemany). Used by the fast OF21-list path."""
+    pairs = []
+    for offer in offers:
+        shop_sku = str(offer.get("shop_sku") or "").strip()
+        if not shop_sku:
+            continue
+        cat = (offer.get("category_label") or offer.get("category_code") or "").strip()
+        if cat:
+            pairs.append((cat, store_cfg["platform"], store_cfg["shop_name"], shop_sku))
+    if not pairs:
+        return 0
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                """UPDATE order_system.offerprice_listing
+                      SET category=%s
+                    WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+                pairs,
+            )
             affected = cursor.rowcount or 0
         conn.commit()
     except Exception:
@@ -633,6 +697,131 @@ def backfill_listing_via_of21(store_key: str, shop_skus: List[str],
 # Backward-compat alias - existing OF52 sync path & old scripts call this name.
 # Identical behaviour to backfill_listing_via_of21 now (it writes both tables).
 backfill_categories_via_of21 = backfill_listing_via_of21
+
+
+# =============================================================================
+# OF21 list-mode bulk backfill
+# Pull the whole shop in pages of 100 offers (Mirakl OF21 max=100 hard cap).
+# 170x faster than by-sku for the initial backfill: 4 stores ~8800 SKUs total
+# = ~88 API calls = ~5 minutes vs ~13 hours by-sku.
+# =============================================================================
+
+OF21_LIST_PAGE_SIZE = 100   # Mirakl OF21 hard caps max= at 100, verified empirically
+
+
+def backfill_via_of21_list(
+    store_key: str,
+    *,
+    page_size: int = OF21_LIST_PAGE_SIZE,
+    max_pages: int = 200,
+    sleep_between_pages: float = 0.5,
+) -> Dict[str, Any]:
+    """Pull the entire shop via OF21 list-mode pagination, batch-upsert into
+    mirakl_listing, and batch-update offerprice_listing.category per page.
+
+    Args:
+        store_key: which store to backfill.
+        page_size: max= per request; Mirakl caps at 100.
+        max_pages: safety cap to prevent runaway loops.
+        sleep_between_pages: gap between pages (OF21 has no published rate
+            cap, but a small gap keeps us polite).
+
+    Routes through the store's pinned proxy IP via
+    `mirakl_offer_api_service._proxy_session_headers`.
+    """
+    import time
+    import requests
+    from app.services.mirakl_offer_api_service import (
+        _check_store as _check_store_for_read,
+        _resolve_api,
+        _proxy_session_headers,
+    )
+
+    _check_store_for_read(store_key)
+    _ensure_listing_schema()
+    store_cfg = STORE_CONFIGS[store_key]
+
+    api = _resolve_api(store_key)
+    net = _proxy_session_headers(store_key, api["api_key"])
+
+    started_at = datetime.now()
+    pages = 0
+    fetched = 0
+    listing_upserted = 0
+    category_updated = 0
+    offset = 0
+    total_count: Optional[int] = None
+    error_msg = ""
+
+    while pages < max_pages:
+        params = {"max": page_size, "offset": offset}
+        try:
+            resp = requests.get(
+                api["api_url"] + "/api/offers",
+                headers=net["headers"],
+                proxies=net["proxies"],
+                params=params,
+                timeout=60,
+            )
+        except Exception as exc:
+            error_msg = f"page={pages+1} request error: {exc}"
+            print(f"[OF21_list][{store_key}] {error_msg}")
+            break
+
+        if resp.status_code != 200:
+            error_msg = f"page={pages+1} http={resp.status_code} {resp.text[:200]}"
+            print(f"[OF21_list][{store_key}] {error_msg}")
+            break
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            error_msg = f"page={pages+1} invalid json: {exc}"
+            print(f"[OF21_list][{store_key}] {error_msg}")
+            break
+
+        offers = data.get("offers") or []
+        if total_count is None:
+            total_count = int(data.get("total_count") or 0)
+
+        if not offers:
+            break
+
+        pages += 1
+        fetched += len(offers)
+
+        # Two batch writes per page (one DB connection each).
+        try:
+            listing_upserted += _bulk_upsert_listing(store_cfg, offers)
+            category_updated += _bulk_update_category(store_cfg, offers)
+        except Exception as exc:
+            error_msg = f"page={pages} db error: {exc}"
+            print(f"[OF21_list][{store_key}] {error_msg}")
+            break
+
+        print(f"[OF21_list][{store_key}] page={pages} offset={offset} "
+              f"returned={len(offers)} listing_upserted={listing_upserted} "
+              f"cat_updated={category_updated} total_count={total_count}")
+
+        if len(offers) < page_size:
+            break
+        offset += page_size
+
+        if sleep_between_pages > 0:
+            time.sleep(sleep_between_pages)
+
+    return {
+        "success": not error_msg,
+        "store_key": store_key,
+        "msg": error_msg or "completed",
+        "total_count": total_count,
+        "pages_fetched": pages,
+        "records_fetched": fetched,
+        "listing_upserted": listing_upserted,
+        "category_updated": category_updated,
+        "ip_used": net.get("ip_used"),
+        "duration_seconds": round((datetime.now() - started_at).total_seconds(), 2),
+    }
 
 
 def run_offer_listing_sync(
