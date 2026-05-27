@@ -1,8 +1,10 @@
-"""Sync Mirakl returns (RT11) into per-store tables for inventory of refunds
-and customer return tracking. Mirrors transaction_log_sync_service.py:
+"""Sync Mirakl returns (RT11) into a single shared table for inventory of
+refunds and customer return tracking.
 
-- one table per store: {store_key}_returns
+Design (mirrors offerprice_listing's "one table for all stores" approach):
+- one table: mirakl_returns, with platform + shop_name columns
 - one cursor table: returns_sync_cursor (last_synced_at per store_key)
+- UNIQUE (platform, shop_name, return_id) for cross-store-safe dedup
 - incremental via return_last_updated_from + 2h overlap window
 - seek pagination via next_page_token
 - IP-isolated through _load_network_profile(store_key) - reuses the same
@@ -32,11 +34,15 @@ from app.services.mirakl_shipping_service import (
 UTC = timezone.utc
 
 
+RETURNS_TABLE = "mirakl_returns"
+
+# platform + shop_name match what offerprice_listing uses so a JOIN on
+# (platform, shop_name, ...) just works across both tables.
 STORE_CONFIGS: Dict[str, Dict[str, str]] = {
-    "macy_kuyotq":   {"label": "Macy-Kuyotq",   "table": "macy_kuyotq_returns"},
-    "macy_wopet":    {"label": "Macy-Wopet",    "table": "macy_wopet_returns"},
-    "lowes_autool":  {"label": "Lowes-Autool",  "table": "lowes_autool_returns"},
-    "lowes_yasonic": {"label": "Lowes-Yasonic", "table": "lowes_yasonic_returns"},
+    "macy_kuyotq":   {"label": "Macy-Kuyotq",   "platform": "Macy",  "shop_name": "kuyotq"},
+    "macy_wopet":    {"label": "Macy-Wopet",    "platform": "Macy",  "shop_name": "wopet"},
+    "lowes_autool":  {"label": "Lowes-Autool",  "platform": "Lowes", "shop_name": "autool"},
+    "lowes_yasonic": {"label": "Lowes-Yasonic", "platform": "Lowes", "shop_name": "yasonic"},
 }
 
 
@@ -50,6 +56,7 @@ DEFAULT_BACKFILL_DAYS = 180  # if no cursor and no --full-from, look back 6 mont
 
 
 INSERT_COLUMNS = [
+    "platform", "shop_name",
     "return_id", "rma", "state", "method_code", "reason_code", "rejection_reason_code",
     "order_commercial_id", "order_id", "date_created", "last_updated",
     "description", "label_url",
@@ -74,14 +81,16 @@ def _parse_iso_to_db(s) -> Optional[str]:
         return None
 
 
-def _ensure_schema(table: str):
-    """Create the per-store returns table + the shared cursor table if absent."""
+def _ensure_schema():
+    """Create the single shared returns table + the cursor table if absent."""
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(f"""
-                CREATE TABLE IF NOT EXISTS order_system.`{table}` (
+                CREATE TABLE IF NOT EXISTS order_system.`{RETURNS_TABLE}` (
                     id INT AUTO_INCREMENT PRIMARY KEY,
+                    platform VARCHAR(50) NOT NULL,
+                    shop_name VARCHAR(100) NOT NULL,
                     return_id CHAR(36) NOT NULL,
                     rma VARCHAR(64),
                     state VARCHAR(32),
@@ -110,10 +119,10 @@ def _ensure_schema(table: str):
                     raw_json LONGTEXT,
                     created_at_db DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at_db DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    UNIQUE KEY uq_return_id (return_id),
-                    INDEX idx_state (state),
-                    INDEX idx_order_commercial_id (order_commercial_id),
-                    INDEX idx_last_updated (last_updated),
+                    UNIQUE KEY uq_store_return (platform, shop_name, return_id),
+                    INDEX idx_store_state (platform, shop_name, state),
+                    INDEX idx_store_last_updated (platform, shop_name, last_updated),
+                    INDEX idx_store_order (platform, shop_name, order_commercial_id),
                     INDEX idx_reason_code (reason_code)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
@@ -157,11 +166,13 @@ def _save_cursor(store_key: str, last_synced_at: str):
         conn.close()
 
 
-def _api_to_db_row(item: Dict[str, Any]) -> Dict[str, Any]:
+def _api_to_db_row(item: Dict[str, Any], store_cfg: Dict[str, str]) -> Dict[str, Any]:
     addr = item.get("return_address") or {}
     tracking = item.get("tracking") or {}
     lines = item.get("return_lines") or []
     return {
+        "platform": store_cfg["platform"],
+        "shop_name": store_cfg["shop_name"],
         "return_id": item.get("id"),
         "rma": item.get("rma"),
         "state": item.get("state"),
@@ -191,15 +202,15 @@ def _api_to_db_row(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _insert_batch(conn, table: str, items: List[Dict[str, Any]]) -> int:
+def _insert_batch(conn, items: List[Dict[str, Any]], store_cfg: Dict[str, str]) -> int:
     if not items:
         return 0
     col_expr = ", ".join(f"`{c}`" for c in INSERT_COLUMNS)
     placeholders = ", ".join(["%s"] * len(INSERT_COLUMNS))
-    sql = f"INSERT IGNORE INTO order_system.`{table}` ({col_expr}) VALUES ({placeholders})"
+    sql = f"INSERT IGNORE INTO order_system.`{RETURNS_TABLE}` ({col_expr}) VALUES ({placeholders})"
     batch = []
     for item in items:
-        row = _api_to_db_row(item)
+        row = _api_to_db_row(item, store_cfg)
         batch.append(tuple(row.get(c) for c in INSERT_COLUMNS))
     with conn.cursor() as cursor:
         cursor.executemany(sql, batch)
@@ -226,8 +237,7 @@ def run_returns_sync(
         return {"success": False, "msg": f"unsupported store: {store_key}"}
 
     store_cfg = STORE_CONFIGS[store_key]
-    table = store_cfg["table"]
-    _ensure_schema(table)
+    _ensure_schema()
 
     base_dir = current_app.config.get("BASE_DIR", current_app.root_path)
     api_cfg = load_store_config(base_dir, store_key)
@@ -307,7 +317,7 @@ def run_returns_sync(
             records_fetched += len(data)
 
             if data:
-                inserted = _insert_batch(conn, table, data)
+                inserted = _insert_batch(conn, data, store_cfg)
                 records_inserted += inserted
                 records_duplicate += len(data) - inserted
                 for item in data:
