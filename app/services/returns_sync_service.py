@@ -46,9 +46,10 @@ STORE_CONFIGS: Dict[str, Dict[str, str]] = {
 }
 
 
-# RT11 has no per-page size param; Mirakl default seek-pagination page size is
-# 100. With 10 pages/run we can absorb ~1000 returns per cron tick, far more
-# than realistic daily volume.
+# RT11 supports `limit=N` (same as TL02). Default without limit is only 10/page
+# - empirically verified. With limit=100 + 10 pages/run we absorb up to 1000
+# returns per cron tick, far more than realistic daily volume.
+RT11_PAGE_LIMIT = 100
 MAX_PAGES_PER_RUN = 10
 REQUEST_INTERVAL = 5         # seconds between calls
 OVERLAP_HOURS = 2            # incremental overlap to catch late-updated rows
@@ -284,9 +285,9 @@ def run_returns_sync(
                 time.sleep(REQUEST_INTERVAL)
 
             if page_token:
-                params = {"page_token": page_token}
+                params = {"page_token": page_token, "limit": RT11_PAGE_LIMIT}
             else:
-                params = {"return_last_updated_from": start_from}
+                params = {"return_last_updated_from": start_from, "limit": RT11_PAGE_LIMIT}
 
             try:
                 resp = _request_with_retry(
