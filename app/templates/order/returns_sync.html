@@ -116,9 +116,22 @@ function renderCard(s) {
     </div>`;
 }
 
+const STATUS_URL = "{{ url_for('orders.returns_sync_status_json') }}";
+
 async function loadStatus() {
     try {
-        const res = await fetch('/returns/sync/status', { cache: 'no-store' });
+        const res = await fetch(STATUS_URL, { cache: 'no-store' });
+        if (!res.ok) {
+            document.getElementById('cards').innerHTML =
+                `<div class="col-12 text-danger">HTTP ${res.status} ${res.statusText}</div>`;
+            return;
+        }
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+            document.getElementById('cards').innerHTML =
+                `<div class="col-12 text-danger">返回非 JSON,可能未登录或路由错。Content-Type: ${ct}</div>`;
+            return;
+        }
         const json = await res.json();
         if (!json.success) {
             document.getElementById('cards').innerHTML =
