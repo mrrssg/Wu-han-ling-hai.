@@ -373,7 +373,169 @@ CATEGORY_BACKFILL_SLEEP_SECONDS = 2.0   # spacing between OF21 calls; Mirakl has
                                         # paces us and avoids stacking requests.
 
 
+def _ensure_listing_schema():
+    """Create mirakl_listing if absent. 4-store shared table, OF21-sourced
+    extended listing data (16+ columns the OF52 export does not return)."""
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS order_system.mirakl_listing (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    platform VARCHAR(50) NOT NULL,
+                    shop_name VARCHAR(100) NOT NULL,
+                    shop_sku VARCHAR(100) NOT NULL,
+                    product_sku VARCHAR(100),
+                    product_title VARCHAR(1000),
+                    product_brand VARCHAR(255),
+                    product_description LONGTEXT,
+                    description TEXT,
+                    internal_description TEXT,
+                    msrp DECIMAL(10,2),
+                    total_price DECIMAL(10,2),
+                    upc VARCHAR(64),
+                    ean VARCHAR(64),
+                    gtin VARCHAR(64),
+                    mpn VARCHAR(128),
+                    min_order_qty INT,
+                    max_order_qty INT,
+                    min_qty_alert INT,
+                    package_qty INT,
+                    leadtime_to_ship INT,
+                    logistic_class_code VARCHAR(64),
+                    logistic_class_label VARCHAR(128),
+                    shipping_deadline VARCHAR(64),
+                    category_code VARCHAR(200),
+                    category_label VARCHAR(200),
+                    state_code VARCHAR(32),
+                    active TINYINT(1),
+                    offer_additional_fields_json LONGTEXT,
+                    inactivity_reasons_json LONGTEXT,
+                    warehouses_json LONGTEXT,
+                    raw_json LONGTEXT,
+                    last_synced_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_store_sku (platform, shop_name, shop_sku),
+                    INDEX idx_product_brand (product_brand),
+                    INDEX idx_category_code (category_code),
+                    INDEX idx_upc (upc)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _extract_product_reference(refs, ref_type: str) -> Optional[str]:
+    """Pull a single product reference value (UPC/EAN/GTIN/MPN) from the
+    OF21 product_references array."""
+    if not isinstance(refs, list):
+        return None
+    for r in refs:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("reference_type") or "").upper() == ref_type.upper():
+            v = str(r.get("reference") or "").strip()
+            if v:
+                return v
+    return None
+
+
+LISTING_UPSERT_COLUMNS = [
+    "platform", "shop_name", "shop_sku",
+    "product_sku", "product_title", "product_brand", "product_description",
+    "description", "internal_description",
+    "msrp", "total_price",
+    "upc", "ean", "gtin", "mpn",
+    "min_order_qty", "max_order_qty", "min_qty_alert", "package_qty",
+    "leadtime_to_ship",
+    "logistic_class_code", "logistic_class_label", "shipping_deadline",
+    "category_code", "category_label",
+    "state_code", "active",
+    "offer_additional_fields_json", "inactivity_reasons_json", "warehouses_json",
+    "raw_json",
+]
+
+
+def _upsert_listing_row(store_cfg: Dict[str, str], offer: Dict[str, Any]) -> int:
+    """Insert/update one mirakl_listing row from a full OF21 offer payload."""
+    shop_sku = str(offer.get("shop_sku") or "").strip()
+    if not shop_sku:
+        return 0
+    refs = offer.get("product_references") or []
+    logistic = offer.get("logistic_class") or {}
+    if not isinstance(logistic, dict):
+        logistic = {}
+
+    active_val = offer.get("active")
+    if active_val is None:
+        active_val = (offer.get("state_code") or "").upper() == "ACTIVE"
+
+    row = {
+        "platform": store_cfg["platform"],
+        "shop_name": store_cfg["shop_name"],
+        "shop_sku": shop_sku,
+        "product_sku": (offer.get("product_sku") or None),
+        "product_title": (offer.get("product_title") or None),
+        "product_brand": (offer.get("product_brand") or None),
+        "product_description": (offer.get("product_description") or None),
+        "description": (offer.get("description") or None),
+        "internal_description": (offer.get("internal_description") or None),
+        "msrp": _to_float(offer.get("msrp")),
+        "total_price": _to_float(offer.get("total_price")),
+        "upc": _extract_product_reference(refs, "UPC"),
+        "ean": _extract_product_reference(refs, "EAN"),
+        "gtin": _extract_product_reference(refs, "GTIN"),
+        "mpn": _extract_product_reference(refs, "MPN") or _extract_product_reference(refs, "MANUFACTURER_PART_NUMBER"),
+        "min_order_qty": _to_int(offer.get("min_order_quantity")),
+        "max_order_qty": _to_int(offer.get("max_order_quantity")),
+        "min_qty_alert": _to_int(offer.get("min_quantity_alert")),
+        "package_qty": _to_int(offer.get("package_quantity")),
+        "leadtime_to_ship": _to_int(offer.get("leadtime_to_ship")),
+        "logistic_class_code": logistic.get("code"),
+        "logistic_class_label": logistic.get("label"),
+        "shipping_deadline": (offer.get("shipping_deadline") or None),
+        "category_code": (offer.get("category_code") or None),
+        "category_label": (offer.get("category_label") or None),
+        "state_code": (offer.get("state_code") or None),
+        "active": 1 if active_val else 0,
+        "offer_additional_fields_json": json.dumps(offer.get("offer_additional_fields") or [], ensure_ascii=False),
+        "inactivity_reasons_json": json.dumps(offer.get("inactivity_reasons") or [], ensure_ascii=False),
+        "warehouses_json": json.dumps(offer.get("warehouses") or [], ensure_ascii=False),
+        "raw_json": json.dumps(offer, ensure_ascii=False),
+    }
+    col_expr = ", ".join(f"`{c}`" for c in LISTING_UPSERT_COLUMNS)
+    placeholders = ", ".join(["%s"] * len(LISTING_UPSERT_COLUMNS))
+    # UPSERT: on duplicate (platform, shop_name, shop_sku) -> update all non-key cols
+    update_clause = ", ".join(
+        f"`{c}` = VALUES(`{c}`)"
+        for c in LISTING_UPSERT_COLUMNS
+        if c not in ("platform", "shop_name", "shop_sku")
+    )
+    sql = (
+        f"INSERT INTO order_system.mirakl_listing ({col_expr}) "
+        f"VALUES ({placeholders}) "
+        f"ON DUPLICATE KEY UPDATE {update_clause}"
+    )
+    values = tuple(row.get(c) for c in LISTING_UPSERT_COLUMNS)
+
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, values)
+            affected = cursor.rowcount or 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
 def _update_category_row(store_cfg: Dict[str, str], shop_sku: str, category: Optional[str]) -> int:
+    """Update offerprice_listing.category for one SKU. Kept separate from the
+    mirakl_listing upsert so other callers can still drive category-only
+    updates if needed."""
     if not category:
         return 0
     conn = DBManager.get_connection()
@@ -395,21 +557,26 @@ def _update_category_row(store_cfg: Dict[str, str], shop_sku: str, category: Opt
     return affected
 
 
-def backfill_categories_via_of21(store_key: str, shop_skus: List[str],
-                                 *, sleep_seconds: float = CATEGORY_BACKFILL_SLEEP_SECONDS,
-                                 progress_every: int = 100) -> Dict[str, Any]:
-    """Call OF21 for each shop_sku and write category_label into
-    offerprice_listing.category. Single-SKU failures are logged and skipped.
+def backfill_listing_via_of21(store_key: str, shop_skus: List[str],
+                              *, sleep_seconds: float = CATEGORY_BACKFILL_SLEEP_SECONDS,
+                              progress_every: int = 100) -> Dict[str, Any]:
+    """Call OF21 for each shop_sku and do two writes per call:
+      1. UPSERT a full row into mirakl_listing (16+ columns)
+      2. UPDATE offerprice_listing.category from the same OF21 payload
+    Single-SKU failures are logged and skipped.
 
     Returns:
-        {attempted, updated, errors, missing_in_mirakl, no_category}
+        {attempted, listing_upserted, category_updated, errors, missing_in_mirakl, no_category}
     """
     import time
     from app.services.mirakl_offer_api_service import get_offer_by_sku
 
+    _ensure_listing_schema()
+
     store_cfg = STORE_CONFIGS[store_key]
     attempted = 0
-    updated = 0
+    listing_upserted = 0
+    category_updated = 0
     errors = 0
     missing = 0
     no_cat = 0
@@ -419,14 +586,17 @@ def backfill_categories_via_of21(store_key: str, shop_skus: List[str],
         attempted += 1
         try:
             offer = get_offer_by_sku(store_key, sku)
+            # write 1: mirakl_listing
+            if _upsert_listing_row(store_cfg, offer) > 0:
+                listing_upserted += 1
+            # write 2: offerprice_listing.category
             cat = (offer.get("category_label") or offer.get("category_code") or "").strip()
             if not cat:
                 no_cat += 1
             else:
                 if _update_category_row(store_cfg, sku, cat) > 0:
-                    updated += 1
+                    category_updated += 1
         except RuntimeError as exc:
-            # SKU is gone from Mirakl, or returned no offer
             msg = str(exc)
             if "no offer" in msg:
                 missing += 1
@@ -442,7 +612,8 @@ def backfill_categories_via_of21(store_key: str, shop_skus: List[str],
             rate = idx / elapsed if elapsed > 0 else 0
             remain_sec = (len(shop_skus) - idx) / rate if rate > 0 else 0
             print(f"[backfill][{store_key}] {idx}/{len(shop_skus)}  "
-                  f"updated={updated} missing={missing} no_cat={no_cat} errors={errors}  "
+                  f"listing={listing_upserted} cat={category_updated} "
+                  f"missing={missing} no_cat={no_cat} errors={errors}  "
                   f"eta={int(remain_sec//60)}m{int(remain_sec%60)}s")
 
         if sleep_seconds > 0 and idx < len(shop_skus):
@@ -450,12 +621,18 @@ def backfill_categories_via_of21(store_key: str, shop_skus: List[str],
 
     return {
         "attempted": attempted,
-        "updated": updated,
+        "listing_upserted": listing_upserted,
+        "category_updated": category_updated,
         "errors": errors,
         "missing_in_mirakl": missing,
         "no_category": no_cat,
         "duration_seconds": round((datetime.now() - started_at).total_seconds(), 1),
     }
+
+
+# Backward-compat alias - existing OF52 sync path & old scripts call this name.
+# Identical behaviour to backfill_listing_via_of21 now (it writes both tables).
+backfill_categories_via_of21 = backfill_listing_via_of21
 
 
 def run_offer_listing_sync(
