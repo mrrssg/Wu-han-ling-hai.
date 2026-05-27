@@ -241,7 +241,10 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
 ON DUPLICATE KEY UPDATE
     sku = VALUES(sku),
     title = VALUES(title),
-    category = VALUES(category),
+    -- COALESCE keeps a previously-backfilled category alive when the OF52 row
+    -- comes in with NULL (OF52 never returns category_label/code; only OF21
+    -- does). Without COALESCE every nightly cron would clobber backfilled values.
+    category = COALESCE(VALUES(category), category),
     price = VALUES(price),
     quantity = VALUES(quantity),
     status = VALUES(status),
@@ -287,10 +290,10 @@ def _fetch_mapping(shop_skus: List[str]) -> Dict[str, str]:
         conn.close()
 
 
-def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) -> Dict[str, int]:
+def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) -> Dict[str, Any]:
     store_cfg = STORE_CONFIGS[store_key]
     if not offers:
-        return {"total": 0, "affected": 0, "with_warehouse_sku": 0}
+        return {"total": 0, "affected": 0, "with_warehouse_sku": 0, "new_count": 0, "new_skus": []}
 
     shop_skus = [
         str(o.get("shop_sku") or "").strip()
@@ -301,6 +304,7 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
+    incoming_skus: List[str] = []
     with_wh = 0
     for offer in offers:
         shop_sku = str(offer.get("shop_sku") or "").strip()
@@ -309,31 +313,37 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
         warehouse_sku = mapping.get(shop_sku)
         if warehouse_sku:
             with_wh += 1
+        incoming_skus.append(shop_sku)
         rows.append(_build_row(offer, store_cfg, warehouse_sku, source_export_id, now_str))
 
     conn = DBManager.get_connection()
     affected = 0
+    new_skus: List[str] = []
     try:
         with conn.cursor() as cursor:
-            # row count before, to derive "newly added offers"
-            cursor.execute(
-                """SELECT COUNT(*) AS c FROM order_system.offerprice_listing
-                   WHERE platform=%s AND shop_name=%s""",
-                (store_cfg["platform"], store_cfg["shop_name"]),
-            )
-            count_before = int((cursor.fetchone() or {}).get("c") or 0)
+            # Diff incoming SKUs against current DB so we can return the exact
+            # set that will be INSERTed (vs UPDATEd). Needed for the OF21
+            # category-backfill step in run_offer_listing_sync; rowcount alone
+            # cannot tell INSERTs apart from UPDATEs in an ON DUPLICATE batch.
+            existing_skus: set = set()
+            chunk_sku = 1000
+            for i in range(0, len(incoming_skus), chunk_sku):
+                part = incoming_skus[i:i + chunk_sku]
+                placeholders = ",".join(["%s"] * len(part))
+                cursor.execute(
+                    f"""SELECT shop_sku FROM order_system.offerprice_listing
+                         WHERE platform=%s AND shop_name=%s
+                           AND shop_sku IN ({placeholders})""",
+                    (store_cfg["platform"], store_cfg["shop_name"], *part),
+                )
+                existing_skus.update(str(r.get("shop_sku") or "").strip()
+                                     for r in cursor.fetchall())
+            new_skus = [s for s in incoming_skus if s not in existing_skus]
 
             chunk = 500
             for i in range(0, len(rows), chunk):
                 cursor.executemany(UPSERT_SQL, rows[i:i + chunk])
                 affected += cursor.rowcount or 0
-
-            cursor.execute(
-                """SELECT COUNT(*) AS c FROM order_system.offerprice_listing
-                   WHERE platform=%s AND shop_name=%s""",
-                (store_cfg["platform"], store_cfg["shop_name"]),
-            )
-            count_after = int((cursor.fetchone() or {}).get("c") or 0)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -345,7 +355,106 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
         "total": len(rows),
         "affected": affected,
         "with_warehouse_sku": with_wh,
-        "new_count": max(0, count_after - count_before),
+        "new_count": len(new_skus),
+        "new_skus": new_skus,
+    }
+
+
+# =============================================================================
+# Category backfill via OF21 (one OF21 call per SKU)
+# OF52 export does not return category_label/code; OF21 by sku does.
+# Used both at end of every sync (for newly inserted SKUs) and by the
+# one-shot scripts/backfill_categories.py.
+# =============================================================================
+
+CATEGORY_BACKFILL_SLEEP_SECONDS = 2.0   # spacing between OF21 calls; Mirakl has
+                                        # no hard cap but ~2s is the observed
+                                        # natural response time, so this both
+                                        # paces us and avoids stacking requests.
+
+
+def _update_category_row(store_cfg: Dict[str, str], shop_sku: str, category: Optional[str]) -> int:
+    if not category:
+        return 0
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE order_system.offerprice_listing
+                      SET category=%s
+                    WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+                (category, store_cfg["platform"], store_cfg["shop_name"], shop_sku),
+            )
+            affected = cursor.rowcount or 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
+def backfill_categories_via_of21(store_key: str, shop_skus: List[str],
+                                 *, sleep_seconds: float = CATEGORY_BACKFILL_SLEEP_SECONDS,
+                                 progress_every: int = 100) -> Dict[str, Any]:
+    """Call OF21 for each shop_sku and write category_label into
+    offerprice_listing.category. Single-SKU failures are logged and skipped.
+
+    Returns:
+        {attempted, updated, errors, missing_in_mirakl, no_category}
+    """
+    import time
+    from app.services.mirakl_offer_api_service import get_offer_by_sku
+
+    store_cfg = STORE_CONFIGS[store_key]
+    attempted = 0
+    updated = 0
+    errors = 0
+    missing = 0
+    no_cat = 0
+    started_at = datetime.now()
+
+    for idx, sku in enumerate(shop_skus, 1):
+        attempted += 1
+        try:
+            offer = get_offer_by_sku(store_key, sku)
+            cat = (offer.get("category_label") or offer.get("category_code") or "").strip()
+            if not cat:
+                no_cat += 1
+            else:
+                if _update_category_row(store_cfg, sku, cat) > 0:
+                    updated += 1
+        except RuntimeError as exc:
+            # SKU is gone from Mirakl, or returned no offer
+            msg = str(exc)
+            if "no offer" in msg:
+                missing += 1
+            else:
+                errors += 1
+            print(f"[backfill][{store_key}] sku={sku} error: {msg[:200]}")
+        except Exception as exc:
+            errors += 1
+            print(f"[backfill][{store_key}] sku={sku} unexpected: {exc}")
+
+        if idx % progress_every == 0:
+            elapsed = (datetime.now() - started_at).total_seconds()
+            rate = idx / elapsed if elapsed > 0 else 0
+            remain_sec = (len(shop_skus) - idx) / rate if rate > 0 else 0
+            print(f"[backfill][{store_key}] {idx}/{len(shop_skus)}  "
+                  f"updated={updated} missing={missing} no_cat={no_cat} errors={errors}  "
+                  f"eta={int(remain_sec//60)}m{int(remain_sec%60)}s")
+
+        if sleep_seconds > 0 and idx < len(shop_skus):
+            time.sleep(sleep_seconds)
+
+    return {
+        "attempted": attempted,
+        "updated": updated,
+        "errors": errors,
+        "missing_in_mirakl": missing,
+        "no_category": no_cat,
+        "duration_seconds": round((datetime.now() - started_at).total_seconds(), 1),
     }
 
 
@@ -409,6 +518,21 @@ def run_offer_listing_sync(
     _save_cursor(store_key, new_cursor_value, tracking_id, len(offers),
                  "completed", new_count=upsert_stats["new_count"])
 
+    # OF52 never returns category, so newly inserted SKUs land with NULL.
+    # Catch them now via OF21 (one call per SKU, ~2s each, no Mirakl rate cap).
+    # Steady-state this is a handful of calls/day per store.
+    category_backfill = None
+    new_skus = upsert_stats.get("new_skus") or []
+    if new_skus:
+        print(f"[OF52][{store_key}] backfilling category for {len(new_skus)} new SKUs via OF21 ...")
+        try:
+            category_backfill = backfill_categories_via_of21(store_key, new_skus)
+        except Exception as exc:
+            # never fail the OF52 sync just because OF21 backfill blew up;
+            # the one-shot scripts/backfill_categories.py can pick up NULLs later.
+            print(f"[OF52][{store_key}] category backfill aborted: {exc}")
+            category_backfill = {"error": str(exc)[:200]}
+
     return {
         "success": True,
         "store_key": store_key,
@@ -424,4 +548,5 @@ def run_offer_listing_sync(
         "duration_seconds": round((datetime.now() - started).total_seconds(), 2),
         "cursor_was": cursor_val or "(none, full mode)",
         "cursor_advanced_to": new_cursor_value,
+        "category_backfill": category_backfill,
     }
