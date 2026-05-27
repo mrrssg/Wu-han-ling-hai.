@@ -474,6 +474,14 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     if not is_supported(store_key):
         return {"success": False, "msg": f"store not supported: {store_key}"}
     scfg = get_store(store_key)
+    if scfg.get("offer_sync_only"):
+        return {
+            "success": False,
+            "store_key": store_key,
+            "msg": (f"store {store_key} is offer_sync_only - monitor requires "
+                    f"Feishu pricing config; provision the Feishu Mirakl table "
+                    f"and remove offer_sync_only flag first"),
+        }
     formula_variant = scfg["formula_variant"]
 
     # The monitor's lightweight build_of24_payload only knows how to set

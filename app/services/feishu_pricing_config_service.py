@@ -41,6 +41,7 @@ FEISHU_SOURCES: Dict[str, Dict[str, str]] = {
         "label": v["feishu_label"],
     }
     for k, v in REPRICING_STORES.items()
+    if not v.get("offer_sync_only")
 }
 
 PAGE_SIZE = 500

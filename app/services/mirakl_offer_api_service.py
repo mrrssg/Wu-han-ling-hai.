@@ -12,8 +12,13 @@ Key invariants:
 3. Numeric money fields written to Mirakl are `round(v, 2)` -
    see feedback_mirakl_number_precision in memory.
 
-Stores enabled for repricing live in repricing_stores.REPRICING_STORES
-(macy_kuyotq + lowes_autool). _check_store() gates every entry point.
+Stores enabled for repricing live in repricing_stores.REPRICING_STORES.
+- Read-only APIs (OF21/OF52/OF53/chunk download) are gated by _check_store()
+  which accepts any store in REPRICING_STORES, including offer_sync_only ones
+  (macy_wopet, lowes_yasonic) so their offer snapshots can be pulled.
+- OF24 push is gated by _check_store_for_push() which additionally rejects
+  offer_sync_only stores - they have no Feishu pricing config to drive
+  target prices from.
 """
 import json
 import os
@@ -30,16 +35,31 @@ from app.services.mirakl_shipping_service import (
     _request_with_retry,
     load_store_config,
 )
-from app.services.repricing_stores import is_supported as _store_supported
+from app.services.repricing_stores import (
+    get_store as _get_store,
+    is_supported as _store_supported,
+)
 
 
 def _check_store(store_key: str):
+    """Gate for read-only offer APIs (OF21/OF52/OF53/chunk download). Any store
+    registered in REPRICING_STORES is allowed, including offer_sync_only ones.
+    """
     if not _store_supported(store_key):
         raise ValueError(f"store_key not enabled for repricing: {store_key}")
 
 
-# Kept for backward-compat with any external import; prefer repricing_stores.
-SUPPORTED_STORE_KEYS = {"macy_kuyotq", "lowes_autool"}
+def _check_store_for_push(store_key: str):
+    """Stricter gate for OF24 push. offer_sync_only stores are rejected because
+    we have no Feishu pricing config / formula chain for them and pushing
+    would clobber prices we cannot reconstruct.
+    """
+    _check_store(store_key)
+    if _get_store(store_key).get("offer_sync_only"):
+        raise ValueError(
+            f"store_key {store_key!r} is offer_sync_only - OF24 push refused. "
+            f"Provision the Feishu Mirakl table and remove offer_sync_only first."
+        )
 
 # Cooldown configuration. Mirakl OF24 hard cap = 1/min. 65s buffer.
 COOLDOWN_API_NAME = "offers_api"
@@ -387,7 +407,7 @@ def update_offers(
     payload, return it for inspection, and the caller logs status=dry_run.
     Production callers must pass dry_run=False explicitly.
     """
-    _check_store(store_key)
+    _check_store_for_push(store_key)
     if not payload_offers:
         return {"sent": 0, "dry_run": dry_run, "import_id": None}
     if len(payload_offers) > OF24_DEFAULT_BATCH_SIZE * 2:

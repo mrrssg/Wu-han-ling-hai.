@@ -70,6 +70,38 @@ REPRICING_STORES: Dict[str, Dict] = {
         "excel_template": "offers_import_lowes_blank.xlsx",
         "discount_factor_override": None,
     },
+    # offer_sync_only stores: only OF52/OF53 offer snapshot is pulled into
+    # offerprice_listing. Feishu pricing config, monitor dry-run, OF24 push
+    # and full export all reject these store_keys until the user provisions a
+    # Feishu Mirakl table for them and we promote the entry to full repricing.
+    "macy_wopet": {
+        "label": "Macy-Wopet",
+        "platform": "Macy",
+        "shop_name": "wopet",
+        "offer_sync_only": True,
+        "mode": "non_dropship",
+        "push_discount": None,
+        "formula_variant": None,
+        "feishu_app_token": None,
+        "feishu_table_id": None,
+        "feishu_label": None,
+        "excel_template": None,
+        "discount_factor_override": None,
+    },
+    "lowes_yasonic": {
+        "label": "Lowes-Yasonic",
+        "platform": "Lowes",
+        "shop_name": "yasonic",
+        "offer_sync_only": True,
+        "mode": "non_dropship",
+        "push_discount": None,
+        "formula_variant": None,
+        "feishu_app_token": None,
+        "feishu_table_id": None,
+        "feishu_label": None,
+        "excel_template": None,
+        "discount_factor_override": None,
+    },
 }
 
 
@@ -84,10 +116,23 @@ def is_supported(store_key: str) -> bool:
     return store_key in REPRICING_STORES
 
 
+def is_full_repricing(store_key: str) -> bool:
+    """True only for stores wired up to the full repricing pipeline
+    (Feishu config + monitor + OF24 push + full export). offer_sync_only
+    stores return False even though is_supported() is True for them.
+    """
+    cfg = REPRICING_STORES.get(store_key)
+    return bool(cfg) and not cfg.get("offer_sync_only")
+
+
 def all_store_keys() -> List[str]:
     return list(REPRICING_STORES.keys())
 
 
 def store_options() -> Dict[str, str]:
-    """{store_key: label} for UI dropdowns."""
-    return {k: v["label"] for k, v in REPRICING_STORES.items()}
+    """{store_key: label} for UI dropdowns. offer_sync_only stores are hidden
+    from the repricing dashboard - they have no monitor/push/full-export
+    pages to show.
+    """
+    return {k: v["label"] for k, v in REPRICING_STORES.items()
+            if not v.get("offer_sync_only")}

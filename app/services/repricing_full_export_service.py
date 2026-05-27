@@ -461,6 +461,13 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
     Aborts if supplier data is stale.
     """
     scfg = get_store(store_key)               # raises if unsupported
+    if scfg.get("offer_sync_only"):
+        return {
+            "success": False,
+            "store_key": store_key,
+            "msg": (f"store {store_key} is offer_sync_only - full export requires "
+                    f"Feishu pricing config; provision it first"),
+        }
     push_discount = scfg["push_discount"]
     formula_variant = scfg["formula_variant"]
     discount_factor_override = scfg.get("discount_factor_override")
