@@ -81,23 +81,23 @@ class ExportService:
             # B 邮箱
             ws[f"B{row}"] = o.get("customer_email") or ""
 
-            # C 交易时间（没有就用今天）
-            ws[f"C{row}"] = o.get("order_date") or datetime.now().strftime("%m/%d/%Y")
+            # C 交易时间（留空）
+            ws[f"C{row}"] = ""
 
-            # D 收货人国家中文
-            ws[f"D{row}"] = "美国"
+            # D 收货人国家中文（留空）
+            ws[f"D{row}"] = ""
 
-            # E 币种
-            ws[f"E{row}"] = "USD"
+            # E 币种（留空）
+            ws[f"E{row}"] = ""
 
-            # F 订单金额
-            ws[f"F{row}"] = amount
+            # F 订单金额（留空）
+            ws[f"F{row}"] = ""
 
-            # G 收货国家(英文)
-            ws[f"G{row}"] = "United States"
+            # G 收货国家(英文)（留空）
+            ws[f"G{row}"] = ""
 
-            # H 收货国家代码
-            ws[f"H{row}"] = "US"
+            # H 收货国家代码（留空）
+            ws[f"H{row}"] = ""
 
             # I 收货人
             ws[f"I{row}"] = full_name
@@ -129,8 +129,8 @@ class ExportService:
             # R 中文名（你没有就空）
             ws[f"R{row}"] = ""
 
-            # S 商品盒（你截图里这一列经常等于金额）
-            ws[f"S{row}"] = amount
+            # S 商品盒（留空）
+            ws[f"S{row}"] = ""
 
             # T 英文名（没有就空）
             ws[f"T{row}"] = ""
