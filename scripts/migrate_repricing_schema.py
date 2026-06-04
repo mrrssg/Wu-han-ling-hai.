@@ -230,6 +230,45 @@ def create_repricing_full_sync_run(cursor):
     )
 
 
+def fix_offer_pricing_config_pk(cursor):
+    """Re-key order_system.offer_pricing_config from PRIMARY KEY(warehouse_sku)
+    to PRIMARY KEY(warehouse_sku, store_key).
+
+    Why: a supplier SKU sold on BOTH Macy and Lowes shared a single row (the
+    store that synced first kept the row; the later store only updated its data
+    fields, never store_key). The Lowes monitor/full-export filter by
+    store_key and therefore could not see those shared SKUs at all. A composite
+    PK lets each store keep its own config row.
+
+    Idempotent: only rewrites the PK when it is still the single-column
+    warehouse_sku key. warehouse_sku is currently unique, so adding store_key to
+    the key cannot raise a duplicate-key error.
+    """
+    print("[6/6] Fixing order_system.offer_pricing_config PK -> (warehouse_sku, store_key) ...")
+    cursor.execute(
+        """SELECT column_name FROM information_schema.statistics
+           WHERE table_schema='order_system' AND table_name='offer_pricing_config'
+             AND index_name='PRIMARY' ORDER BY seq_in_index"""
+    )
+    rows = cursor.fetchall() or []
+    pk_cols = []
+    for r in rows:
+        name = r.get("column_name") or r.get("COLUMN_NAME")
+        if name:
+            pk_cols.append(name.lower())
+    if pk_cols == ["warehouse_sku", "store_key"]:
+        print("      PK already (warehouse_sku, store_key); skip")
+        return
+    if pk_cols != ["warehouse_sku"]:
+        print(f"      unexpected PK {pk_cols!r}; aborting PK change for safety")
+        return
+    cursor.execute(
+        "ALTER TABLE order_system.offer_pricing_config "
+        "DROP PRIMARY KEY, ADD PRIMARY KEY (warehouse_sku, store_key)"
+    )
+    print("      PK changed to (warehouse_sku, store_key)")
+
+
 def widen_api_call_lock_action(cursor):
     """The original api_call_lock.last_action is ENUM('sync','preview'). Our
     new offers_api lock uses richer action labels (of52_submit, of53_poll,
@@ -268,6 +307,7 @@ def main():
                 create_offer_price_change_log(cursor)
                 create_offer_alert_state(cursor)
                 create_repricing_full_sync_run(cursor)
+                fix_offer_pricing_config_pk(cursor)
             conn.commit()
             print("\nAll migrations OK.")
         except Exception:
