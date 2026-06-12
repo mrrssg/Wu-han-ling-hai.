@@ -4,6 +4,7 @@
 # ============================================================
 
 import os
+import re
 import pandas as pd
 from datetime import datetime
 from app.models.tracking_db_manager import Tracking_DBManager
@@ -207,6 +208,24 @@ def _read_excel_from_upload(file):
     return df
 
 
+def _clean_tracking_value(value):
+    """清洗单元格里的跟踪号：去前导 ' 和引号；多跟踪号按逗号/空白拆开后用 , 拼回。
+
+    下游（DB 存储 + mirakl_shipping_service）的多跟踪号约定就是英文逗号分隔。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if pd.isna(value):
+            return ""
+        if value.is_integer():
+            value = int(value)
+    parts = re.split(r"[,，\s]+", str(value).strip())
+    parts = [p.strip().strip("'\"") for p in parts]
+    parts = [p for p in parts if p and p.lower() != "nan"]
+    return ",".join(parts)
+
+
 def _read_costway_style_excel_from_upload(file):
     df = _read_excel_from_upload(file)
 
@@ -231,6 +250,7 @@ def _read_costway_style_excel_from_upload(file):
 
         if col_name in [
             "trackingnumber",
+            "tracknumber",
             "tracking_number",
             "tracking number",
             "tracking",
@@ -243,6 +263,14 @@ def _read_costway_style_excel_from_upload(file):
         if col_name in ["sku", "SKU", "offer sku", "offer_sku"]:
             order_sku = col
 
+    # FDSUS 新模板坑：TrackNumber 表头列整列为空，跟踪号错位写在右侧无表头列里
+    if tracking_col is not None and df[tracking_col].dropna().empty:
+        col_list = list(df.columns)
+        for col in col_list[col_list.index(tracking_col) + 1:]:
+            if not df[col].dropna().empty:
+                tracking_col = col
+                break
+
     if not order_col or not tracking_col or not order_sku:
         raise Exception(
             f"Excel 缺少必要字段：订单号 / SKU / TrackingNumber，当前列：{df.columns.tolist()}"
@@ -251,6 +279,10 @@ def _read_costway_style_excel_from_upload(file):
     df = df[[order_col, tracking_col, order_sku]].rename(
         columns={order_col: "costwayorder", tracking_col: "tracking", order_sku: "sku"}
     )
+
+    df["tracking"] = df["tracking"].apply(_clean_tracking_value)
+    # 跟踪号为空的行直接丢弃，避免把订单表里已有的 Tracking 覆盖成空
+    df = df[df["tracking"] != ""].reset_index(drop=True)
     return df
 
 
