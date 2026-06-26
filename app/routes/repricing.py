@@ -364,6 +364,67 @@ def blacklist_page():
     )
 
 
+@repricing_bp.route("/loss-alerts")
+def loss_alerts_page():
+    """成交价对账哨兵的告警页：基于真实成交价算出的亏本/低利润订单。
+    覆盖全部 4 个活跃店（含 offer_sync_only 的 wopet/yasonic），所以这里用全店导航。"""
+    store_key = _current_store()
+    sev = (request.args.get("severity") or "all").strip().lower()
+    show_resolved = request.args.get("resolved") == "1"
+
+    where = ["store_key=%s"]
+    params: List[Any] = [store_key]
+    if sev in ("loss", "low_margin"):
+        where.append("severity=%s")
+        params.append(sev)
+    if not show_resolved:
+        where.append("resolved_at IS NULL")
+    rows = _query(
+        f"""SELECT id, order_id, order_line_id, order_created, order_state,
+                   shop_sku, warehouse_sku, supplier, supplier_price, unit_cost,
+                   sale_price_unit, expected_price, quantity, commission_fee,
+                   return_cost_est, line_revenue, line_profit, margin, severity,
+                   detected_at, notified_at, resolved_at
+              FROM order_system.order_guard_alert
+             WHERE {' AND '.join(where)}
+             ORDER BY (severity='loss') DESC, margin ASC, detected_at DESC
+             LIMIT 500""",
+        tuple(params),
+    )
+    counts = _query(
+        """SELECT severity, COUNT(*) c FROM order_system.order_guard_alert
+            WHERE store_key=%s AND resolved_at IS NULL GROUP BY severity""",
+        (store_key,),
+    )
+    count_map = {r["severity"]: int(r["c"]) for r in counts}
+    return render_template(
+        "repricing/loss_alerts.html",
+        store_key=store_key,
+        stores={k: v["label"] for k, v in REPRICING_STORES.items()},
+        rows=rows,
+        severity_filter=sev,
+        show_resolved=show_resolved,
+        loss_count=count_map.get("loss", 0),
+        low_margin_count=count_map.get("low_margin", 0),
+    )
+
+
+@repricing_bp.route("/loss-alerts/<int:alert_id>/resolve", methods=["POST"])
+def loss_alert_resolve(alert_id):
+    """人工标记一条成交价告警为已处理。"""
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE order_system.order_guard_alert SET resolved_at=NOW() WHERE id=%s",
+                (alert_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"success": True, "id": alert_id})
+
+
 # =============================================================================
 # Routes - POST (single-SKU push, blacklist clear)
 # =============================================================================
