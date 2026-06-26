@@ -43,7 +43,7 @@ import requests
 from flask import current_app
 
 from app.models.db_manager import DBManager
-from app.services.repricing_monitor_service import lookup_supplier_price, _to_float
+from app.services.repricing_monitor_service import _to_float
 from app.services.repricing_formula import cost_from_supplier_price, return_shipping_total
 from app.services.repricing_stores import REPRICING_STORES, get_store, all_store_keys
 
@@ -73,9 +73,31 @@ _ORDER_TABLE = {
 # Cost resolution (works for every store, with or without a Feishu config)
 # =============================================================================
 
-def resolve_cost(warehouse_sku: str, supplier_hint: Optional[str] = None
+def load_supplier_prices() -> Dict[str, Dict[str, float]]:
+    """Preload {SKU: Price} for Costway + Vevor in ONE pass each.
+
+    The guard evaluates hundreds of order lines per run; looking each cost up
+    with its own DB round-trip is the N+1 trap that made the old monitor crawl
+    (经验教训 #12). Load both supplier tables into memory once and probe the
+    dicts instead.
+    """
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT SKU, Price FROM autooperate.newestdropship")
+            costway = {r["SKU"]: _to_float(r["Price"]) for r in (cursor.fetchall() or [])}
+            cursor.execute("SELECT SKU, Price FROM autooperate.newestdropship_vevor")
+            vevor = {r["SKU"]: _to_float(r["Price"]) for r in (cursor.fetchall() or [])}
+    finally:
+        conn.close()
+    return {"Costway": costway, "Vevor": vevor}
+
+
+def resolve_cost(warehouse_sku: str, supplier_hint: Optional[str],
+                 price_maps: Dict[str, Dict[str, float]]
                  ) -> Tuple[Optional[str], Optional[float], Optional[float]]:
-    """Return (supplier, supplier_price, unit_cost) for a warehouse_sku.
+    """Return (supplier, supplier_price, unit_cost) for a warehouse_sku using
+    preloaded price maps.
 
     Prefer the configured supplier; otherwise probe Costway then Vevor. Only
     Costway/Vevor have a known cost factor; anything else returns (None,...)
@@ -86,7 +108,7 @@ def resolve_cost(warehouse_sku: str, supplier_hint: Optional[str] = None
     else:
         candidates = ["Costway", "Vevor"]
     for sup in candidates:
-        price, _updated = lookup_supplier_price(warehouse_sku, sup)
+        price = price_maps.get(sup, {}).get(warehouse_sku)
         if price is not None:
             return sup, price, cost_from_supplier_price(price, sup)
     return None, None, None
@@ -95,23 +117,6 @@ def resolve_cost(warehouse_sku: str, supplier_hint: Optional[str] = None
 # =============================================================================
 # Per-store config + offer snapshot maps
 # =============================================================================
-
-def _fetch_offer_map(platform: str, shop_name: str) -> Dict[str, Dict]:
-    """{shop_sku: {warehouse_sku, origin_price, discount_price}} for the store."""
-    conn = DBManager.get_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """SELECT shop_sku, warehouse_sku, origin_price, discount_price
-                     FROM order_system.offerprice_listing
-                    WHERE platform=%s AND shop_name=%s""",
-                (platform, shop_name),
-            )
-            rows = cursor.fetchall() or []
-    finally:
-        conn.close()
-    return {r["shop_sku"]: r for r in rows}
-
 
 def _fetch_config_map(store_key: str) -> Dict[str, Dict]:
     """{warehouse_sku: config_row} for the store (may be empty for
@@ -176,7 +181,8 @@ def _effective_discount_factor(store_key: str, cfg: Optional[Dict]) -> Optional[
     return None
 
 
-def _evaluate_line(store_key: str, row: Dict, cfg: Optional[Dict]) -> Optional[Dict]:
+def _evaluate_line(store_key: str, row: Dict, cfg: Optional[Dict],
+                   price_maps: Dict[str, Dict[str, float]]) -> Optional[Dict]:
     """Return an alert dict if this order line is below the margin threshold,
     else None (healthy / unevaluable)."""
     wh = row.get("warehouse_sku")
@@ -190,7 +196,7 @@ def _evaluate_line(store_key: str, row: Dict, cfg: Optional[Dict]) -> Optional[D
     revenue = sale_unit * qty
 
     supplier = cfg.get("supplier") if cfg else None
-    supplier, supplier_price, unit_cost = resolve_cost(wh, supplier)
+    supplier, supplier_price, unit_cost = resolve_cost(wh, supplier, price_maps)
     if unit_cost is None:
         return None  # unknown supplier/cost -> cannot judge, skip (no false alert)
     cost = unit_cost * qty
@@ -395,21 +401,28 @@ def _push_feishu(text: str) -> Dict[str, Any]:
 # =============================================================================
 
 def run_order_guard(store_key: str, lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
-                    notify: bool = True) -> Dict[str, Any]:
-    """Scan recent orders for one store, record below-threshold lines, notify."""
+                    notify: bool = True,
+                    price_maps: Optional[Dict[str, Dict[str, float]]] = None
+                    ) -> Dict[str, Any]:
+    """Scan recent orders for one store, record below-threshold lines, notify.
+
+    price_maps: pass a preloaded supplier-price map to avoid reloading the
+    supplier tables per store (run_all does this); None -> load here.
+    """
     scfg = get_store(store_key)
     platform = scfg["platform"]
     shop_name = scfg["shop_name"]
     cutoff = datetime.now() - timedelta(hours=lookback_hours)
 
-    offer_map = _fetch_offer_map(platform, shop_name)  # noqa: F841 (kept for parity/debug)
     config_map = _fetch_config_map(store_key)
+    if price_maps is None:
+        price_maps = load_supplier_prices()
     orders = _fetch_recent_orders(platform, shop_name, cutoff)
 
     alerts: List[Dict] = []
     for row in orders:
         cfg = config_map.get(row.get("warehouse_sku"))
-        a = _evaluate_line(store_key, row, cfg)
+        a = _evaluate_line(store_key, row, cfg, price_maps)
         if a is not None:
             alerts.append(a)
 
@@ -441,11 +454,13 @@ def run_order_guard(store_key: str, lookback_hours: int = DEFAULT_LOOKBACK_HOURS
 
 def run_all(lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
             notify: bool = True) -> List[Dict[str, Any]]:
-    """Run the guard for every active Mirakl store."""
+    """Run the guard for every active Mirakl store (supplier tables loaded once)."""
+    price_maps = load_supplier_prices()
     out = []
     for sk in all_store_keys():
         try:
-            out.append(run_order_guard(sk, lookback_hours=lookback_hours, notify=notify))
+            out.append(run_order_guard(sk, lookback_hours=lookback_hours,
+                                       notify=notify, price_maps=price_maps))
         except Exception as exc:  # one store failing must not kill the rest
             out.append({"success": False, "store_key": sk, "error": str(exc)})
     return out
