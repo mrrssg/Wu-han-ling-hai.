@@ -5,7 +5,7 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h4 class="mb-0"><i class="bi bi-funnel"></i> {{ label }} 未发货导出 — 黑名单筛查</h4>
-    <small class="text-muted">命中黑名单的订单已从供应商表中剔除；下方全量表里命中行标红。</small>
+    <small class="text-muted">命中黑名单的订单<strong>不剔除</strong>，在导出表里整行标红 +「黑名单标记」列写明原因，你下载后自行复核处理。</small>
   </div>
   <div>
     <a href="{{ url_for('orders.import_orders') }}" class="btn btn-sm btn-outline-secondary">← 返回</a>
@@ -22,24 +22,24 @@
   </div>
   <div class="col-md-3">
     <div class="card border-0 bg-success bg-opacity-10"><div class="card-body py-2">
-      <div class="text-muted small">✅ 正常（可发供应商）</div>
+      <div class="text-muted small">✅ 正常</div>
       <div class="h3 mb-0 text-success">{{ clean|length }}</div>
     </div></div>
   </div>
   <div class="col-md-3">
     <div class="card border-0 bg-danger bg-opacity-10"><div class="card-body py-2">
-      <div class="text-muted small">⛔ 命中黑名单（已拦截）</div>
+      <div class="text-muted small">⚠️ 命中黑名单（已标红，未剔除）</div>
       <div class="h3 mb-0 text-danger">{{ hits|length }}</div>
     </div></div>
   </div>
   <div class="col-md-3 d-flex align-items-center">
     <div class="d-grid gap-2 w-100">
       <a href="{{ url_for(clean_endpoint) }}" class="btn btn-success">
-        <i class="bi bi-download"></i> 下载正常订单（供应商表）
+        <i class="bi bi-download"></i> 下载全部订单（命中已标红）
       </a>
       {% if hits %}
       <a href="{{ url_for('orders.export_intercept', supplier=supplier) }}" class="btn btn-outline-danger">
-        <i class="bi bi-file-earmark-excel"></i> 下载黑名单拦截清单
+        <i class="bi bi-file-earmark-excel"></i> 只下命中清单（复核用）
       </a>
       {% endif %}
     </div>
@@ -49,7 +49,7 @@
 {% if hits %}
 <div class="alert alert-danger py-2">
   <i class="bi bi-exclamation-triangle"></i>
-  有 <strong>{{ hits|length }}</strong> 个订单命中黑名单，已从供应商导出中剔除，请人工复核（下方红色行）。
+  有 <strong>{{ hits|length }}</strong> 个订单命中黑名单，<strong>未剔除</strong>，已在导出表里整行标红 +「黑名单标记」列注明原因，请下载后逐一复核（下方红色行预览）。
 </div>
 {% else %}
 <div class="alert alert-success py-2">

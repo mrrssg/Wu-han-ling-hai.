@@ -92,15 +92,32 @@ def norm_zip(v) -> str:
     return digits[:5] if len(digits) >= 5 else ""
 
 
+# secondary-unit keywords: everything from here on (suite/apt/unit number) is
+# dropped so "888 Prospect St Ste 200" == "888 Prospect St" (user wants address
+# matching fuzzier — exact unit precision caused misses). 2026-06-29.
+_UNIT_KW = {
+    "ste", "suite", "apt", "apartment", "unit", "rm", "room", "fl", "floor",
+    "bldg", "building", "dept", "space", "spc", "lot", "ph", "no", "number",
+}
+
+
 def norm_addr(v) -> str:
-    """Lowercase, drop punctuation, collapse abbreviations + spaces."""
+    """Lowercase, drop '#nnn' units + punctuation, expand abbreviations, then
+    truncate at the first secondary-unit keyword (Suite/Apt/...). The result is
+    the primary street line only, so suite/apt differences don't break a match."""
     if not v:
         return ""
     s = str(v).lower()
-    s = re.sub(r"[.,#]", " ", s)
+    s = re.sub(r"#\s*\w+", " ", s)          # drop "#200" / "# 200"
+    s = re.sub(r"[.,]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-    tokens = [_ADDR_ABBR.get(t, t) for t in s.split(" ")]
-    return " ".join(t for t in tokens if t)
+    out = []
+    for t in (tok for tok in s.split(" ") if tok):
+        t = _ADDR_ABBR.get(t, t)
+        if t in _UNIT_KW:
+            break
+        out.append(t)
+    return " ".join(out)
 
 
 def _full_name(first, last) -> str:
@@ -200,6 +217,23 @@ def screen_orders(orders: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
             h["_bl_reason"] = m["reason"]
             hits.append(h)
     return clean, hits
+
+
+def annotate_orders(orders: List[Dict]) -> List[Dict]:
+    """Return ALL orders (order preserved), each with `_bl_matched_on` (list)
+    and `_bl_reason` (str). Hits have them filled; clean rows have []/''.
+    Used by exports that MARK blacklisted rows in place instead of dropping
+    them (user reviews + handles manually). Empty blacklist -> all blank."""
+    idx = load_index()
+    empty = not (idx.phones or idx.emails or idx.streets or idx.names)
+    out = []
+    for o in orders:
+        oo = dict(o)
+        m = None if empty else idx.match(o)
+        oo["_bl_matched_on"] = m["matched_on"] if m else []
+        oo["_bl_reason"] = m["reason"] if m else ""
+        out.append(oo)
+    return out
 
 
 # =============================================================================

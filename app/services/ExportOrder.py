@@ -92,11 +92,11 @@ class ExportService:
 
     @staticmethod
     def export_haoya_unshipped_xlsx() -> Tuple[BytesIO, str]:
-        # 取豪雅订单 -> 筛掉黑名单 -> 只导出正常订单
+        # 取豪雅订单 -> 全量导出, 命中黑名单的行做标记(不剔除, 用户复核)
         haoya_orders, haoya_price_map = ExportService._get_supplier_orders('haoya')
-        clean, _hits = blacklist_service.screen_orders(haoya_orders)
+        marked = blacklist_service.annotate_orders(haoya_orders)
 
-        bio = ExportService.build_haoya_xlsx(clean, haoya_price_map)
+        bio = ExportService.build_haoya_xlsx(marked, haoya_price_map)
         filename = f"豪雅_未发货_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return bio, filename
 
@@ -120,6 +120,9 @@ class ExportService:
             except Exception:
                 origin = 0
             return origin * 0.75 if origin else 0
+
+        red_fill = PatternFill(fill_type="solid", fgColor="FFC7CE")
+        ws["AH1"] = "黑名单标记"
 
         for i, o in enumerate(orders):
             row = start_row + i
@@ -231,6 +234,13 @@ class ExportService:
             # AF ionID（平台单号/Costway单号）
             ws[f"AF{row}"] = o.get("order_number") or ""
 
+            # 黑名单命中：整行标红 + 标记列写命中维度/原因（不剔除，用户复核）
+            if o.get("_bl_matched_on"):
+                ws[f"AH{row}"] = ("命中: " + "、".join(o["_bl_matched_on"])
+                                  + " | " + (o.get("_bl_reason") or ""))
+                for col in list(range(1, 33)) + [34]:   # A..AF + AH
+                    ws.cell(row=row, column=col).fill = red_fill
+
         # ✅ 保存到内存流（用于 send_file 下载）
         bio = BytesIO()
         wb.save(bio)
@@ -240,21 +250,21 @@ class ExportService:
 
     @staticmethod
     def export_sishun_unshipped_xlsx() -> Tuple[BytesIO, str]:
-        # 取司顺订单 -> 筛掉黑名单 -> 只导出正常订单
+        # 取司顺订单 -> 全量导出, 命中黑名单的行做标记(不剔除, 用户复核)
         sishun_orders, sishun_price_map = ExportService._get_supplier_orders('sishun')
-        clean, _hits = blacklist_service.screen_orders(sishun_orders)
+        marked = blacklist_service.annotate_orders(sishun_orders)
 
-        bio = ExportService.build_sishun_xlsx(clean, sishun_price_map)
+        bio = ExportService.build_sishun_xlsx(marked, sishun_price_map)
         filename = f"司顺_未发货_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return bio, filename
 
     @staticmethod
     def export_dajian_unshipped_xls() -> Tuple[BytesIO, str]:
-        # 取大建订单 -> 筛掉黑名单 -> 只导出正常订单
+        # 取大建订单 -> 全量导出, 命中黑名单的行做标记(不剔除, 用户复核)
         dajian_orders, _dajian_price_map = ExportService._get_supplier_orders('dajian')
-        clean, _hits = blacklist_service.screen_orders(dajian_orders)
+        marked = blacklist_service.annotate_orders(dajian_orders)
 
-        bio = ExportService.build_dajian_xls(clean)
+        bio = ExportService.build_dajian_xls(marked)
         filename = f"大建_未发货_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xls"
         return bio, filename
 
@@ -280,6 +290,11 @@ class ExportService:
             ws.write(row_idx, col_idx, value)
 
         start_row = 2  # 保留模板前两行（字段名+说明）
+
+        # 黑名单标记列（接在模板最后一列之后）+ 红色样式
+        marker_col = len(headers)
+        red_style = xlwt.easyxf('pattern: pattern solid, fore_colour rose;')
+        ws.write(0, marker_col, "黑名单标记")
 
         for i, o in enumerate(orders, start=0):
             row_idx = start_row + i
@@ -316,6 +331,12 @@ class ExportService:
             write_cell(row_idx, "BuyerSkuLink", "")
             write_cell(row_idx, "OrderComments", "")
 
+            # 黑名单命中：标记列写命中维度/原因（不剔除，用户复核）
+            if o.get("_bl_matched_on"):
+                ws.write(row_idx, marker_col,
+                         "命中: " + "、".join(o["_bl_matched_on"])
+                         + " | " + (o.get("_bl_reason") or ""), red_style)
+
         bio = BytesIO()
         wb.save(bio)
         bio.seek(0)
@@ -341,6 +362,9 @@ class ExportService:
             except Exception:
                 origin = 0
             return origin * 1 if origin else 0
+
+        red_fill = PatternFill(fill_type="solid", fgColor="FFC7CE")
+        ws["S1"] = "黑名单标记"
 
         for i, o in enumerate(orders):
             row = start_row + i
@@ -410,7 +434,12 @@ class ExportService:
             # Q CostwayOrder (WHLH...)
             ws[f"Q{row}"] = o.get("costway_number") or ""
 
-
+            # 黑名单命中：整行标红 + 标记列（不剔除，用户复核）
+            if o.get("_bl_matched_on"):
+                ws[f"S{row}"] = ("命中: " + "、".join(o["_bl_matched_on"])
+                                 + " | " + (o.get("_bl_reason") or ""))
+                for col in list(range(1, 18)) + [19]:   # A..Q + S
+                    ws.cell(row=row, column=col).fill = red_fill
 
         # ✅ 保存到内存流（用于 send_file 下载）
         bio = BytesIO()
