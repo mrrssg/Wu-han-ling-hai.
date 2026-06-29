@@ -92,14 +92,14 @@ REPRICING_STORES: Dict[str, Dict] = {
         "label": "Lowes-Yasonic",
         "platform": "Lowes",
         "shop_name": "yasonic",
-        "offer_sync_only": True,
         "mode": "non_dropship",
-        "push_discount": None,
-        "formula_variant": None,
-        "feishu_app_token": None,
-        "feishu_table_id": None,
-        "feishu_label": None,
-        "excel_template": None,
+        "push_discount": True,                     # non_dropship + uses discount, same as autool
+        "formula_variant": "lowes",
+        "feishu_app_token": FEISHU_APP_TOKEN,
+        "feishu_table_id": "tbldeuRJOoJBfX2g",     # Lowes-Yasonic-Mirakl
+        "feishu_label": "Lowes-Yasonic-Mirakl",
+        # non-Dropship. Lowes template = 18 cols (Macy 19 minus favorite-rank).
+        "excel_template": "offers_import_lowes_blank.xlsx",
         "discount_factor_override": None,
     },
 }
