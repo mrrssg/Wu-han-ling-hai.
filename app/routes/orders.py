@@ -13,6 +13,7 @@ from app.models.db_manager import DBManager
 orders_bp = Blueprint('orders', __name__)
 from flask import send_file
 from app.services.ExportOrder import ExportService
+from app.services import blacklist_service
 from app.services.tracking_service import (
     upload_tracking_file,
     push_tracking_costway,           # ✅ 保留
@@ -208,6 +209,109 @@ def export_dajian_unshipped_xlsx():
         as_attachment=True,
         download_name=filename,
         mimetype="application/vnd.ms-excel",
+    )
+
+
+# =============================================================================
+# 客户黑名单筛查 —— 导出前先过一遍黑名单
+# =============================================================================
+
+_SUPPLIER_EXPORT_ENDPOINT = {
+    "haoya": "orders.export_haoya_unshipped_xlsx",
+    "sishun": "orders.export_sishun_unshipped_xlsx",
+    "dajian": "orders.export_dajian_unshipped_xlsx",
+}
+
+
+@orders_bp.route('/export/screen/<supplier>', methods=['GET'])
+def export_screen(supplier):
+    """导出前的筛查结果页：全量表(命中标红) + 计数 + 下载按钮。"""
+    if supplier not in ExportService.SUPPLIER_TABLE:
+        flash("未知供应商", "danger")
+        return redirect(url_for('orders.import_orders'))
+    res = ExportService.screen_supplier(supplier)
+    return render_template(
+        "order/export_screen.html",
+        supplier=supplier,
+        label=res["label"],
+        total=res["total"],
+        clean=res["clean"],
+        hits=res["hits"],
+        clean_endpoint=_SUPPLIER_EXPORT_ENDPOINT[supplier],
+    )
+
+
+@orders_bp.route('/export/intercept/<supplier>', methods=['GET'])
+def export_intercept(supplier):
+    """下载黑名单拦截清单（命中的订单，供人工复核）。"""
+    if supplier not in ExportService.SUPPLIER_TABLE:
+        flash("未知供应商", "danger")
+        return redirect(url_for('orders.import_orders'))
+    bio, filename = ExportService.export_intercept_xlsx(supplier)
+    return send_file(
+        bio, as_attachment=True, download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@orders_bp.route('/blacklist', methods=['GET'])
+def blacklist_page():
+    return render_template("order/blacklist.html",
+                           rows=blacklist_service.list_entries(active_only=False),
+                           columns=blacklist_service.BLACKLIST_COLUMNS)
+
+
+@orders_bp.route('/blacklist/add', methods=['POST'])
+def blacklist_add():
+    data = {
+        "full_name": request.form.get("full_name"),
+        "phone": request.form.get("phone"),
+        "email": request.form.get("email"),
+        "street": request.form.get("street"),
+        "city": request.form.get("city"),
+        "state": request.form.get("state"),
+        "zip": request.form.get("zip"),
+        "reason": request.form.get("reason"),
+    }
+    ok, msg = blacklist_service.add_entry(data, created_by=session.get("username", ""))
+    flash(msg, "success" if ok else "danger")
+    return redirect(url_for('orders.blacklist_page'))
+
+
+@orders_bp.route('/blacklist/<int:entry_id>/delete', methods=['POST'])
+def blacklist_delete(entry_id):
+    blacklist_service.delete_entry(entry_id)
+    flash("已删除", "success")
+    return redirect(url_for('orders.blacklist_page'))
+
+
+@orders_bp.route('/blacklist/import', methods=['POST'])
+def blacklist_import():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("请选择 Excel 文件", "danger")
+        return redirect(url_for('orders.blacklist_page'))
+    try:
+        r = blacklist_service.import_excel(f, created_by=session.get("username", ""))
+    except Exception as exc:
+        flash(f"导入失败: {exc}", "danger")
+        return redirect(url_for('orders.blacklist_page'))
+    if r.get("error"):
+        flash(r["error"], "danger")
+    else:
+        msg = f"导入完成：成功 {r['imported']} 条，重复跳过 {r['duplicate']} 条，无效跳过 {r['skipped']} 条"
+        flash(msg, "success")
+        for rownum, reason in (r.get("skipped_rows") or [])[:20]:
+            flash(f"第 {rownum} 行跳过：{reason}", "warning")
+    return redirect(url_for('orders.blacklist_page'))
+
+
+@orders_bp.route('/blacklist/template', methods=['GET'])
+def blacklist_template():
+    bio = blacklist_service.make_blank_template()
+    return send_file(
+        bio, as_attachment=True, download_name="黑名单导入模板.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 

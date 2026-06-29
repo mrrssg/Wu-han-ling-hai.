@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} 导出筛查{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-0"><i class="bi bi-funnel"></i> {{ label }} 未发货导出 — 黑名单筛查</h4>
+    <small class="text-muted">命中黑名单的订单已从供应商表中剔除；下方全量表里命中行标红。</small>
+  </div>
+  <div>
+    <a href="{{ url_for('orders.import_orders') }}" class="btn btn-sm btn-outline-secondary">← 返回</a>
+    <a href="{{ url_for('orders.blacklist_page') }}" class="btn btn-sm btn-outline-dark">管理黑名单</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="card border-0 bg-secondary bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">订单总数</div>
+      <div class="h3 mb-0">{{ total }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card border-0 bg-success bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">✅ 正常（可发供应商）</div>
+      <div class="h3 mb-0 text-success">{{ clean|length }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card border-0 bg-danger bg-opacity-10"><div class="card-body py-2">
+      <div class="text-muted small">⛔ 命中黑名单（已拦截）</div>
+      <div class="h3 mb-0 text-danger">{{ hits|length }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3 d-flex align-items-center">
+    <div class="d-grid gap-2 w-100">
+      <a href="{{ url_for(clean_endpoint) }}" class="btn btn-success">
+        <i class="bi bi-download"></i> 下载正常订单（供应商表）
+      </a>
+      {% if hits %}
+      <a href="{{ url_for('orders.export_intercept', supplier=supplier) }}" class="btn btn-outline-danger">
+        <i class="bi bi-file-earmark-excel"></i> 下载黑名单拦截清单
+      </a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if hits %}
+<div class="alert alert-danger py-2">
+  <i class="bi bi-exclamation-triangle"></i>
+  有 <strong>{{ hits|length }}</strong> 个订单命中黑名单，已从供应商导出中剔除，请人工复核（下方红色行）。
+</div>
+{% else %}
+<div class="alert alert-success py-2">
+  <i class="bi bi-check-circle"></i> 本次没有订单命中黑名单。
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>状态</th><th>命中维度</th><th>拉黑原因</th>
+          <th>平台单号</th><th>SKU</th><th>数量</th>
+          <th>收货人</th><th>电话</th><th>邮箱</th>
+          <th>街道</th><th>城市</th><th>州</th><th>邮编</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in hits %}
+        <tr class="table-danger">
+          <td><span class="badge bg-danger">拦截</span></td>
+          <td class="small">{{ o._bl_matched_on|join('、') }}</td>
+          <td class="small">{{ o._bl_reason or '' }}</td>
+          <td class="small"><code>{{ o.order_number or '' }}</code></td>
+          <td class="small">{{ o.sku or '' }}</td>
+          <td class="text-end">{{ o.qty or 1 }}</td>
+          <td>{{ (o.first_name or '') ~ ' ' ~ (o.last_name or '') }}</td>
+          <td class="small">{{ o.phone or '' }}</td>
+          <td class="small">{{ o.customer_email or '' }}</td>
+          <td class="small">{{ o.street or '' }}</td>
+          <td class="small">{{ o.city or '' }}</td>
+          <td class="small">{{ o.region or '' }}</td>
+          <td class="small">{{ o.postcode or '' }}</td>
+        </tr>
+        {% endfor %}
+        {% for o in clean %}
+        <tr>
+          <td><span class="badge bg-success">正常</span></td>
+          <td></td><td></td>
+          <td class="small"><code>{{ o.order_number or '' }}</code></td>
+          <td class="small">{{ o.sku or '' }}</td>
+          <td class="text-end">{{ o.qty or 1 }}</td>
+          <td>{{ (o.first_name or '') ~ ' ' ~ (o.last_name or '') }}</td>
+          <td class="small">{{ o.phone or '' }}</td>
+          <td class="small">{{ o.customer_email or '' }}</td>
+          <td class="small">{{ o.street or '' }}</td>
+          <td class="small">{{ o.city or '' }}</td>
+          <td class="small">{{ o.region or '' }}</td>
+          <td class="small">{{ o.postcode or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

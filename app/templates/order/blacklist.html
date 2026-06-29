@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}客户黑名单{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-0"><i class="bi bi-person-x"></i> 客户黑名单</h4>
+    <small class="text-muted">导出 豪雅 / 司顺 / 大建 未发货订单时，命中的客户会被自动剔除并单列。</small>
+  </div>
+  <a href="{{ url_for('orders.import_orders') }}" class="btn btn-sm btn-outline-secondary">← 返回导出</a>
+</div>
+
+<div class="row g-3 mb-4">
+  <!-- 录入窗口 -->
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header bg-white"><i class="bi bi-plus-circle"></i> 手动录入黑名单</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('orders.blacklist_add') }}">
+          <div class="row g-2">
+            <div class="col-md-6"><label class="form-label small">姓名</label>
+              <input name="full_name" class="form-control form-control-sm" placeholder="John Smith"></div>
+            <div class="col-md-6"><label class="form-label small">电话</label>
+              <input name="phone" class="form-control form-control-sm" placeholder="(415) 555-1234"></div>
+            <div class="col-md-6"><label class="form-label small">邮箱</label>
+              <input name="email" class="form-control form-control-sm" placeholder="bad@example.com"></div>
+            <div class="col-md-6"><label class="form-label small">街道</label>
+              <input name="street" class="form-control form-control-sm" placeholder="123 Main St Apt 4"></div>
+            <div class="col-md-4"><label class="form-label small">城市</label>
+              <input name="city" class="form-control form-control-sm" placeholder="San Jose"></div>
+            <div class="col-md-3"><label class="form-label small">州</label>
+              <input name="state" class="form-control form-control-sm" placeholder="CA"></div>
+            <div class="col-md-5"><label class="form-label small">邮编</label>
+              <input name="zip" class="form-control form-control-sm" placeholder="95112"></div>
+            <div class="col-12"><label class="form-label small">拉黑原因</label>
+              <input name="reason" class="form-control form-control-sm" placeholder="恶意退货 / 欺诈拒付 / 多次拒收…"></div>
+          </div>
+          <div class="form-text mt-2">
+            至少填一种可匹配信号：<strong>电话</strong> / <strong>邮箱</strong> /
+            <strong>街道+邮编</strong> / <strong>姓名+(邮编或城市)</strong>。
+            只填姓名无法匹配（防同名误杀）。
+          </div>
+          <button class="btn btn-danger btn-sm mt-2"><i class="bi bi-plus-lg"></i> 加入黑名单</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Excel 导入 -->
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header bg-white"><i class="bi bi-file-earmark-excel"></i> Excel 批量导入</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('orders.blacklist_import') }}" enctype="multipart/form-data">
+          <input type="file" name="file" accept=".xlsx" class="form-control form-control-sm mb-2" required>
+          <button class="btn btn-outline-danger btn-sm"><i class="bi bi-upload"></i> 导入</button>
+          <a href="{{ url_for('orders.blacklist_template') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-download"></i> 下载空白模板
+          </a>
+        </form>
+        <div class="form-text mt-2">
+          模板列：{{ columns|join(' / ') }}。<br>
+          规则与手动录入一致，无可匹配信号的行会被跳过并提示。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header bg-white d-flex justify-content-between">
+    <span><i class="bi bi-list-ul"></i> 黑名单列表</span>
+    <span class="text-muted">共 {{ rows|length }} 条</span>
+  </div>
+  {% if not rows %}
+  <div class="card-body text-muted">还没有黑名单记录。</div>
+  {% else %}
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>姓名</th><th>电话</th><th>邮箱</th><th>街道</th><th>城市</th><th>州</th><th>邮编</th>
+          <th>原因</th><th>来源</th><th>添加人</th><th>添加时间</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr {% if not r.active %}class="text-muted"{% endif %}>
+          <td>{{ r.full_name or '' }}</td>
+          <td class="small">{{ r.phone or '' }}</td>
+          <td class="small">{{ r.email or '' }}</td>
+          <td class="small">{{ r.street or '' }}</td>
+          <td class="small">{{ r.city or '' }}</td>
+          <td class="small">{{ r.state or '' }}</td>
+          <td class="small">{{ r.zip or '' }}</td>
+          <td class="small">{{ r.reason or '' }}</td>
+          <td><span class="badge bg-light text-dark">{{ r.source }}</span></td>
+          <td class="small">{{ r.created_by or '' }}</td>
+          <td class="small">{{ r.created_at }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('orders.blacklist_delete', entry_id=r.id) }}"
+                  onsubmit="return confirm('删除这条黑名单？');" class="d-inline">
+              <button class="btn btn-sm btn-outline-danger py-0">删除</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

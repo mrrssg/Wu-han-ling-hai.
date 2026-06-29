@@ -84,27 +84,32 @@
             <h6 class="mb-0"><i class="bi bi-download"></i> 导出未发货订单</h6>
           </div>
           <div class="card-body">
-            <p class="text-muted mb-3">按供应商导出未发货订单（XLSX）</p>
+            <p class="text-muted mb-3">按供应商导出未发货订单（XLSX）。导出前会先过一遍<strong>客户黑名单</strong>，命中的订单会被剔除并单列复核。</p>
 
             <div class="d-flex gap-2 flex-wrap">
               <a class="btn btn-outline-primary"
-                 href="{{ url_for('orders.export_haoya_unshipped_xlsx') }}">
+                 href="{{ url_for('orders.export_screen', supplier='haoya') }}">
                 导出 豪雅 未发货
               </a>
 
               <a class="btn btn-outline-primary"
-                 href="{{ url_for('orders.export_sishun_unshipped_xlsx') }}">
+                 href="{{ url_for('orders.export_screen', supplier='sishun') }}">
                 导出 司顺 未发货
               </a>
 
               <a class="btn btn-outline-primary"
-                 href="{{ url_for('orders.export_dajian_unshipped_xlsx') }}">
+                 href="{{ url_for('orders.export_screen', supplier='dajian') }}">
                 导出 大建 未发货
+              </a>
+
+              <a class="btn btn-outline-dark ms-auto"
+                 href="{{ url_for('orders.blacklist_page') }}">
+                <i class="bi bi-person-x"></i> 管理客户黑名单
               </a>
             </div>
 
             <div class="form-text mt-2">
-              如点击后 404，说明后端路由函数名不同，把 url_for 的 endpoint 改成实际名称。
+              点击后进入「筛查结果页」：可下载 ① 正常订单（供应商表，已剔除黑名单）和 ② 黑名单拦截清单。
             </div>
           </div>
         </div>
