@@ -101,7 +101,7 @@ class _BlacklistIndex:
     def __init__(self, rows: List[Dict]):
         self.phones: Dict[str, Dict] = {}
         self.emails: Dict[str, Dict] = {}
-        self.addrs: Dict[Tuple[str, str], Dict] = {}       # (street_norm, zip5)
+        self.streets: Dict[str, Dict] = {}                 # street_norm (alone)
         self.names: Dict[str, Dict] = {}                   # name_norm (exact)
         for r in rows:
             p = norm_phone(r.get("phone"))
@@ -111,10 +111,9 @@ class _BlacklistIndex:
             if e:
                 self.emails.setdefault(e, r)
             street = norm_addr(r.get("street"))
-            z = norm_zip(r.get("zip"))
             name = norm_text(r.get("full_name"))
-            if street and z:
-                self.addrs.setdefault((street, z), r)
+            if street:
+                self.streets.setdefault(street, r)
             if name:
                 self.names.setdefault(name, r)
 
@@ -124,7 +123,6 @@ class _BlacklistIndex:
         phone = norm_phone(order.get("phone"))
         email = norm_email(order.get("customer_email"))
         street = norm_addr(order.get("street"))
-        z = norm_zip(order.get("postcode"))
 
         matched_on: List[str] = []
         hit_entry: Optional[Dict] = None
@@ -139,8 +137,9 @@ class _BlacklistIndex:
             take(self.phones[phone], "电话")
         if email and email in self.emails:
             take(self.emails[email], "邮箱")
-        if street and z and (street, z) in self.addrs:
-            take(self.addrs[(street, z)], "地址")
+        # street alone blocks (zip no longer required), per user request 2026-06-29
+        if street and street in self.streets:
+            take(self.streets[street], "地址")
         # name now blocks on its own (normalised exact match), per user request
         # 2026-06-29 — Prop65 entity names are distinctive so false-positive risk
         # is low; common personal names added manually could over-match.
@@ -169,7 +168,7 @@ def screen_orders(orders: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
     `_bl_matched_on` (list) and `_bl_reason` (str). If the blacklist is empty
     nothing is filtered (clean == orders)."""
     idx = load_index()
-    if not (idx.phones or idx.emails or idx.addrs or idx.name_zip or idx.name_city):
+    if not (idx.phones or idx.emails or idx.streets or idx.names):
         return list(orders), []
     clean, hits = [], []
     for o in orders:
@@ -205,13 +204,13 @@ def list_entries(active_only: bool = False) -> List[Dict]:
 
 
 def _has_usable_signal(d: Dict) -> bool:
-    """A row can only match an order if it carries phone, email, street+zip, or
-    a name. (Name now matches on its own — user request 2026-06-29.)"""
+    """A row can only match an order if it carries phone, email, street, or a
+    name. (Street and name each match on their own — user request 2026-06-29.)"""
     if norm_phone(d.get("phone")):
         return True
     if norm_email(d.get("email")):
         return True
-    if norm_addr(d.get("street")) and norm_zip(d.get("zip")):
+    if norm_addr(d.get("street")):
         return True
     if norm_text(d.get("full_name")):
         return True
