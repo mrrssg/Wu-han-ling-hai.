@@ -66,6 +66,25 @@ def norm_text(v) -> str:
     return re.sub(r"\s+", " ", str(v).strip().lower()) if v else ""
 
 
+# company/entity suffixes dropped from names so "CalSafe Research Center, Inc."
+# matches "Calsafe Research Center Inc" / "... LLC" / "... Inc."
+_COMPANY_SUFFIXES = {
+    "inc", "incorporated", "llc", "llp", "lp", "llp", "corp", "corporation",
+    "ltd", "limited", "pc", "apc", "plc", "pa", "co", "company",
+}
+
+
+def norm_name(v) -> str:
+    """Normalise a name for matching: lowercase, strip punctuation, drop common
+    company suffixes, collapse spaces. (User request 2026-06-29 — Prop65 entity
+    names carry ', Inc.' / ', LLC' / periods that buyers often omit.)"""
+    if not v:
+        return ""
+    s = re.sub(r"[^\w\s]", " ", str(v).lower(), flags=re.UNICODE)
+    tokens = [t for t in re.split(r"\s+", s.strip()) if t and t not in _COMPANY_SUFFIXES]
+    return " ".join(tokens)
+
+
 def norm_zip(v) -> str:
     if not v:
         return ""
@@ -111,7 +130,7 @@ class _BlacklistIndex:
             if e:
                 self.emails.setdefault(e, r)
             street = norm_addr(r.get("street"))
-            name = norm_text(r.get("full_name"))
+            name = norm_name(r.get("full_name"))
             if street:
                 self.streets.setdefault(street, r)
             if name:
@@ -119,7 +138,7 @@ class _BlacklistIndex:
 
     def match(self, order: Dict) -> Optional[Dict]:
         """Return {'matched_on': [...], 'reason': str, 'entry_id': id} or None."""
-        name = norm_text(_full_name(order.get("first_name"), order.get("last_name")))
+        name = norm_name(_full_name(order.get("first_name"), order.get("last_name")))
         phone = norm_phone(order.get("phone"))
         email = norm_email(order.get("customer_email"))
         street = norm_addr(order.get("street"))
@@ -212,7 +231,7 @@ def _has_usable_signal(d: Dict) -> bool:
         return True
     if norm_addr(d.get("street")):
         return True
-    if norm_text(d.get("full_name")):
+    if norm_name(d.get("full_name")):
         return True
     return False
 
@@ -256,7 +275,7 @@ def delete_entry(entry_id: int) -> None:
 def _dup_key(d: Dict) -> Tuple:
     return (norm_phone(d.get("phone")), norm_email(d.get("email")),
             norm_addr(d.get("street")), norm_zip(d.get("zip")),
-            norm_text(d.get("full_name")), norm_text(d.get("city")))
+            norm_name(d.get("full_name")), norm_text(d.get("city")))
 
 
 # =============================================================================
