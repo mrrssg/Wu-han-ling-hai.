@@ -102,8 +102,7 @@ class _BlacklistIndex:
         self.phones: Dict[str, Dict] = {}
         self.emails: Dict[str, Dict] = {}
         self.addrs: Dict[Tuple[str, str], Dict] = {}       # (street_norm, zip5)
-        self.name_zip: Dict[Tuple[str, str], Dict] = {}    # (name_norm, zip5)
-        self.name_city: Dict[Tuple[str, str], Dict] = {}   # (name_norm, city_norm)
+        self.names: Dict[str, Dict] = {}                   # name_norm (exact)
         for r in rows:
             p = norm_phone(r.get("phone"))
             if p:
@@ -113,14 +112,11 @@ class _BlacklistIndex:
                 self.emails.setdefault(e, r)
             street = norm_addr(r.get("street"))
             z = norm_zip(r.get("zip"))
-            city = norm_text(r.get("city"))
             name = norm_text(r.get("full_name"))
             if street and z:
                 self.addrs.setdefault((street, z), r)
-            if name and z:
-                self.name_zip.setdefault((name, z), r)
-            if name and city:
-                self.name_city.setdefault((name, city), r)
+            if name:
+                self.names.setdefault(name, r)
 
     def match(self, order: Dict) -> Optional[Dict]:
         """Return {'matched_on': [...], 'reason': str, 'entry_id': id} or None."""
@@ -129,7 +125,6 @@ class _BlacklistIndex:
         email = norm_email(order.get("customer_email"))
         street = norm_addr(order.get("street"))
         z = norm_zip(order.get("postcode"))
-        city = norm_text(order.get("city"))
 
         matched_on: List[str] = []
         hit_entry: Optional[Dict] = None
@@ -146,11 +141,11 @@ class _BlacklistIndex:
             take(self.emails[email], "邮箱")
         if street and z and (street, z) in self.addrs:
             take(self.addrs[(street, z)], "地址")
-        # name alone never blocks: require zip OR city alongside the name
-        if name and z and (name, z) in self.name_zip:
-            take(self.name_zip[(name, z)], "姓名+邮编")
-        if name and city and (name, city) in self.name_city:
-            take(self.name_city[(name, city)], "姓名+城市")
+        # name now blocks on its own (normalised exact match), per user request
+        # 2026-06-29 — Prop65 entity names are distinctive so false-positive risk
+        # is low; common personal names added manually could over-match.
+        if name and name in self.names:
+            take(self.names[name], "姓名")
 
         if not matched_on:
             return None
@@ -211,14 +206,14 @@ def list_entries(active_only: bool = False) -> List[Dict]:
 
 def _has_usable_signal(d: Dict) -> bool:
     """A row can only match an order if it carries phone, email, street+zip, or
-    name+(zip|city). Name-only / city-only / zip-only rows are useless."""
+    a name. (Name now matches on its own — user request 2026-06-29.)"""
     if norm_phone(d.get("phone")):
         return True
     if norm_email(d.get("email")):
         return True
     if norm_addr(d.get("street")) and norm_zip(d.get("zip")):
         return True
-    if norm_text(d.get("full_name")) and (norm_zip(d.get("zip")) or norm_text(d.get("city"))):
+    if norm_text(d.get("full_name")):
         return True
     return False
 
