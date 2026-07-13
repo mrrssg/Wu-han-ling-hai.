@@ -133,11 +133,13 @@ const HELP = {
     '下限1%上限8%，防止一次跳太多掉量。'+
     '<span class="src"><b>数据源</b>：profit_sku_90d；建议幅度是算术结果，最终以你确认为准</span>'},
 };
+document.addEventListener('DOMContentLoaded', () => {
 document.querySelectorAll('[data-help]').forEach(el => {
   const h = HELP[el.dataset.help];
   if (!h) return;
   new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
     trigger:'focus', placement:'bottom', container:'body'});
+});
 });
 </script>
 {% endblock %}

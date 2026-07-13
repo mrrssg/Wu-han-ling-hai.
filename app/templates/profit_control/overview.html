@@ -293,11 +293,13 @@ const HELP = {
     '<span class="src">退货日取 MySQL mirakl_returns 的真实创建时间，查不到的用下单日。'+
     '财务回填退款后，次日05:30自动改判</span>'},
 };
+document.addEventListener('DOMContentLoaded', () => {
 document.querySelectorAll('[data-help]').forEach(el => {
   const h = HELP[el.dataset.help];
   if (!h) return;
   new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
     trigger:'focus', placement:'bottom', container:'body'});
+});
 });
 </script>
 {% endblock %}

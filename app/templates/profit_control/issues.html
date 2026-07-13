@@ -83,6 +83,7 @@
 <p class="small text-muted mt-2">问题由每日聚合job的规则引擎自动检出/自动消失（连续未检出标记"已消失"）。Phase 2 将支持"确认处理→生成行动"流转。</p>
 
 <script>
+document.addEventListener('DOMContentLoaded', () => {
 document.querySelectorAll('[data-help]').forEach(el => {
   new bootstrap.Popover(el, {title:'5条检测规则（每天05:30扫一遍）', html:true,
     trigger:'focus', placement:'bottom', container:'body', content:
@@ -92,6 +93,7 @@ document.querySelectorAll('[data-help]').forEach(el => {
     '<b>数据滞后</b>：45-90天前订单的「实际成本」回填率&lt;50%（提醒财务导账单）<br>'+
     '<b>退货异动</b>：某店近7天退货笔数&gt;前4周周均的2倍（≥5笔才报）<br>'+
     '数据源：飞书订单表(tbl4LDs0H5M8Pq5n) + mirakl_returns + profit_cell_daily/profit_sku_90d/return_case'});
+});
 });
 </script>
 {% endblock %}
