@@ -369,11 +369,14 @@ def monthly():
                            "total": sum(m["loss"] for m in months_list),
                            "months": months_list})
 
-    # 每月"未记全的退货"数量（买家退款未入账 或 账单未导入）→ 活账本按钮
+    # 每月"未记全的退货"数量 → 活账本按钮
+    # 判定：账单未导入(income_actual IS NULL) 或 实际利润仍>0(退货后果没体现在账上)。
+    # 注意不能只看"实际到账>1"——部分退款的单到账留有余额但亏损已入账(实际利润为负)，不算未记全。
     unbooked_counts = {r["m"]: int(r["n"]) for r in _query(
         """SELECT DATE_FORMAT(order_date,'%Y-%m') AS m, COUNT(*) AS n
            FROM order_system.return_case
-           WHERE income_actual IS NULL OR income_actual > 1
+           WHERE income_actual IS NULL
+              OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0)
            GROUP BY DATE_FORMAT(order_date,'%Y-%m')""")}
 
     # 每月活账本：条形图宽度 + 白话行
@@ -402,14 +405,17 @@ def monthly():
 @profit_control_bp.route("/monthly/unbooked")
 def monthly_unbooked():
     """某订单月里"退货了但流水还没记全"的订单明细。
-    判定：income_actual IS NULL（账单还没导入）或 income_actual > 1（买家退款未入账）。"""
+    判定：income_actual IS NULL（账单还没导入）或 实际利润仍>0（退货后果没体现在账上）。
+    部分退款的单（到账留余额但实际利润已为负，如 4720321679-A）不算未记全。"""
     month = (request.args.get("month") or "")[:7]
     rows = _query(
         """SELECT order_id, store, operator, supplier, shop_sku, order_date, return_date,
-                  age_days, sale, cost, income_actual, supplier_refund, return_fee, state
+                  age_days, sale, cost, income_actual, profit_actual, supplier_refund,
+                  return_fee, state
            FROM order_system.return_case
            WHERE DATE_FORMAT(order_date,'%%Y-%%m') = %s
-             AND (income_actual IS NULL OR income_actual > 1)
+             AND (income_actual IS NULL
+                  OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0))
            ORDER BY income_actual DESC, cost DESC""", (month,))
     for r in rows:
         r["status"] = "账单未导入" if r["income_actual"] is None else "买家退款未入账"

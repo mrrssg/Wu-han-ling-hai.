@@ -159,6 +159,8 @@ ALTERS = [
     "ALTER TABLE order_system.return_case ADD COLUMN sale DECIMAL(10,2) DEFAULT NULL COMMENT '售价(整单总价)'",
     "ALTER TABLE order_system.return_case ADD COLUMN income_actual DECIMAL(10,2) DEFAULT NULL "
     "COMMENT '实际到账快照(买家退款入账后≈0; >1=退款未入账; NULL=账单未导入)'",
+    "ALTER TABLE order_system.return_case ADD COLUMN profit_actual DECIMAL(10,2) DEFAULT NULL "
+    "COMMENT '飞书实际利润快照(仍>0=退货后果未体现在账上)'",
 ]
 
 
