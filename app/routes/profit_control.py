@@ -372,11 +372,13 @@ def monthly():
     # 每月"未记全的退货"数量 → 活账本按钮
     # 判定：账单未导入(income_actual IS NULL) 或 实际利润仍>0(退货后果没体现在账上)。
     # 注意不能只看"实际到账>1"——部分退款的单到账留有余额但亏损已入账(实际利润为负)，不算未记全。
+    # 用户规则(2026-07-13)：有「供应商退款」的单一律视为已闭环，不进未记全清单
     unbooked_counts = {r["m"]: int(r["n"]) for r in _query(
         """SELECT DATE_FORMAT(order_date,'%Y-%m') AS m, COUNT(*) AS n
            FROM order_system.return_case
-           WHERE income_actual IS NULL
-              OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0)
+           WHERE COALESCE(supplier_refund, 0) <= 0
+             AND (income_actual IS NULL
+                  OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0))
            GROUP BY DATE_FORMAT(order_date,'%Y-%m')""")}
 
     # 每月活账本：条形图宽度 + 白话行
@@ -414,6 +416,7 @@ def monthly_unbooked():
                   return_fee, state
            FROM order_system.return_case
            WHERE DATE_FORMAT(order_date,'%%Y-%%m') = %s
+             AND COALESCE(supplier_refund, 0) <= 0
              AND (income_actual IS NULL
                   OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0))
            ORDER BY income_actual DESC, cost DESC""", (month,))
