@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}利润控制台 - 行动清单{% endblock %}
 {% block content %}
+<style>
+.pc-i { cursor:pointer; color:#898781; margin-left:4px; text-decoration:none; }
+.pc-i:hover { color:#2a78d6; }
+.popover { max-width: 360px; }
+.popover-body { font-size:.82rem; line-height:1.5; }
+.popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
+  padding:4px 8px; margin-top:6px; display:block; }
+</style>
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h4 class="mb-0"><i class="bi bi-list-check"></i> 行动清单
     <small class="text-muted fs-6 ms-2">Phase 1 为只读建议；执行（OF21/OF24推价）在 Phase 2 接入</small></h4>
@@ -22,7 +30,7 @@
   {# ================= 追款 ================= #}
   <div class="tab-pane fade show active" id="tab-recover">
     <div class="d-flex justify-content-between align-items-center mb-2">
-      <span class="text-muted small">供应商退款未回填的退货单（货值≥$20），按敞口从大到小。财务对账回填「供应商退款」后自动核销。</span>
+      <span class="text-muted small">供应商退款未回填的退货单（货值≥$20），按敞口从大到小。财务对账回填「供应商退款」后自动核销。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_recover"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
         <i class="bi bi-download"></i> 导出CSV（全量{{ counts.recover }}笔）</a>
     </div>
@@ -52,7 +60,7 @@
   {# ================= 下架 ================= #}
   <div class="tab-pane fade" id="tab-delist">
     <div class="d-flex justify-content-between align-items-center mb-2">
-      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU：卖得越多亏得越多，建议下架或查listing是否引导了错误预期。</span>
+      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU：卖得越多亏得越多，建议下架或查listing是否引导了错误预期。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_delist"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='delist') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
@@ -80,7 +88,7 @@
   {# ================= 提价 ================= #}
   <div class="tab-pane fade" id="tab-raise">
     <div class="d-flex justify-content-between align-items-center mb-2">
-      <span class="text-muted small">90天销售≥$1000、≥5单、净利率低于基线但没亏穿的SKU。建议幅度=补到基线并摊掉佣金（上限8%）。</span>
+      <span class="text-muted small">90天销售≥$1000、≥5单、净利率低于基线但没亏穿的SKU。建议幅度=补到基线并摊掉佣金（上限8%）。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_raise"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='raise') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
@@ -105,4 +113,31 @@
   </div>
 
 </div>
+
+<script>
+const SRC_ORDER = '飞书「订单丨📦Mysql订单数据库」(tbl4LDs0H5M8Pq5n)';
+const HELP = {
+  act_recover: {t:'追款清单口径', b:
+    '<b>入选</b>：退货三态=待追回（「供应商退款」为空、退货≤180天）且货值≥$20。按货值敞口降序。<br>'+
+    '<b>核销</b>：财务在飞书订单表回填「供应商退款」后，次日05:30自动转"已收回"、从清单消失。'+
+    '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+
+    '（成本·实际成本/供应商退款/预估退货运费+退货原因）× MySQL mirakl_returns（真实退货日）</span>'},
+  act_delist: {t:'下架候选口径', b:
+    '<b>入选</b>：近90天(按下单日) 退货≥2笔 且 净贡献 &lt; −$50。<br>'+
+    '<b>净贡献</b> = 非退货单毛利合计 − 退货期望损失（有退款按差额，没退款按 成本×(1−店铺回收率)+运费）。'+
+    '<span class="src"><b>数据源</b>：profit_sku_90d（每日全量重建）；'+
+    '上游='+SRC_ORDER+'：Shop SKU/售价/实际·预估利润/成本/供应商退款/退货标记</span>'},
+  act_raise: {t:'提价候选口径', b:
+    '<b>入选</b>：近90天销售≥$1,000、≥5单、净利率&lt;基线10%、且净贡献&gt;−$50（亏穿的去下架清单）。<br>'+
+    '<b>建议提价%</b> = (10% − 当前净利率) ÷ 0.7，即补足缺口并把涨价部分要被抽走的佣金摊回来；'+
+    '下限1%上限8%，防止一次跳太多掉量。'+
+    '<span class="src"><b>数据源</b>：profit_sku_90d；建议幅度是算术结果，最终以你确认为准</span>'},
+};
+document.querySelectorAll('[data-help]').forEach(el => {
+  const h = HELP[el.dataset.help];
+  if (!h) return;
+  new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
+    trigger:'focus', placement:'bottom', container:'body'});
+});
+</script>
 {% endblock %}

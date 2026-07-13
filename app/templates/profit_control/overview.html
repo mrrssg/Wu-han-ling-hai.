@@ -13,6 +13,12 @@
 .pc-root .heat-cell .s { font-size:.72rem; opacity:.85; }
 .pc-root .sec-title { font-weight:600; font-size:.95rem; }
 .pc-root .chip { text-decoration:none; }
+.pc-root .pc-i { cursor:pointer; color:#898781; margin-left:4px; text-decoration:none; }
+.pc-root .pc-i:hover { color:#2a78d6; }
+.popover { max-width: 360px; }
+.popover-body { font-size:.82rem; line-height:1.5; }
+.popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
+  padding:4px 8px; margin-top:6px; display:block; }
 </style>
 
 <div class="pc-root">
@@ -30,7 +36,7 @@
 {# ============ KPI 行 ============ #}
 <div class="row g-3 mb-3">
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">滚动30天净利率（修正）</div>
+    <div class="kpi-sub">滚动30天净利率（修正）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_rolling30"></a></div>
     {% if kpi.margin_now is not none %}
       <div class="kpi-num" style="color:{{ 'var(--good)' if kpi.margin_now >= baseline else 'var(--bad)' }}">
         {{ '%.2f' % (kpi.margin_now*100) }}%</div>
@@ -42,7 +48,7 @@
     {% else %}<div class="kpi-num text-muted">—</div>{% endif %}
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">90天修正净利率（考核）</div>
+    <div class="kpi-sub">90天修正净利率（考核）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_adj90"></a></div>
     {% if kpi.margin_adj is not none %}
       <div class="kpi-num" style="color:{{ 'var(--good)' if kpi.margin_adj >= baseline else 'var(--bad)' }}">
         {{ '%.2f' % (kpi.margin_adj*100) }}%</div>
@@ -50,20 +56,20 @@
     {% else %}<div class="kpi-num text-muted">—</div>{% endif %}
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">90天销售额</div>
+    <div class="kpi-sub">90天销售额<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_sale90"></a></div>
     <div class="kpi-num">${{ '{:,.0f}'.format(kpi.sale_90d) }}</div>
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">确认退货损失（90天）</div>
+    <div class="kpi-sub">确认退货损失（90天）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_confirmed"></a></div>
     <div class="kpi-num" style="color:var(--bad)">${{ '{:,.0f}'.format(kpi.confirmed_loss) }}</div>
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">待追回敞口</div>
+    <div class="kpi-sub">待追回敞口<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_pending"></a></div>
     <div class="kpi-num" style="color:#8a4b08">${{ '{:,.0f}'.format(kpi.pending_exposure) }}</div>
     <div class="kpi-sub">回收率 {{ '%.0f' % (kpi.recovery_rate*100) if kpi.recovery_rate is not none else '—' }}%（已到期口径）</div>
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
-    <div class="kpi-sub">破线 cell</div>
+    <div class="kpi-sub">破线 cell<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_below"></a></div>
     <div class="kpi-num" style="color:{{ 'var(--good)' if kpi.cells_below==0 else 'var(--bad)' }}">{{ kpi.cells_below }}</div>
     <div class="kpi-sub">修正净利率 &lt; 基线</div>
   </div></div>
@@ -72,18 +78,18 @@
 {# ============ 趋势图 ============ #}
 <div class="row g-3 mb-3">
   <div class="col-lg-7"><div class="card p-3 h-100">
-    <div class="sec-title mb-1">滚动30天修正净利率 · 近90天 <span class="kpi-sub">（黑线=公司，彩线=运营；虚线=基线；不含链梯预扣）</span></div>
+    <div class="sec-title mb-1">滚动30天修正净利率 · 近90天<a class="pc-i bi bi-info-circle" tabindex="0" data-help="trend_chart"></a> <span class="kpi-sub">（黑线=公司，彩线=运营；虚线=基线；不含链梯预扣）</span></div>
     <div style="height:290px"><canvas id="marginTrend"></canvas></div>
   </div></div>
   <div class="col-lg-5"><div class="card p-3 h-100">
-    <div class="sec-title mb-1">每日净贡献（公司）· 近30天 <span class="kpi-sub">（非退货毛利 − 退货期望损失，按下单日）</span></div>
+    <div class="sec-title mb-1">每日净贡献（公司）· 近30天<a class="pc-i bi bi-info-circle" tabindex="0" data-help="daily_net"></a> <span class="kpi-sub">（非退货毛利 − 退货期望损失，按下单日）</span></div>
     <div style="height:290px"><canvas id="dailyNet"></canvas></div>
   </div></div>
 </div>
 
 {# ============ 热力矩阵 ============ #}
 <div class="card p-3 mb-3">
-  <div class="sec-title mb-2">运营 × 店铺 修正净利率热力图（滚动90天）
+  <div class="sec-title mb-2">运营 × 店铺 修正净利率热力图（滚动90天）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="heatmap"></a>
     <span class="kpi-sub">蓝=高于基线，红=低于基线，颜色越深偏离越大；格内为 净利率 / 90天销售</span></div>
   <div class="table-responsive"><table class="table table-borderless align-middle mb-0" style="border-spacing:4px;border-collapse:separate">
     <thead><tr><th class="kpi-sub"></th>
@@ -110,12 +116,12 @@
 {# ============ 损失结构 + 三态 + 问题摘要 ============ #}
 <div class="row g-3 mb-3">
   <div class="col-lg-7"><div class="card p-3 h-100">
-    <div class="sec-title mb-1">90天退货损失结构 · 按店铺 <span class="kpi-sub">（确认损失 / 待追期望损失 / 未成熟预扣）</span></div>
+    <div class="sec-title mb-1">90天退货损失结构 · 按店铺<a class="pc-i bi bi-info-circle" tabindex="0" data-help="loss_stack"></a> <span class="kpi-sub">（确认损失 / 待追期望损失 / 未成熟预扣）</span></div>
     <div style="height:260px"><canvas id="lossStack"></canvas></div>
   </div></div>
   <div class="col-lg-5">
     <div class="card p-3 mb-3">
-      <div class="sec-title mb-2">退货三态（近90天按退货日）<span class="kpi-sub">由「供应商退款」回填驱动</span></div>
+      <div class="sec-title mb-2">退货三态（近90天按退货日）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="tri_state"></a> <span class="kpi-sub">由「供应商退款」回填驱动</span></div>
       <div class="row text-center">
         {% set st = states.get('recovered') %}
         <div class="col-4 border-end"><div class="fw-bold" style="color:var(--good)">✅ 已收回</div>
@@ -223,5 +229,75 @@ Chart.defaults.color = MUTED;
               y:{stacked:true, grid:{display:false}, ticks:{color:'#52514e'}}}}
   });
 })();
+
+/* ================= 字段说明（点击ⓘ弹出） ================= */
+const SRC_ORDER = '飞书「订单丨📦Mysql订单数据库」(tbl4LDs0H5M8Pq5n)';
+const HELP = {
+  kpi_rolling30: {t:'滚动30天净利率（修正）', b:
+    '<b>公式</b>：近30天(按下单日) [ Σ非退货单利润 − Σ退货单期望损失 ] ÷ Σ售价<br>'+
+    '退货单期望损失：有实际「供应商退款」→ (成本−供应商退款)+退货运费；'+
+    '还没回填 → 成本×(1−该店铺回收率)+退货运费（Lowes退实体店按0）。'+
+    '<span class="src"><b>数据源</b>：'+SRC_ORDER+'：售价(整单总价) / 实际利润·预估利润(实际完整才用实际) / '+
+    '成本·实际成本 / 供应商退款 / 预估退货运费+退货原因(=退货标记) / 退货运费。'+
+    '结果存 MySQL profit_trend_daily，每天05:30重算</span>'},
+  kpi_adj90: {t:'90天修正净利率（考核口径）', b:
+    '<b>公式</b>：(非退货毛利 − 确认退货损失 − 待追敞口×(1−回收率) − 链梯未成熟预扣) ÷ 90天销售额<br>'+
+    '比毛利率多扣了三层退货相关损失，是达标/破线判定的唯一口径（基线10%）。'+
+    '<span class="src"><b>数据源</b>：同左卡各字段 + MySQL mirakl_returns(真实退货日)。'+
+    '结果存 profit_cell_daily（每运营×店铺一行/天）</span>'},
+  kpi_sale90: {t:'90天销售额', b:
+    '<b>公式</b>：近90天(按下单时间)订单「售价」直接求和。<br>'+
+    '注意：售价已是整单总价，<b>不乘数量</b>；剔除订单状态=取消、BestBuy-Delphi、Walmart、供应商为空的行。'+
+    '<span class="src"><b>数据源</b>：'+SRC_ORDER+'：售价 / 下单时间 / 订单状态 / 店铺 / 供应商</span>'},
+  kpi_confirmed: {t:'确认退货损失（90天）', b:
+    '<b>公式</b>：Σ已收回案例 [(成本−供应商退款)+退货运费] + Σ收不回案例 [成本+退货运费]<br>'+
+    '只统计已有定论的退货；待追回的不算在内（在右边敞口卡里）。'+
+    '<span class="src"><b>数据源</b>：'+SRC_ORDER+'：成本·实际成本 / 供应商退款 / 退货运费·预估退货运费'+
+    '（Lowes无实际值按0）。台账存 return_case 表</span>'},
+  kpi_pending: {t:'待追回敞口 / 回收率', b:
+    '<b>敞口</b>：Σ「供应商退款」尚未回填、且退货账龄≤180天的退货单成本。<br>'+
+    '<b>回收率</b>：已到期案例(有退款 或 账龄&gt;90天)的 Σ供应商退款 ÷ Σ成本，按金额算。<br>'+
+    '财务每月回填「供应商退款」后，敞口自动核销、回收率自动更新。'+
+    '<span class="src"><b>数据源</b>：'+SRC_ORDER+'：供应商退款 / 成本·实际成本；'+
+    '退货日取 MySQL mirakl_returns（查不到用下单日）</span>'},
+  kpi_below: {t:'破线 cell 数', b:
+    '<b>规则</b>：90天修正净利率 &lt; 基线10%，且90天销售额≥$1,000 的「运营×店铺」组合个数。<br>'+
+    '销售额门槛是为了过滤小水花噪音。'+
+    '<span class="src"><b>数据源</b>：profit_cell_daily 当日快照</span>'},
+  trend_chart: {t:'滚动30天修正净利率趋势', b:
+    '每个点=截至当天的近30天窗口重算一遍左上KPI的公式。黑线=全公司，彩线=各运营（按责任运营字段分组）。<br>'+
+    '<b>与考核口径的差别</b>：趋势线不含链梯未成熟预扣，所以比90天考核数字略乐观。'+
+    '<span class="src"><b>数据源</b>：profit_trend_daily（每天05:30回溯重算近120天）；'+
+    '上游=飞书订单表 + mirakl_returns</span>'},
+  daily_net: {t:'每日净贡献', b:
+    '<b>公式</b>：当天下单的非退货单利润合计 − 当天下单、后来退货的单的期望损失。<br>'+
+    '蓝柱=当天赚钱，红柱=当天亏钱。按下单日归因（不是按退货日）。'+
+    '<span class="src"><b>数据源</b>：profit_trend_daily.net_1d；'+
+    '上游字段同"滚动30天净利率"卡</span>'},
+  heatmap: {t:'热力图怎么读', b:
+    '每格=该运营×店铺的<b>90天修正净利率</b>（考核口径，同第2张KPI卡公式）。<br>'+
+    '灰=正好在基线附近；蓝=高于基线；红=低于基线；每差2个百分点加深一档。'+
+    '格内第二行=90天销售额，破线的还标了补到基线要多赚的缺口$。'+
+    '<span class="src"><b>数据源</b>：profit_cell_daily 当日快照；鼠标悬停有精确数值</span>'},
+  loss_stack: {t:'退货损失三段怎么算', b:
+    '<b>红·确认损失</b>：已收回案例的差额+运费，加上收不回案例(超180天)的全额成本+运费。<br>'+
+    '<b>黄·待追期望损失</b>：待追敞口×(1−该店回收率)，即按历史经验预计追不回来的部分。<br>'+
+    '<b>蓝·未成熟预扣</b>：链梯法估算——已卖出但还没到退货高峰期的订单，按该店历史退货成熟度曲线预提的期望损失。'+
+    '<span class="src"><b>数据源</b>：return_case 台账 + profit_cell_daily；'+
+    '上游=飞书订单表 + mirakl_returns 退货日</span>'},
+  tri_state: {t:'三态判定规则', b:
+    '完全由 '+SRC_ORDER+' 的「供应商退款」字段驱动，不做任何政策假设：<br>'+
+    '✅ <b>已收回</b>：供应商退款 &gt; 0<br>'+
+    '⏳ <b>待追回</b>：供应商退款为空，且退货日距今≤180天<br>'+
+    '❌ <b>收不回</b>：供应商退款为空，且超过180天（视为核销）<br>'+
+    '<span class="src">退货日取 MySQL mirakl_returns 的真实创建时间，查不到的用下单日。'+
+    '财务回填退款后，次日05:30自动改判</span>'},
+};
+document.querySelectorAll('[data-help]').forEach(el => {
+  const h = HELP[el.dataset.help];
+  if (!h) return;
+  new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
+    trigger:'focus', placement:'bottom', container:'body'});
+});
 </script>
 {% endblock %}

@@ -1,8 +1,15 @@
 {% extends "base.html" %}
 {% block title %}利润控制台 - 问题清单{% endblock %}
 {% block content %}
+<style>
+.pc-i { cursor:pointer; color:#898781; margin-left:6px; text-decoration:none; font-size:1rem; }
+.pc-i:hover { color:#2a78d6; }
+.popover { max-width: 400px; }
+.popover-body { font-size:.82rem; line-height:1.6; }
+</style>
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 问题清单</h4>
+  <h4 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 问题清单
+    <a class="pc-i bi bi-info-circle" tabindex="0" data-help="rules"></a></h4>
   <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left"></i> 返回总览
   </a>
@@ -74,4 +81,17 @@
   </div>
 </div>
 <p class="small text-muted mt-2">问题由每日聚合job的规则引擎自动检出/自动消失（连续未检出标记"已消失"）。Phase 2 将支持"确认处理→生成行动"流转。</p>
+
+<script>
+document.querySelectorAll('[data-help]').forEach(el => {
+  new bootstrap.Popover(el, {title:'5条检测规则（每天05:30扫一遍）', html:true,
+    trigger:'focus', placement:'bottom', container:'body', content:
+    '<b>Cell破线</b>：运营×店铺 90天修正净利率&lt;10% 且销售≥$1,000，影响$=距基线缺口<br>'+
+    '<b>负期望SKU</b>：90天退货≥2笔且净贡献&lt;−$50（非退货毛利−退货期望损失）<br>'+
+    '<b>追款超期</b>：待追回退货账龄&gt;60天且货值≥$50，按店铺汇总敞口<br>'+
+    '<b>数据滞后</b>：45-90天前订单的「实际成本」回填率&lt;50%（提醒财务导账单）<br>'+
+    '<b>退货异动</b>：某店近7天退货笔数&gt;前4周周均的2倍（≥5笔才报）<br>'+
+    '数据源：飞书订单表(tbl4LDs0H5M8Pq5n) + mirakl_returns + profit_cell_daily/profit_sku_90d/return_case'});
+});
+</script>
 {% endblock %}
