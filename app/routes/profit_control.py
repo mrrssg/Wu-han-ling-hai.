@@ -96,9 +96,12 @@ def overview():
         else:
             kpi["margin_prev"] = _f(r["rolling30_margin"]) if r["rolling30_margin"] is not None else None
 
+    # Costway回收率：Kuyotq已到期实测（司顺不参与——政策不退，混进来会拉低均值）
     rec = _query(
         """SELECT SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
-           FROM order_system.return_case WHERE state='recovered' OR age_days > 90""")
+           FROM order_system.return_case
+           WHERE (state='recovered' OR age_days > 90)
+             AND store='Macys-Kuyotq' AND supplier='Costway'""")
     if rec and rec[0]["c"] and _f(rec[0]["c"]) > 0:
         kpi["recovery_rate"] = _f(rec[0]["r"]) / _f(rec[0]["c"])
 
@@ -212,18 +215,32 @@ def issues():
 # 月度影响：退货损失按订单月归因 → 对各月利润/利润率的侵蚀
 # ---------------------------------------------------------------
 
-def _store_recovery_rates() -> Dict[str, float]:
+def _recovery_rates_pairs() -> Dict:
+    """(店铺,供应商) 粒度的已到期实测回收率 + 店铺级兜底，格式与 service 的 rates 一致，
+    直接配合 profit_control_service._recovery_rate 使用（含 司顺=0 / Macy-Costway≥90% 规则）。"""
     rows = _query(
-        """SELECT store, SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
+        """SELECT store, supplier, COUNT(*) AS n,
+                  SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
            FROM order_system.return_case
-           WHERE state='recovered' OR age_days > 90 GROUP BY store""")
-    return {x["store"]: (min(1.0, _f(x["r"]) / _f(x["c"])) if _f(x["c"]) > 0 else 0.0)
-            for x in rows}
+           WHERE state='recovered' OR age_days > 90 GROUP BY store, supplier""")
+    rates: Dict = {}
+    store_agg: Dict[str, list] = {}
+    for x in rows:
+        rsum, csum = _f(x["r"]), _f(x["c"])
+        agg = store_agg.setdefault(x["store"], [0.0, 0.0])
+        agg[0] += rsum
+        agg[1] += csum
+        if int(x["n"] or 0) >= 10 and csum > 0:
+            rates[(x["store"], x["supplier"])] = min(1.0, rsum / csum)
+    rates["__store__"] = {s: (min(1.0, a[0] / a[1]) if a[1] > 0 else 0.0)
+                          for s, a in store_agg.items()}
+    return rates
 
 
 @profit_control_bp.route("/monthly")
 def monthly():
-    rr = _store_recovery_rates()
+    from app.services.profit_control_service import _recovery_rate
+    rr = _recovery_rates_pairs()
     days = 14
     since = date.today() - timedelta(days=days - 1)
     cases = _query(
@@ -233,8 +250,7 @@ def monthly():
            WHERE return_date >= %s AND return_date <= CURDATE()""", (since,))
 
     def case_loss(c) -> float:
-        sup = str(c["supplier"] or "").strip().lower()
-        rate = 0.0 if (sup.startswith("vevor") or sup == "司顺") else rr.get(c["store"], 0.0)
+        rate = _recovery_rate(rr, c["store"], c["supplier"])
         return _f(c["confirmed_loss"]) + _f(c["exposure"]) * (1.0 - rate)
 
     # 三个维度的每日堆叠：订单月 / 运营 / 店铺

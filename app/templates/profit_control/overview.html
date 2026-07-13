@@ -68,7 +68,7 @@
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
     <div class="kpi-sub">待追回敞口<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_pending"></a></div>
     <div class="kpi-num" style="color:#8a4b08">${{ '{:,.0f}'.format(kpi.pending_exposure) }}</div>
-    <div class="kpi-sub">回收率 {{ '%.0f' % (kpi.recovery_rate*100) if kpi.recovery_rate is not none else '—' }}%（已到期口径）</div>
+    <div class="kpi-sub">Costway回收率 {{ '%.0f' % (kpi.recovery_rate*100) if kpi.recovery_rate is not none else '—' }}%（Kuyotq实测）</div>
   </div></div>
   <div class="col-lg-2 col-md-4 col-6"><div class="card p-3 h-100">
     <div class="kpi-sub">破线 cell<a class="pc-i bi bi-info-circle" tabindex="0" data-help="kpi_below"></a></div>
@@ -258,8 +258,10 @@ const HELP = {
     '（Lowes无实际值按0）。台账存 return_case 表</span>'},
   kpi_pending: {t:'待追回敞口 / 回收率', b:
     '<b>敞口</b>：Σ「供应商退款」尚未回填、且退货账龄≤180天的退货单成本。<br>'+
-    '<b>回收率</b>：已到期案例(有退款 或 账龄&gt;90天)的 Σ供应商退款 ÷ Σ成本，按金额算。<br>'+
-    '财务每月回填「供应商退款」后，敞口自动核销、回收率自动更新。'+
+    '<b>Costway回收率</b>：Kuyotq×Costway已到期案例(有退款 或 账龄&gt;90天)的 Σ供应商退款÷Σ成本，'+
+    '按金额实测（司顺不参与——政策不退，混入会拉低均值）。<br>'+
+    '<b>计损失时的规则</b>：Macy店Costway按 max(实测,90%)；司顺按0；Lowes按实测(目前0)。'+
+    '财务回填「供应商退款」后，敞口自动核销、实测自动更新。'+
     '<span class="src"><b>数据源</b>：'+SRC_ORDER+'：供应商退款 / 成本·实际成本；'+
     '退货日取 MySQL mirakl_returns（查不到用下单日）</span>'},
   kpi_below: {t:'破线 cell 数', b:

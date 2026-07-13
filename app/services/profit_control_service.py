@@ -324,12 +324,19 @@ def compute_recovery_rates(conn) -> Dict[Tuple[str, str], float]:
     return rates
 
 
+# 用户规则(2026-07-13)：Macy店铺的Costway退货回收率≥90%；实测(86.5%)因财务回填滞后
+# 偏低，故取 max(实测, 0.90)。实测超过90%后自动跟随实测。
+MACY_COSTWAY_RECOVERY_FLOOR = 0.90
+
+
 def _recovery_rate(rates, store: str, supplier: str) -> float:
     # 用户规则：司顺(Vevor)不管哪个店铺都不退货值
     s = str(supplier or "").strip().lower()
     if s.startswith("vevor") or s == "司顺":
         return 0.0
     r = rates.get((store, supplier))
+    if str(store).startswith("Macys") and s == "costway":
+        return max(r if r is not None else 0.0, MACY_COSTWAY_RECOVERY_FLOOR)
     if r is not None:
         return r
     return rates.get("__store__", {}).get(store, 0.0)
@@ -470,7 +477,7 @@ def build_cell_snapshots(conn, parsed: List[Dict], rates, maturity,
             "expected_pending_loss_90d": round(c["expected_pending_loss"], 2),
             "expected_future_loss_90d": round(c["future_loss"], 2),
             "margin_90d_adj": round(margin_adj, 4) if margin_adj is not None else None,
-            "recovery_rate": round(_recovery_rate(rates, store, ""), 4),
+            "recovery_rate": round(_recovery_rate(rates, store, "Costway"), 4),
             "returns_90d": c["returns_90d"],
             "return_rate_90d": round(c["returns_90d"] / c["orders_90d"], 4) if c["orders_90d"] else None,
             "ultimate_return_rate": round(m["ultimate_rate"], 4) if m.get("ultimate_rate") else None,
