@@ -324,6 +324,7 @@ def monthly():
         m["sale"] += _f(r["sale"]); m["profit_gross"] += _f(r["profit_gross"])
         m["loss"] += _f(r["loss_expected"]); m["net"] += _f(r["net"])
         m["loss_actual"] += _f(r["loss_actual"]); m["net_actual"] += _f(r["net_actual"])
+        m["gross_est"] = m.get("gross_est", 0.0) + _f(r.get("gross_est"))
         m["orders"] += int(r["orders"] or 0); m["returns"] += int(r["returns_cnt"] or 0)
         m["ops"].append(r)
         op_month_sale[(r["operator"], r["order_month"])] = _f(r["sale"])

@@ -162,6 +162,9 @@
     <div class="mt-2" style="font-size:.9rem">
       💰 <b>目前实际落袋</b>（供应商退款只算已到账的）：
       <b>${{ '{:,.0f}'.format(m.net_actual) }}</b>（{{ '%.1f%%' % (m.margin_net_actual*100) if m.margin_net_actual is not none else '—' }}）
+      {% if m.gross_est and m.gross_est|abs > 1 %}
+      <span class="kpi-sub">（其中 ${{ '{:,.0f}'.format(m.gross_est) }} 为账单未到/残缺、暂按预估占位）</span>
+      {% endif %}
       {% if m.hanging > 1 %}
       <span class="text-muted">｜ 还压在供应商那边、预计能退回 ≈ <b class="text-warning">${{ '{:,.0f}'.format(m.hanging) }}</b>，
         全部到账后 → ${{ '{:,.0f}'.format(m.net) }}（{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}）</span>

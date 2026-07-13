@@ -204,6 +204,7 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
             "profit": profit or 0.0,
             "is_return": is_return,
             "return_marked": return_marked,
+            "use_actual": use_actual,
             "return_fee": rfee,
             "supplier_refund": sup_refund_actual,
             "actual_cost_filled": (cost_a is not None and cost_a != 0),
@@ -645,7 +646,7 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
                        months_back_days: int = 400) -> int:
     cutoff_ts = (now_cn - timedelta(days=months_back_days)).timestamp() * 1000
     agg: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: {
-        "orders": 0, "sale": 0.0, "profit_gross": 0.0,
+        "orders": 0, "sale": 0.0, "profit_gross": 0.0, "gross_est": 0.0,
         "returns_cnt": 0, "loss_expected": 0.0, "loss_actual": 0.0})
     for o in parsed:
         if o["order_ts"] <= cutoff_ts:
@@ -660,6 +661,8 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
             a["loss_actual"] += _order_actual_loss(o)
         else:
             a["profit_gross"] += o["profit"]
+            if not o["use_actual"]:
+                a["gross_est"] += o["profit"]   # 账单未到/残缺,暂按预估占位的部分
     rows = []
     for (month, operator), a in agg.items():
         net = a["profit_gross"] - a["loss_expected"]
@@ -670,15 +673,16 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
                      round(a["profit_gross"] / a["sale"], 4) if a["sale"] > 0 else None,
                      round(net / a["sale"], 4) if a["sale"] > 0 else None,
                      round(a["loss_actual"], 2), round(net_actual, 2),
-                     round(net_actual / a["sale"], 4) if a["sale"] > 0 else None))
+                     round(net_actual / a["sale"], 4) if a["sale"] > 0 else None,
+                     round(a["gross_est"], 2)))
     with conn.cursor() as cur:
         cur.execute("DELETE FROM order_system.profit_month_cohort")
         sql = """
             INSERT INTO order_system.profit_month_cohort
                 (order_month, operator, orders, sale, profit_gross, returns_cnt,
                  loss_expected, net, margin_gross, margin_net,
-                 loss_actual, net_actual, margin_net_actual)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 loss_actual, net_actual, margin_net_actual, gross_est)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
         for i in range(0, len(rows), 500):
             cur.executemany(sql, rows[i:i + 500])

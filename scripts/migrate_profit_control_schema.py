@@ -169,6 +169,8 @@ ALTERS = [
     "ALTER TABLE order_system.profit_month_cohort ADD COLUMN net_actual DECIMAL(12,2) DEFAULT 0 "
     "COMMENT '目前实际落袋=毛利-实际口径损失'",
     "ALTER TABLE order_system.profit_month_cohort ADD COLUMN margin_net_actual DECIMAL(8,4) DEFAULT NULL",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN gross_est DECIMAL(12,2) DEFAULT 0 "
+    "COMMENT '毛利中暂按预估占位的部分(账单未到/残缺)'",
 ]
 
 
