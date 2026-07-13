@@ -87,6 +87,39 @@ DDL = [
     ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 问题清单'
     """,
     """
+    CREATE TABLE IF NOT EXISTS order_system.profit_trend_daily (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        scope VARCHAR(32) NOT NULL COMMENT '公司 或 运营名',
+        stat_date DATE NOT NULL,
+        sale_1d DECIMAL(12,2) DEFAULT 0,
+        net_1d DECIMAL(12,2) DEFAULT 0 COMMENT '当日净贡献=非退货毛利-退货期望损失(下单口径)',
+        rolling30_sale DECIMAL(12,2) DEFAULT 0,
+        rolling30_net DECIMAL(12,2) DEFAULT 0,
+        rolling30_margin DECIMAL(8,4) DEFAULT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_scope_date (scope, stat_date),
+        KEY idx_date (stat_date)
+    ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 每日趋势序列'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS order_system.profit_sku_90d (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        shop_sku VARCHAR(64) NOT NULL,
+        store VARCHAR(64) NOT NULL,
+        operator VARCHAR(32), supplier VARCHAR(32),
+        orders INT DEFAULT 0,
+        sale DECIMAL(12,2) DEFAULT 0,
+        profit_gross DECIMAL(12,2) DEFAULT 0,
+        returns_cnt INT DEFAULT 0,
+        loss_expected DECIMAL(12,2) DEFAULT 0,
+        net DECIMAL(12,2) DEFAULT 0,
+        margin DECIMAL(8,4) DEFAULT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_sku_store (shop_sku, store),
+        KEY idx_net (net), KEY idx_margin (margin)
+    ) CHARACTER SET utf8mb4 COMMENT='利润控制台: SKU 90天指标(每日全量重建)'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS order_system.action_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         action_type VARCHAR(32) NOT NULL COMMENT 'raise_price/delist/recover/reroute',

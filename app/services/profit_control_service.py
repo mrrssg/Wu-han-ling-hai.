@@ -489,6 +489,117 @@ def build_cell_snapshots(conn, parsed: List[Dict], rates, maturity,
 
 
 # =====================================================================
+# 每日趋势序列（滚动30天修正净利率 + 每日净盈利，回溯重建，幂等）
+# =====================================================================
+
+def _order_expected_loss(o, rates) -> float:
+    """一笔退货单的期望损失（当前认知口径）。非退货单返回0。"""
+    if not o["is_return"]:
+        return 0.0
+    refund = o["supplier_refund"]
+    if refund is not None and refund > 0:
+        return max(0.0, o["cost"] - refund) + o["return_fee"]
+    rr = _recovery_rate(rates, o["store"], o["supplier"])
+    return o["cost"] * (1.0 - rr) + o["return_fee"]
+
+
+def build_trend_daily(conn, parsed: List[Dict], rates, now_cn: datetime,
+                      days: int = 120) -> int:
+    """按下单日回溯构建 公司/各运营 的每日净贡献与滚动30天修正净利率。
+    净贡献 = 当日非退货单毛利 − 当日(下单口径)退货单期望损失。
+    注意：趋势线不含链梯未成熟预扣（cell快照才是考核口径），文案已在页面标注。"""
+    today = now_cn.date()
+    start = today - timedelta(days=days)
+    daily: Dict[Tuple[str, Any], List[float]] = defaultdict(lambda: [0.0, 0.0])  # (scope,date)->[sale,net]
+    for o in parsed:
+        d = datetime.fromtimestamp(o["order_ts"] / 1000, tz=CN_TZ).date()
+        if d < start or d > today:
+            continue
+        net = o["profit"] if not o["is_return"] else -_order_expected_loss(o, rates)
+        for scope in ("公司", o["operator"]):
+            agg = daily[(scope, d)]
+            agg[0] += o["sale"]
+            agg[1] += net
+
+    scopes = sorted(set(s for s, _ in daily.keys()))
+    rows = []
+    for scope in scopes:
+        for i in range(days + 1):
+            d = start + timedelta(days=i)
+            sale_1d, net_1d = daily.get((scope, d), [0.0, 0.0])
+            w_sale = w_net = 0.0
+            for j in range(30):
+                dj = d - timedelta(days=j)
+                if dj < start - timedelta(days=30):
+                    break
+                s2 = daily.get((scope, dj))
+                if s2:
+                    w_sale += s2[0]
+                    w_net += s2[1]
+            margin = (w_net / w_sale) if w_sale > 0 else None
+            rows.append((scope, d, round(sale_1d, 2), round(net_1d, 2),
+                         round(w_sale, 2), round(w_net, 2),
+                         round(margin, 4) if margin is not None else None))
+    sql = """
+        INSERT INTO order_system.profit_trend_daily
+            (scope, stat_date, sale_1d, net_1d, rolling30_sale, rolling30_net, rolling30_margin)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE sale_1d=VALUES(sale_1d), net_1d=VALUES(net_1d),
+            rolling30_sale=VALUES(rolling30_sale), rolling30_net=VALUES(rolling30_net),
+            rolling30_margin=VALUES(rolling30_margin)
+    """
+    with conn.cursor() as cur:
+        for i in range(0, len(rows), 500):
+            cur.executemany(sql, rows[i:i + 500])
+    conn.commit()
+    return len(rows)
+
+
+# =====================================================================
+# SKU 90天指标表（行动清单/后续控制回路的数据源）
+# =====================================================================
+
+def build_sku_metrics(conn, parsed: List[Dict], rates, now_cn: datetime) -> int:
+    cut90 = (now_cn - timedelta(days=90)).timestamp() * 1000
+    agg: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(lambda: {
+        "operator": "", "supplier": "", "orders": 0, "sale": 0.0,
+        "profit_gross": 0.0, "returns": 0, "loss_expected": 0.0})
+    for o in parsed:
+        if o["order_ts"] <= cut90 or not o["sku"]:
+            continue
+        a = agg[(o["sku"], o["store"])]
+        a["operator"] = o["operator"]
+        a["supplier"] = o["supplier"]
+        a["orders"] += 1
+        a["sale"] += o["sale"]
+        if o["is_return"]:
+            a["returns"] += 1
+            a["loss_expected"] += _order_expected_loss(o, rates)
+        else:
+            a["profit_gross"] += o["profit"]
+    rows = []
+    for (sku, store), a in agg.items():
+        net = a["profit_gross"] - a["loss_expected"]
+        margin = (net / a["sale"]) if a["sale"] > 0 else None
+        rows.append((sku, store, a["operator"], a["supplier"], a["orders"],
+                     round(a["sale"], 2), round(a["profit_gross"], 2), a["returns"],
+                     round(a["loss_expected"], 2), round(net, 2),
+                     round(margin, 4) if margin is not None else None))
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM order_system.profit_sku_90d")
+        sql = """
+            INSERT INTO order_system.profit_sku_90d
+                (shop_sku, store, operator, supplier, orders, sale, profit_gross,
+                 returns_cnt, loss_expected, net, margin)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        for i in range(0, len(rows), 500):
+            cur.executemany(sql, rows[i:i + 500])
+    conn.commit()
+    return len(rows)
+
+
+# =====================================================================
 # 问题规则引擎
 # =====================================================================
 
@@ -632,6 +743,8 @@ def run_daily_aggregation() -> Dict[str, Any]:
         maturity = build_maturity_model(parsed, return_dates, now_cn)
         snapshots = build_cell_snapshots(conn, parsed, rates, maturity, now_cn)
         issues = run_issue_rules(conn, snapshots, parsed, rates, now_cn)
+        trend_rows = build_trend_daily(conn, parsed, rates, now_cn)
+        sku_rows = build_sku_metrics(conn, parsed, rates, now_cn)
     finally:
         conn.close()
 
@@ -641,5 +754,7 @@ def run_daily_aggregation() -> Dict[str, Any]:
         "return_cases": case_stats,
         "cells": len(snapshots),
         "issues_detected": len(issues),
+        "trend_rows": trend_rows,
+        "sku_rows": sku_rows,
         "elapsed_sec": round(time.time() - started, 1),
     }
