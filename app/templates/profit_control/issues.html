@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}利润控制台 - 问题清单{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 问题清单</h4>
+  <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> 返回总览
+  </a>
+</div>
+
+{# 类型汇总卡 #}
+<div class="row g-2 mb-3">
+  {% set type_names = {'cell_below_baseline':'Cell破线','negative_ev_sku':'负期望SKU',
+                       'recovery_overdue':'追款超期','data_stale':'数据滞后','return_spike':'退货异动'} %}
+  {% for t in type_counts %}
+  <div class="col-auto">
+    <a class="btn btn-sm {{ 'btn-primary' if itype == t.issue_type else 'btn-outline-primary' }}"
+       href="{{ url_for('profit_control.issues', type=t.issue_type, status=status) }}">
+      {{ type_names.get(t.issue_type, t.issue_type) }}
+      <span class="badge bg-light text-dark">{{ t.n }}</span>
+      {% if t.impact and t.impact|float > 0 %}<small>${{ '{:,.0f}'.format(t.impact|float) }}</small>{% endif %}
+    </a>
+  </div>
+  {% endfor %}
+  {% if itype %}
+  <div class="col-auto">
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('profit_control.issues', status=status) }}">全部类型</a>
+  </div>
+  {% endif %}
+  <div class="col-auto ms-auto">
+    <div class="btn-group btn-group-sm">
+      {% for s in ['open','stale','all'] %}
+      <a class="btn {{ 'btn-secondary' if status == s else 'btn-outline-secondary' }}"
+         href="{{ url_for('profit_control.issues', status=s, type=itype) }}">{{ {'open':'未处理','stale':'已消失','all':'全部'}[s] }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>日期</th><th>类型</th><th>对象</th><th>级别</th>
+          <th class="text-end">影响$</th><th style="min-width:340px">证据</th><th>建议</th><th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="text-nowrap">{{ r.detected_date }}</td>
+          <td class="text-nowrap">{{ type_names.get(r.issue_type, r.issue_type) }}</td>
+          <td>{{ r.entity }}</td>
+          <td>
+            {% if r.severity == 'high' %}<span class="badge bg-danger">高</span>
+            {% elif r.severity == 'mid' %}<span class="badge bg-warning text-dark">中</span>
+            {% else %}<span class="badge bg-secondary">低</span>{% endif %}
+          </td>
+          <td class="text-end">{{ '{:,.0f}'.format(r.impact_usd|float) if r.impact_usd else '—' }}</td>
+          <td class="small">{{ r.evidence }}</td>
+          <td class="small text-muted">{{ r.suggestion }}</td>
+          <td>
+            {% if r.status == 'open' %}<span class="badge bg-danger-subtle text-danger">未处理</span>
+            {% elif r.status == 'stale' %}<span class="badge bg-secondary-subtle text-secondary">已消失</span>
+            {% else %}<span class="badge bg-success-subtle text-success">{{ r.status }}</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="text-center text-muted py-4">没有符合条件的问题记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="small text-muted mt-2">问题由每日聚合job的规则引擎自动检出/自动消失（连续未检出标记"已消失"）。Phase 2 将支持"确认处理→生成行动"流转。</p>
+{% endblock %}

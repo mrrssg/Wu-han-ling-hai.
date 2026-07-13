@@ -31,6 +31,9 @@ def create_app(config_name='default'):
     from app.routes.hd_shipping import hd_shipping_bp
     app.register_blueprint(hd_shipping_bp, url_prefix='/hd-shipping')
 
+    from app.routes.profit_control import profit_control_bp
+    app.register_blueprint(profit_control_bp, url_prefix='/profit-control')
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

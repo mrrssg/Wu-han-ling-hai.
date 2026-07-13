@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}利润控制台 - 总览{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-speedometer2"></i> 利润控制台
+    <small class="text-muted fs-6">快照日期：{{ snap_date or '尚无数据（等每日job首跑）' }}</small>
+  </h4>
+  <a href="{{ url_for('profit_control.issues') }}" class="btn btn-outline-primary btn-sm">
+    <i class="bi bi-exclamation-triangle"></i> 问题清单
+  </a>
+</div>
+
+{# ===== KPI 行 ===== #}
+<div class="row g-3 mb-4">
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">90天修正净利率</div>
+      {% if kpi.margin_adj is not none %}
+        <div class="fs-3 fw-bold {{ 'text-success' if kpi.margin_adj >= 0.10 else 'text-danger' }}">
+          {{ '%.2f' % (kpi.margin_adj * 100) }}%</div>
+        <div class="small text-muted">基线 10%</div>
+      {% else %}<div class="fs-3 text-muted">—</div>{% endif %}
+    </div>
+  </div>
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">90天销售额</div>
+      <div class="fs-4 fw-bold">${{ '{:,.0f}'.format(kpi.sale_90d) }}</div>
+      <div class="small text-muted">净利 ${{ '{:,.0f}'.format(kpi.net_profit_90d) }}</div>
+    </div>
+  </div>
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">确认退货损失</div>
+      <div class="fs-4 fw-bold text-danger">${{ '{:,.0f}'.format(kpi.confirmed_loss) }}</div>
+      <div class="small text-muted">近90天下单口径</div>
+    </div>
+  </div>
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">待追回敞口</div>
+      <div class="fs-4 fw-bold text-warning">${{ '{:,.0f}'.format(kpi.pending_exposure) }}</div>
+      <div class="small text-muted">供应商退款未回填</div>
+    </div>
+  </div>
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">退款回收率</div>
+      {% if kpi.recovery_rate is not none %}
+        <div class="fs-4 fw-bold">{{ '%.0f' % (kpi.recovery_rate * 100) }}%</div>
+      {% else %}<div class="fs-4 text-muted">—</div>{% endif %}
+      <div class="small text-muted">已到期案例金额口径</div>
+    </div>
+  </div>
+  <div class="col-md-2 col-6">
+    <div class="card p-3 text-center h-100">
+      <div class="text-muted small">破线cell数</div>
+      <div class="fs-3 fw-bold {{ 'text-success' if kpi.cells_below == 0 else 'text-danger' }}">
+        {{ kpi.cells_below }}</div>
+      <div class="small text-muted">修正净利率&lt;10%</div>
+    </div>
+  </div>
+</div>
+
+{# ===== 退货三态（近90天按退货日） ===== #}
+<div class="card mb-4">
+  <div class="card-header bg-white"><b>退货三态（近90天按退货日）</b>
+    <span class="text-muted small ms-2">状态由飞书「供应商退款」回填自动驱动</span></div>
+  <div class="card-body py-2">
+    <div class="row text-center">
+      {% set st = states.get('recovered') %}
+      <div class="col-4 border-end">
+        <div class="text-success fw-bold">✅ 已收回 {{ st.n if st else 0 }} 笔</div>
+        <div class="small text-muted">确认损失 ${{ '{:,.0f}'.format(st.loss|float) if st else 0 }}（差额+运费）</div>
+      </div>
+      {% set st = states.get('pending') %}
+      <div class="col-4 border-end">
+        <div class="text-warning fw-bold">⏳ 待追回 {{ st.n if st else 0 }} 笔</div>
+        <div class="small text-muted">货值敞口 ${{ '{:,.0f}'.format(st.expo|float) if st else 0 }}</div>
+      </div>
+      {% set st = states.get('written_off') %}
+      <div class="col-4">
+        <div class="text-danger fw-bold">❌ 收不回 {{ st.n if st else 0 }} 笔</div>
+        <div class="small text-muted">确认损失 ${{ '{:,.0f}'.format(st.loss|float) if st else 0 }}（超180天）</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ===== Cell 矩阵 ===== #}
+<div class="card mb-4">
+  <div class="card-header bg-white"><b>运营 × 店铺（滚动90天，成熟度修正口径）</b></div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Cell</th><th class="text-end">销售$</th>
+          <th class="text-end">毛利率</th>
+          <th class="text-end">修正净利率</th>
+          <th class="text-end">确认退损$</th>
+          <th class="text-end">待追敞口$</th>
+          <th class="text-end">未成熟预扣$</th>
+          <th class="text-end">退货率</th>
+          <th class="text-end">缺口$</th>
+          <th class="text-center">达标</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cells %}
+        <tr class="{{ '' if c.meets_baseline else 'table-danger' }}">
+          <td>{{ c.operator }}-{{ c.store }}</td>
+          <td class="text-end">{{ '{:,.0f}'.format(c.sale_90d|float) }}</td>
+          <td class="text-end">{{ '%.2f' % (c.margin_90d_raw * 100) if c.margin_90d_raw is not none else '—' }}%</td>
+          <td class="text-end fw-bold">{{ '%.2f' % (c.margin_90d_adj * 100) if c.margin_90d_adj is not none else '—' }}%</td>
+          <td class="text-end">{{ '{:,.0f}'.format(c.confirmed_return_loss_90d|float) }}</td>
+          <td class="text-end">{{ '{:,.0f}'.format(c.pending_exposure_90d|float) }}</td>
+          <td class="text-end">{{ '{:,.0f}'.format(c.expected_future_loss_90d|float) }}</td>
+          <td class="text-end">{{ '%.1f' % (c.return_rate_90d * 100) if c.return_rate_90d is not none else '—' }}%</td>
+          <td class="text-end">{{ '{:,.0f}'.format(c.gap_usd|float) }}</td>
+          <td class="text-center">{{ '✅' if c.meets_baseline else '❌' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-center text-muted py-4">还没有快照数据，等每日 job 首跑（或手动跑 scripts/profit_control_daily.py）</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ===== 数据新鲜度 ===== #}
+<div class="card mb-4">
+  <div class="card-body py-2 small text-muted">
+    <i class="bi bi-clock-history"></i>
+    聚合job最近跑：<b>{{ fresh.job_last_run or '从未' }}</b> ｜
+    Mirakl订单同步：<b>{{ fresh.order_sync or '—' }}</b> ｜
+    退货同步：<b>{{ fresh.returns_sync or '—' }}</b> ｜
+    口径：利润实际优先、售价=整单总价、排除取消/BestBuy/Walmart；
+    修正净利率 = (非退货毛利 − 确认退损 − 敞口×(1−回收率) − 链梯预扣) / 销售额
+  </div>
+</div>
+{% endblock %}
