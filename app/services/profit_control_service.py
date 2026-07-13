@@ -325,6 +325,10 @@ def compute_recovery_rates(conn) -> Dict[Tuple[str, str], float]:
 
 
 def _recovery_rate(rates, store: str, supplier: str) -> float:
+    # 用户规则：司顺(Vevor)不管哪个店铺都不退货值
+    s = str(supplier or "").strip().lower()
+    if s.startswith("vevor") or s == "司顺":
+        return 0.0
     r = rates.get((store, supplier))
     if r is not None:
         return r

@@ -227,33 +227,70 @@ def monthly():
     days = 14
     since = date.today() - timedelta(days=days - 1)
     cases = _query(
-        """SELECT return_date, operator, store, state, confirmed_loss, exposure,
+        """SELECT return_date, operator, store, supplier, state, confirmed_loss, exposure,
                   DATE_FORMAT(order_date, '%%Y-%%m') AS om
            FROM order_system.return_case
            WHERE return_date >= %s AND return_date <= CURDATE()""", (since,))
 
     def case_loss(c) -> float:
-        return _f(c["confirmed_loss"]) + _f(c["exposure"]) * (1.0 - rr.get(c["store"], 0.0))
+        sup = str(c["supplier"] or "").strip().lower()
+        rate = 0.0 if (sup.startswith("vevor") or sup == "司顺") else rr.get(c["store"], 0.0)
+        return _f(c["confirmed_loss"]) + _f(c["exposure"]) * (1.0 - rate)
 
-    # 堆叠图：近14天 每日损失 × 订单月
+    # 三个维度的每日堆叠：订单月 / 运营 / 店铺
     day_labels = [(since + timedelta(days=i)) for i in range(days)]
-    months_seen = sorted(set(c["om"] for c in cases))
-    stack: Dict[str, Dict[str, float]] = {m: {} for m in months_seen}
+    dims = {"month": {}, "op": {}, "store": {}}
     detail: Dict[tuple, float] = {}
     for c in cases:
         loss = case_loss(c)
         if loss <= 0:
             continue
         dkey = c["return_date"].strftime("%Y-%m-%d")
-        stack[c["om"]][dkey] = stack[c["om"]].get(dkey, 0.0) + loss
+        for dim, key in (("month", c["om"]), ("op", c["operator"]), ("store", c["store"])):
+            d = dims[dim].setdefault(key, {})
+            d[dkey] = d.get(dkey, 0.0) + loss
         k = (c["return_date"], c["operator"], c["om"])
         detail[k] = detail.get(k, 0.0) + loss
+
+    def series_of(dim_data):
+        keys = sorted(dim_data.keys())
+        return {"keys": keys,
+                "series": {k: [round(dim_data[k].get(d.strftime("%Y-%m-%d"), 0.0), 0)
+                               for d in day_labels] for k in keys}}
+
     chart_json = json.dumps({
         "labels": [d.strftime("%m-%d") for d in day_labels],
-        "months": months_seen,
-        "series": {m: [round(stack[m].get(d.strftime("%Y-%m-%d"), 0.0), 0)
-                       for d in day_labels] for m in months_seen},
+        "views": {dim: series_of(data) for dim, data in dims.items()},
     }, ensure_ascii=False)
+
+    # 每日 × 运营 / 每日 × 店铺 透视表（近14天，倒序）
+    op_cols = sorted(dims["op"].keys())
+    store_cols = sorted(dims["store"].keys(),
+                        key=lambda s: -sum(dims["store"][s].values()))
+    pivot_days = []
+    for d in reversed(day_labels):
+        dkey = d.strftime("%Y-%m-%d")
+        op_vals = [dims["op"].get(o, {}).get(dkey, 0.0) for o in op_cols]
+        st_vals = [dims["store"].get(s, {}).get(dkey, 0.0) for s in store_cols]
+        pivot_days.append({"date": dkey, "ops": op_vals, "stores": st_vals,
+                           "total": sum(op_vals)})
+    pivot_totals = {
+        "ops": [sum(dims["op"].get(o, {}).values()) for o in op_cols],
+        "stores": [sum(dims["store"].get(s, {}).values()) for s in store_cols],
+        "total": sum(sum(v.values()) for v in dims["op"].values()),
+    }
+
+    # 昨日速读（最近一个有退货的日期）
+    latest = None
+    for d in reversed(day_labels):
+        dkey = d.strftime("%Y-%m-%d")
+        tot = sum(dd.get(dkey, 0.0) for dd in dims["month"].values())
+        if tot > 0:
+            month_split = sorted(
+                [(m, dd.get(dkey, 0.0)) for m, dd in dims["month"].items() if dd.get(dkey, 0)],
+                key=lambda x: -x[1])
+            latest = {"date": dkey, "total": tot, "split": month_split}
+            break
 
     # cohort：近6个订单月 × 运营（含公司合计行）
     cohort_rows = _query(
@@ -299,7 +336,9 @@ def monthly():
     return render_template("profit_control/monthly.html",
                            chart_json=chart_json, detail_rows=detail_rows,
                            day_totals=day_totals, month_list=month_list,
-                           baseline=BASELINE)
+                           op_cols=op_cols, store_cols=store_cols,
+                           pivot_days=pivot_days, pivot_totals=pivot_totals,
+                           latest=latest, baseline=BASELINE)
 
 
 # ---------------------------------------------------------------

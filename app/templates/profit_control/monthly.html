@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}利润控制台 - 月度影响{% endblock %}
+{% block title %}利润控制台 - 每日退货损失{% endblock %}
 {% block content %}
 <style>
 .pc-i { cursor:pointer; color:#898781; margin-left:4px; text-decoration:none; }
 .pc-i:hover { color:#2a78d6; }
-.popover { max-width: 380px; }
+.popover { max-width: 400px; }
 .popover-body { font-size:.82rem; line-height:1.5; }
 .popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
   padding:4px 8px; margin-top:6px; display:block; }
@@ -12,52 +12,112 @@
 .kpi-sub { font-size:.78rem; color:#898781; }
 .day-head td { background:#f0f2f5; font-weight:600; }
 .mo-head td { background:#eef2f7; font-weight:700; }
+.brief { background:#fffdf3; border:1px solid #f0dd8f; border-radius:8px; }
+.pv td, .pv th { font-variant-numeric: tabular-nums; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-calendar3"></i> 退货损失 · 月度影响
-    <small class="text-muted fs-6 ms-2">退货发生在今天，账算回订单所属月份</small></h4>
+  <h4 class="mb-0"><i class="bi bi-calendar3"></i> 每日退货损失 · 月度影响</h4>
   <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left"></i> 返回总览</a>
 </div>
 
-{# ============ 堆叠图 ============ #}
+{# ============ 速读 ============ #}
+{% if latest %}
+<div class="brief p-3 mb-3">
+  <b>📌 一句话速读：</b>{{ latest.date }} 全公司退货损失 <b>${{ '{:,.0f}'.format(latest.total) }}</b>，
+  其中{% for m, v in latest.split %}{{ m[-2:]|int }}月订单 ${{ '{:,.0f}'.format(v) }}{{ '、' if not loop.last }}{% endfor %}
+  —— 这些钱分别从对应月份的利润里扣。
+</div>
+{% endif %}
+
+{# ============ 主图（三个视角切换） ============ #}
 <div class="card p-3 mb-3">
-  <div class="sec-title mb-1">近14天 每日退货损失 · 按订单月归因<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_chart"></a>
-    <span class="kpi-sub">（按真实退货日；同一天的损失拆到各订单月）</span></div>
-  <div style="height:280px"><canvas id="moStack"></canvas></div>
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+    <div class="sec-title">近14天 每日退货损失<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_chart"></a>
+      <span class="kpi-sub">（按真实退货日）</span></div>
+    <div class="btn-group btn-group-sm" role="group" id="viewBtns">
+      <button class="btn btn-primary" data-view="month">按订单月</button>
+      <button class="btn btn-outline-primary" data-view="op">按运营</button>
+      <button class="btn btn-outline-primary" data-view="store">按店铺</button>
+    </div>
+  </div>
+  <div style="height:300px"><canvas id="moStack"></canvas></div>
+</div>
+
+{# ============ 每日 × 运营 / 店铺 透视表 ============ #}
+<div class="row g-3 mb-3">
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header bg-white sec-title">每日退货损失 × 运营<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_pivot"></a></div>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0 pv">
+        <thead class="table-light"><tr><th>退货日</th>
+          {% for o in op_cols %}<th class="text-end">{{ o }}</th>{% endfor %}
+          <th class="text-end">合计$</th></tr></thead>
+        <tbody>
+          {% for d in pivot_days %}
+          <tr><td class="text-nowrap small">{{ d.date[5:] }}</td>
+            {% for v in d.ops %}<td class="text-end {{ 'text-muted' if v == 0 }}">{{ '{:,.0f}'.format(v) if v else '—' }}</td>{% endfor %}
+            <td class="text-end fw-bold">{{ '{:,.0f}'.format(d.total) if d.total else '—' }}</td></tr>
+          {% endfor %}
+          <tr class="mo-head"><td>14天合计</td>
+            {% for v in pivot_totals.ops %}<td class="text-end">{{ '{:,.0f}'.format(v) }}</td>{% endfor %}
+            <td class="text-end">{{ '{:,.0f}'.format(pivot_totals.total) }}</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header bg-white sec-title">每日退货损失 × 店铺</div>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0 pv">
+        <thead class="table-light"><tr><th>退货日</th>
+          {% for s in store_cols %}<th class="text-end small">{{ s.replace('Home Depot ','HD') }}</th>{% endfor %}
+        </tr></thead>
+        <tbody>
+          {% for d in pivot_days %}
+          <tr><td class="text-nowrap small">{{ d.date[5:] }}</td>
+            {% for v in d.stores %}<td class="text-end {{ 'text-muted' if v == 0 }}">{{ '{:,.0f}'.format(v) if v else '—' }}</td>{% endfor %}
+          </tr>
+          {% endfor %}
+          <tr class="mo-head"><td>14天合计</td>
+            {% for v in pivot_totals.stores %}<td class="text-end">{{ '{:,.0f}'.format(v) }}</td>{% endfor %}
+          </tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
 </div>
 
 <div class="row g-3 mb-3">
-  {# ============ 归因明细 ============ #}
+  {# ============ 按订单月拆分明细 ============ #}
   <div class="col-lg-6">
     <div class="card h-100">
-      <div class="card-header bg-white sec-title">近7天归因明细<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_detail"></a>
+      <div class="card-header bg-white sec-title">近7天损失拆到订单月<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_detail"></a>
         <span class="kpi-sub">退货日 × 运营 × 订单月</span></div>
-      <div class="table-responsive" style="max-height:520px;overflow-y:auto">
+      <div class="table-responsive" style="max-height:500px;overflow-y:auto">
         <table class="table table-sm table-hover align-middle mb-0">
           <thead class="table-light"><tr>
             <th>运营</th><th>订单月</th><th class="text-end">损失$</th>
-            <th class="text-end">该运营当月销售$</th><th class="text-end">利润率影响</th></tr></thead>
+            <th class="text-end">拉低该月利润率</th></tr></thead>
           <tbody>
             {% set ns = namespace(last='') %}
             {% for r in detail_rows %}
               {% set dkey = r.return_date.strftime('%Y-%m-%d') %}
               {% if dkey != ns.last %}
                 {% set ns.last = dkey %}
-                <tr class="day-head"><td colspan="2">📅 {{ dkey }} 退货</td>
-                  <td class="text-end">{{ '{:,.0f}'.format(day_totals[dkey]) }}</td><td colspan="2"></td></tr>
+                <tr class="day-head"><td colspan="2">📅 {{ dkey }} 退货合计</td>
+                  <td class="text-end">{{ '{:,.0f}'.format(day_totals[dkey]) }}</td><td></td></tr>
               {% endif %}
               <tr>
                 <td>{{ r.operator }}</td>
-                <td>{{ r.order_month }}</td>
+                <td>{{ r.order_month[-2:]|int }}月订单</td>
                 <td class="text-end">{{ '{:,.0f}'.format(r.loss) }}</td>
-                <td class="text-end text-muted">{{ '{:,.0f}'.format(r.month_sale) if r.month_sale else '—' }}</td>
                 <td class="text-end {{ 'text-danger fw-bold' if r.impact_pp and r.impact_pp > 0.1 }}">
-                  {{ '−%.3f pp' % r.impact_pp if r.impact_pp is not none else '—' }}</td>
+                  {{ '%.2f 个百分点' % r.impact_pp if r.impact_pp is not none else '—' }}</td>
               </tr>
             {% else %}
-            <tr><td colspan="5" class="text-center text-muted py-4">近7天没有退货</td></tr>
+            <tr><td colspan="4" class="text-center text-muted py-4">近7天没有退货</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -68,15 +128,14 @@
   {# ============ 月度cohort ============ #}
   <div class="col-lg-6">
     <div class="card h-100">
-      <div class="card-header bg-white sec-title">订单月利润被侵蚀情况（近6个月）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_cohort"></a>
-        <span class="kpi-sub">毛利率 → 净利率，差值=退货侵蚀</span></div>
-      <div class="table-responsive" style="max-height:520px;overflow-y:auto">
+      <div class="card-header bg-white sec-title">各订单月被退货吃掉的利润（近6个月）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_cohort"></a></div>
+      <div class="table-responsive" style="max-height:500px;overflow-y:auto">
         <table class="table table-sm table-hover align-middle mb-0">
           <thead class="table-light"><tr>
             <th>订单月 / 运营</th><th class="text-end">销售$</th>
             <th class="text-end">退货损失$</th><th class="text-end">净利$</th>
-            <th class="text-end">毛利率</th><th class="text-end">净利率</th>
-            <th class="text-end">侵蚀</th></tr></thead>
+            <th class="text-end">利润率(退货前→后)</th>
+            <th class="text-end">被吃掉</th></tr></thead>
           <tbody>
             {% for m in month_list %}
             <tr class="mo-head">
@@ -84,10 +143,8 @@
               <td class="text-end">{{ '{:,.0f}'.format(m.sale) }}</td>
               <td class="text-end text-danger">{{ '{:,.0f}'.format(m.loss) }}</td>
               <td class="text-end">{{ '{:,.0f}'.format(m.net) }}</td>
-              <td class="text-end">{{ '%.2f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</td>
-              <td class="text-end {{ 'text-danger' if m.margin_net is not none and m.margin_net < baseline }}">
-                {{ '%.2f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</td>
-              <td class="text-end fw-bold">{{ '−%.2f pp' % m.erosion_pp if m.erosion_pp is not none else '—' }}</td>
+              <td class="text-end">{{ '%.1f%%→%.1f%%' % (m.margin_gross*100, m.margin_net*100) if m.margin_gross is not none else '—' }}</td>
+              <td class="text-end fw-bold">{{ '%.2f 个百分点' % m.erosion_pp if m.erosion_pp is not none else '—' }}</td>
             </tr>
             {% for r in m.ops %}
             <tr>
@@ -95,9 +152,8 @@
               <td class="text-end">{{ '{:,.0f}'.format(r.sale|float) }}</td>
               <td class="text-end">{{ '{:,.0f}'.format(r.loss_expected|float) }}</td>
               <td class="text-end">{{ '{:,.0f}'.format(r.net|float) }}</td>
-              <td class="text-end">{{ '%.2f%%' % (r.margin_gross|float*100) if r.margin_gross is not none else '—' }}</td>
-              <td class="text-end">{{ '%.2f%%' % (r.margin_net|float*100) if r.margin_net is not none else '—' }}</td>
-              <td class="text-end">{{ '−%.2f pp' % ((r.margin_gross|float - r.margin_net|float)*100) if r.margin_gross is not none and r.margin_net is not none else '—' }}</td>
+              <td class="text-end">{{ '%.1f%%→%.1f%%' % (r.margin_gross|float*100, r.margin_net|float*100) if r.margin_gross is not none and r.margin_net is not none else '—' }}</td>
+              <td class="text-end">{{ '%.2f 个百分点' % ((r.margin_gross|float - r.margin_net|float)*100) if r.margin_gross is not none and r.margin_net is not none else '—' }}</td>
             </tr>
             {% endfor %}
             {% endfor %}
@@ -108,23 +164,39 @@
   </div>
 </div>
 
-<div class="card p-2 mb-4"><div class="kpi-sub px-2">
-  口径：损失=退货期望损失（有「供应商退款」按差额；没有按 成本×(1−店铺回收率)+运费）；月度表按<b>下单月</b>归集、含该月订单至今全部退货；
-  越近的月份退货还没退完，侵蚀数字会继续变大（链梯预扣见总览页考核口径）
-</div></div>
+{# ============ 与飞书看板差异说明 ============ #}
+<div class="card p-3 mb-4">
+  <div class="sec-title mb-1">⚖️ 和飞书「每日退货损失明细」为什么对不上？</div>
+  <div class="kpi-sub" style="line-height:1.8">
+    两边都按真实退货日统计，但损失的算法不同（这里是按你确认的新规则）：<br>
+    ① <b>Lowes退货运费</b>：飞书表按估算加了运费；这里按 0（Lowes买家退实体店，卖家不出运费）。<br>
+    ② <b>Kuyotq的Costway货值</b>：飞书表假设全额退款（货值损失=0，只算运费）；这里按实际回收率（约74%）计，没回填退款的部分按 26% 计入损失。<br>
+    ③ <b>Vevor(司顺)</b>：两边都按不退货值算，但这里不加估算运费（Lowes店）。<br>
+    等你确认后，我可以把飞书那张表也统一成这套口径，两边就完全一致了。
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 const MO = {{ chart_json|safe }};
-const MO_COLORS = ['#2a78d6','#1baf7a','#eda100','#4a3aa7','#e34948','#e87ba4','#eb6834','#008300'];
+const CAT = ['#2a78d6','#1baf7a','#eda100','#4a3aa7','#e34948','#e87ba4','#eb6834','#008300'];
+const OP_COLORS = {'明瑞瑞':'#2a78d6','朱以超':'#1baf7a','刘梦蝶':'#eda100'};
 Chart.defaults.font.family = "system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif";
 Chart.defaults.color = '#898781';
-new Chart(document.getElementById('moStack'), {
-  type:'bar',
-  data:{labels:MO.labels, datasets:MO.months.map((m,i)=>({
-    label:m+'订单', data:MO.series[m], backgroundColor:MO_COLORS[i % MO_COLORS.length],
+
+function buildDatasets(view) {
+  const v = MO.views[view];
+  return v.keys.map((k, i) => ({
+    label: view === 'month' ? (parseInt(k.slice(5)) + '月订单') : k.replace('Home Depot ','HD'),
+    data: v.series[k],
+    backgroundColor: view === 'op' ? (OP_COLORS[k] || CAT[i % 8]) : CAT[i % 8],
     borderColor:'#fcfcfb', borderWidth:2, borderRadius:3, borderSkipped:false,
-    maxBarThickness:30}))},
+    maxBarThickness:30,
+  }));
+}
+const chart = new Chart(document.getElementById('moStack'), {
+  type:'bar',
+  data:{labels:MO.labels, datasets:buildDatasets('month')},
   options:{maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
     plugins:{legend:{position:'bottom', labels:{boxWidth:14, boxHeight:10, color:'#52514e'}},
       tooltip:{callbacks:{
@@ -134,21 +206,35 @@ new Chart(document.getElementById('moStack'), {
       y:{stacked:true, grid:{color:'#e1e0d9'}, border:{display:false},
          ticks:{callback:v=>'$'+v.toLocaleString()}}}}
 });
+document.querySelectorAll('#viewBtns button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#viewBtns button').forEach(b => {
+      b.className = 'btn btn-outline-primary'; });
+    btn.className = 'btn btn-primary';
+    chart.data.datasets = buildDatasets(btn.dataset.view);
+    chart.update();
+  });
+});
 
 const HELP = {
-  mo_chart: {t:'每日退货损失按订单月归因', b:
-    '每根柱=当天(按mirakl_returns真实退货日)发生的退货期望损失合计；柱内分段=这些退货各自属于哪个下单月份。<br>'+
-    '比如今天损失$2,000，蓝段$1,200是6月订单、绿段$800是7月订单——分别记到6月、7月的账上。'+
-    '<span class="src"><b>数据源</b>：return_case台账（飞书订单表成本/供应商退款/运费 × mirakl_returns退货日）</span>'},
-  mo_detail: {t:'归因明细怎么读', b:
+  mo_chart: {t:'每日退货损失', b:
+    '每根柱=当天(按mirakl_returns真实退货日)发生退货的期望损失合计。三个视角看同一批数据：'+
+    '按订单月=这些退货是哪个月卖出去的；按运营/按店铺=谁的、哪个店的。<br>'+
+    '损失算法：有「供应商退款」回填 → (成本−退款)+运费；未回填 → 成本×(1−回收率)+运费；'+
+    'Lowes运费按0；Vevor(司顺)回收率按0。'+
+    '<span class="src"><b>数据源</b>：return_case台账（飞书订单表 × mirakl_returns）</span>'},
+  mo_pivot: {t:'透视表', b:
+    '同一批每日损失，按运营和按店铺分别加总，方便横向比。"—"=当天该运营/店铺没有退货。'},
+  mo_detail: {t:'拆到订单月', b:
     '每行=某天退货中，某运营某订单月的损失小计。<br>'+
-    '<b>利润率影响</b> = 该笔损失 ÷ 该运营该订单月的总销售额，即这批退货把那个月的净利率拉低了多少个百分点(pp)。'+
-    '<span class="src"><b>数据源</b>：return_case + profit_month_cohort(该运营当月销售)</span>'},
-  mo_cohort: {t:'月度侵蚀表怎么读', b:
-    '按<b>订单所属月</b>归集（不是退货月）：该月订单的非退货毛利 − 该月订单至今产生的全部退货期望损失 = 净利。<br>'+
-    '<b>侵蚀</b>=毛利率−净利率，就是退货吃掉的百分点。加粗行=全公司，缩进行=分运营。<br>'+
-    '注意：越近的月份退货还没退完（滞后30-90天），侵蚀数字后续还会变大。'+
-    '<span class="src"><b>数据源</b>：profit_month_cohort（每天05:30全量重算，随财务回填自动修正）</span>'},
+    '<b>拉低该月利润率</b>：这笔损失 ÷ 该运营该订单月总销售额。'+
+    '比如"0.68 个百分点"意思是：该月利润率因为这批退货从比如 14.0% 降到 13.32%。'+
+    '<span class="src">百分点(pp)=利润率数字的绝对变化量</span>'},
+  mo_cohort: {t:'月度表怎么读', b:
+    '按<b>订单所属月</b>归集（不是退货月）：该月卖出订单的毛利，减去这些订单至今产生的全部退货损失。<br>'+
+    '"利润率(退货前→后)"直接展示退货把该月利润率从多少打到多少。<br>'+
+    '注意：越近的月份退货还没退完（滞后30-90天），数字后续还会变差一些。'+
+    '<span class="src"><b>数据源</b>：profit_month_cohort（每天05:30重算，随财务回填自动修正）</span>'},
 };
 document.addEventListener('DOMContentLoaded', () => {
 document.querySelectorAll('[data-help]').forEach(el => {
