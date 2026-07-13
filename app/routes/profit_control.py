@@ -314,28 +314,47 @@ def monthly():
         m["margin_net"] = m["net"] / m["sale"] if m["sale"] > 0 else None
         m["erosion_pp"] = (m["loss"] / m["sale"] * 100) if m["sale"] > 0 else None
 
-    # 归因明细（近7天，含对该运营该订单月的利润率影响）
-    detail_rows = []
-    for (rd, op, om), loss in detail.items():
-        if rd < date.today() - timedelta(days=6):
+    # 近7天：每天的退货记到哪个月的账上（含运营拆分，白话展示）
+    day_blocks = []
+    for d in reversed(day_labels[-7:]):
+        dkey = d.strftime("%Y-%m-%d")
+        month_map: Dict[str, Dict[str, float]] = {}
+        for (rd, op, om), loss in detail.items():
+            if rd.strftime("%Y-%m-%d") != dkey:
+                continue
+            mm = month_map.setdefault(om, {})
+            mm[op] = mm.get(op, 0.0) + loss
+        if not month_map:
             continue
-        msale = op_month_sale.get((op, om), 0.0)
-        detail_rows.append({
-            "return_date": rd, "operator": op, "order_month": om,
-            "loss": round(loss, 2), "month_sale": msale,
-            "impact_pp": (loss / msale * 100) if msale > 0 else None,
-        })
-    detail_rows.sort(key=lambda x: (x["return_date"], -x["loss"]), reverse=True)
+        months_list = []
+        for om in sorted(month_map.keys(), key=lambda m: -sum(month_map[m].values())):
+            ops = sorted(month_map[om].items(), key=lambda x: -x[1])
+            months_list.append({
+                "label": f"{int(om[5:])}月",
+                "loss": sum(month_map[om].values()),
+                "ops_text": " ｜ ".join(f"{o} ${v:,.0f}" for o, v in ops),
+            })
+        day_blocks.append({"date": dkey,
+                           "total": sum(m["loss"] for m in months_list),
+                           "months": months_list})
 
-    # 每日合计（给明细表分组头用）
-    day_totals: Dict[str, float] = {}
-    for r in detail_rows:
-        k = r["return_date"].strftime("%Y-%m-%d")
-        day_totals[k] = day_totals.get(k, 0.0) + r["loss"]
+    # 每月活账本：条形图宽度 + 白话行
+    for m in month_list:
+        gross = m["profit_gross"]
+        if gross > 0:
+            net_w = max(0.0, m["net"]) / gross * 100
+            m["net_w"] = round(min(100.0, net_w), 1)
+            m["loss_w"] = round(100.0 - m["net_w"], 1)
+        else:
+            m["net_w"], m["loss_w"] = 0.0, 100.0
+        m["label"] = f"{int(m['month'][5:])}月"
+        m["ops_line"] = " ｜ ".join(
+            f"{r['operator']} 实赚${_f(r['net']):,.0f}（被扣${_f(r['loss_expected']):,.0f}）"
+            for r in m["ops"])
 
     return render_template("profit_control/monthly.html",
-                           chart_json=chart_json, detail_rows=detail_rows,
-                           day_totals=day_totals, month_list=month_list,
+                           chart_json=chart_json, day_blocks=day_blocks,
+                           month_list=month_list,
                            op_cols=op_cols, store_cols=store_cols,
                            pivot_days=pivot_days, pivot_totals=pivot_totals,
                            latest=latest, baseline=BASELINE)
