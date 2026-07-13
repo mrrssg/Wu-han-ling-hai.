@@ -98,17 +98,30 @@
 {# ============ 最近7天的退货，记在哪个月的账上 ============ #}
 <div class="card p-3 mb-3">
   <div class="sec-title mb-1">最近7天的退货，记在哪个月的账上<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_detail"></a></div>
-  <div class="kpi-sub mb-2">退货虽然发生在最近，但钱要从<b>卖出那个月</b>的利润里扣——下面每天一条，写清扣了哪几个月、各扣多少。</div>
+  <div class="kpi-sub mb-2">退货虽然发生在最近，但钱要从<b>卖出那个月</b>的利润里扣。每条直接写成账本变化：<b>该月净利 扣钱前→扣钱后（利润率 前→后）</b>。</div>
   <div class="row g-2">
     {% for db in day_blocks %}
-    <div class="col-md-6 col-xl-4">
+    <div class="col-lg-6">
       <div class="day-block p-2 h-100">
-        <div class="fw-semibold">📅 {{ db.date }} 退货损失 ${{ '{:,.0f}'.format(db.total) }}</div>
+        <div class="fw-semibold mb-1">📅 {{ db.date }} 退货损失 ${{ '{:,.0f}'.format(db.total) }}</div>
         {% for m in db.months %}
-        <div class="mt-1">
-          <span class="badge text-bg-light border">扣{{ m.label }}的账</span>
-          <b>${{ '{:,.0f}'.format(m.loss) }}</b>
-          <div class="kpi-sub">{{ m.ops_text }}</div>
+        <div class="mb-1">
+          <span class="badge text-bg-light border">扣{{ m.label }}的账 ${{ '{:,.0f}'.format(m.loss) }}</span>
+          <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
+            {% for l in m.ops %}
+            <tr>
+              <td class="text-nowrap" style="width:70px">{{ l.op }}</td>
+              <td class="text-nowrap text-danger" style="width:60px">−${{ '{:,.0f}'.format(l.loss) }}</td>
+              {% if l.after is defined %}
+              <td class="text-nowrap">{{ m.label }}净利 ${{ '{:,.0f}'.format(l.before) }} <b>→</b> ${{ '{:,.0f}'.format(l.after) }}</td>
+              <td class="text-nowrap">利润率 {{ '%.2f' % l.m_before }}% <b>→</b>
+                <span class="{{ 'text-danger fw-bold' if l.m_after < 10 else 'text-success' }}">{{ '%.2f' % l.m_after }}%</span></td>
+              {% else %}
+              <td colspan="2" class="text-muted">（该月不在近6个月账本范围内）</td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </table>
         </div>
         {% endfor %}
       </div>
@@ -117,6 +130,7 @@
     <div class="text-muted text-center py-3">近7天没有退货</div>
     {% endfor %}
   </div>
+  <div class="kpi-sub mt-1">注：箭头以该月<b>最新账本</b>为基准（扣钱前 = 现在的净利 + 这天扣的钱），所以不同天的卡片各自独立成立。</div>
 </div>
 
 {# ============ 每月活账本 ============ #}
@@ -207,7 +221,8 @@ const HELP = {
   mo_detail: {t:'为什么退货要记回卖出月？', b:
     '一件6月卖出的货在7月被退，退货损失是"6月那笔生意"造成的——所以从6月的利润里扣，'+
     '这样每个月的利润才是真实的，不会把老订单的锅甩给新月份。<br>'+
-    '每张卡片=一天的退货，按"扣哪个月的账"分组，后面小字是各运营的份额。'},
+    '每张卡片=一天的退货，按"扣哪个月的账"分组；每行=一个运营：'+
+    '扣多少钱、该月净利从多少变到多少、利润率从几变到几（红色=跌破基线10%）。'},
   mo_cohort: {t:'活账本怎么读', b:
     '每个月一行账：<b>本来能赚</b>（该月卖出且没退货的订单毛利）<b>− 退货扣掉</b>（该月卖出、'+
     '后来退货的损失，含已发生的和按回收率预计收不回的）<b>= 实际赚</b>。<br>'+

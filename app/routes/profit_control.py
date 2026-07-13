@@ -330,7 +330,10 @@ def monthly():
         m["margin_net"] = m["net"] / m["sale"] if m["sale"] > 0 else None
         m["erosion_pp"] = (m["loss"] / m["sale"] * 100) if m["sale"] > 0 else None
 
-    # 近7天：每天的退货记到哪个月的账上（含运营拆分，白话展示）
+    # 近7天：每天的退货记到哪个月的账上，逐条写成"账本变化"：
+    # 扣$X ⇒ 该运营该月净利 before→after、净利率 before→after（以该月最新账为基准）
+    om_op = {(r["operator"], r["order_month"]): (_f(r["net"]), _f(r["sale"]))
+             for r in cohort_rows}
     day_blocks = []
     for d in reversed(day_labels[-7:]):
         dkey = d.strftime("%Y-%m-%d")
@@ -344,11 +347,23 @@ def monthly():
             continue
         months_list = []
         for om in sorted(month_map.keys(), key=lambda m: -sum(month_map[m].values())):
-            ops = sorted(month_map[om].items(), key=lambda x: -x[1])
+            op_lines = []
+            for op, loss in sorted(month_map[om].items(), key=lambda x: -x[1]):
+                net_sale = om_op.get((op, om))
+                line = {"op": op, "loss": round(loss, 0)}
+                if net_sale and net_sale[1] > 0:
+                    after, sale = net_sale
+                    before = after + loss
+                    line.update({
+                        "before": round(before, 0), "after": round(after, 0),
+                        "m_before": round(before / sale * 100, 2),
+                        "m_after": round(after / sale * 100, 2),
+                    })
+                op_lines.append(line)
             months_list.append({
                 "label": f"{int(om[5:])}月",
                 "loss": sum(month_map[om].values()),
-                "ops_text": " ｜ ".join(f"{o} ${v:,.0f}" for o, v in ops),
+                "ops": op_lines,
             })
         day_blocks.append({"date": dkey,
                            "total": sum(m["loss"] for m in months_list),
