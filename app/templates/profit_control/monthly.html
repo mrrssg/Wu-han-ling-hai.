@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}利润控制台 - 月度影响{% endblock %}
+{% block content %}
+<style>
+.pc-i { cursor:pointer; color:#898781; margin-left:4px; text-decoration:none; }
+.pc-i:hover { color:#2a78d6; }
+.popover { max-width: 380px; }
+.popover-body { font-size:.82rem; line-height:1.5; }
+.popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
+  padding:4px 8px; margin-top:6px; display:block; }
+.sec-title { font-weight:600; font-size:.95rem; }
+.kpi-sub { font-size:.78rem; color:#898781; }
+.day-head td { background:#f0f2f5; font-weight:600; }
+.mo-head td { background:#eef2f7; font-weight:700; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-calendar3"></i> 退货损失 · 月度影响
+    <small class="text-muted fs-6 ms-2">退货发生在今天，账算回订单所属月份</small></h4>
+  <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left"></i> 返回总览</a>
+</div>
+
+{# ============ 堆叠图 ============ #}
+<div class="card p-3 mb-3">
+  <div class="sec-title mb-1">近14天 每日退货损失 · 按订单月归因<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_chart"></a>
+    <span class="kpi-sub">（按真实退货日；同一天的损失拆到各订单月）</span></div>
+  <div style="height:280px"><canvas id="moStack"></canvas></div>
+</div>
+
+<div class="row g-3 mb-3">
+  {# ============ 归因明细 ============ #}
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header bg-white sec-title">近7天归因明细<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_detail"></a>
+        <span class="kpi-sub">退货日 × 运营 × 订单月</span></div>
+      <div class="table-responsive" style="max-height:520px;overflow-y:auto">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light"><tr>
+            <th>运营</th><th>订单月</th><th class="text-end">损失$</th>
+            <th class="text-end">该运营当月销售$</th><th class="text-end">利润率影响</th></tr></thead>
+          <tbody>
+            {% set ns = namespace(last='') %}
+            {% for r in detail_rows %}
+              {% set dkey = r.return_date.strftime('%Y-%m-%d') %}
+              {% if dkey != ns.last %}
+                {% set ns.last = dkey %}
+                <tr class="day-head"><td colspan="2">📅 {{ dkey }} 退货</td>
+                  <td class="text-end">{{ '{:,.0f}'.format(day_totals[dkey]) }}</td><td colspan="2"></td></tr>
+              {% endif %}
+              <tr>
+                <td>{{ r.operator }}</td>
+                <td>{{ r.order_month }}</td>
+                <td class="text-end">{{ '{:,.0f}'.format(r.loss) }}</td>
+                <td class="text-end text-muted">{{ '{:,.0f}'.format(r.month_sale) if r.month_sale else '—' }}</td>
+                <td class="text-end {{ 'text-danger fw-bold' if r.impact_pp and r.impact_pp > 0.1 }}">
+                  {{ '−%.3f pp' % r.impact_pp if r.impact_pp is not none else '—' }}</td>
+              </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-center text-muted py-4">近7天没有退货</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ============ 月度cohort ============ #}
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header bg-white sec-title">订单月利润被侵蚀情况（近6个月）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_cohort"></a>
+        <span class="kpi-sub">毛利率 → 净利率，差值=退货侵蚀</span></div>
+      <div class="table-responsive" style="max-height:520px;overflow-y:auto">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light"><tr>
+            <th>订单月 / 运营</th><th class="text-end">销售$</th>
+            <th class="text-end">退货损失$</th><th class="text-end">净利$</th>
+            <th class="text-end">毛利率</th><th class="text-end">净利率</th>
+            <th class="text-end">侵蚀</th></tr></thead>
+          <tbody>
+            {% for m in month_list %}
+            <tr class="mo-head">
+              <td>{{ m.month }}（{{ m.orders }}单/{{ m.returns }}退）</td>
+              <td class="text-end">{{ '{:,.0f}'.format(m.sale) }}</td>
+              <td class="text-end text-danger">{{ '{:,.0f}'.format(m.loss) }}</td>
+              <td class="text-end">{{ '{:,.0f}'.format(m.net) }}</td>
+              <td class="text-end">{{ '%.2f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</td>
+              <td class="text-end {{ 'text-danger' if m.margin_net is not none and m.margin_net < baseline }}">
+                {{ '%.2f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</td>
+              <td class="text-end fw-bold">{{ '−%.2f pp' % m.erosion_pp if m.erosion_pp is not none else '—' }}</td>
+            </tr>
+            {% for r in m.ops %}
+            <tr>
+              <td class="ps-4 text-muted">{{ r.operator }}</td>
+              <td class="text-end">{{ '{:,.0f}'.format(r.sale|float) }}</td>
+              <td class="text-end">{{ '{:,.0f}'.format(r.loss_expected|float) }}</td>
+              <td class="text-end">{{ '{:,.0f}'.format(r.net|float) }}</td>
+              <td class="text-end">{{ '%.2f%%' % (r.margin_gross|float*100) if r.margin_gross is not none else '—' }}</td>
+              <td class="text-end">{{ '%.2f%%' % (r.margin_net|float*100) if r.margin_net is not none else '—' }}</td>
+              <td class="text-end">{{ '−%.2f pp' % ((r.margin_gross|float - r.margin_net|float)*100) if r.margin_gross is not none and r.margin_net is not none else '—' }}</td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card p-2 mb-4"><div class="kpi-sub px-2">
+  口径：损失=退货期望损失（有「供应商退款」按差额；没有按 成本×(1−店铺回收率)+运费）；月度表按<b>下单月</b>归集、含该月订单至今全部退货；
+  越近的月份退货还没退完，侵蚀数字会继续变大（链梯预扣见总览页考核口径）
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const MO = {{ chart_json|safe }};
+const MO_COLORS = ['#2a78d6','#1baf7a','#eda100','#4a3aa7','#e34948','#e87ba4','#eb6834','#008300'];
+Chart.defaults.font.family = "system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif";
+Chart.defaults.color = '#898781';
+new Chart(document.getElementById('moStack'), {
+  type:'bar',
+  data:{labels:MO.labels, datasets:MO.months.map((m,i)=>({
+    label:m+'订单', data:MO.series[m], backgroundColor:MO_COLORS[i % MO_COLORS.length],
+    borderColor:'#fcfcfb', borderWidth:2, borderRadius:3, borderSkipped:false,
+    maxBarThickness:30}))},
+  options:{maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+    plugins:{legend:{position:'bottom', labels:{boxWidth:14, boxHeight:10, color:'#52514e'}},
+      tooltip:{callbacks:{
+        label:c=>` ${c.dataset.label}: $${c.parsed.y.toLocaleString()}`,
+        footer:items=>'当日合计 $'+items.reduce((s,i)=>s+i.parsed.y,0).toLocaleString()}}},
+    scales:{x:{stacked:true, grid:{display:false}},
+      y:{stacked:true, grid:{color:'#e1e0d9'}, border:{display:false},
+         ticks:{callback:v=>'$'+v.toLocaleString()}}}}
+});
+
+const HELP = {
+  mo_chart: {t:'每日退货损失按订单月归因', b:
+    '每根柱=当天(按mirakl_returns真实退货日)发生的退货期望损失合计；柱内分段=这些退货各自属于哪个下单月份。<br>'+
+    '比如今天损失$2,000，蓝段$1,200是6月订单、绿段$800是7月订单——分别记到6月、7月的账上。'+
+    '<span class="src"><b>数据源</b>：return_case台账（飞书订单表成本/供应商退款/运费 × mirakl_returns退货日）</span>'},
+  mo_detail: {t:'归因明细怎么读', b:
+    '每行=某天退货中，某运营某订单月的损失小计。<br>'+
+    '<b>利润率影响</b> = 该笔损失 ÷ 该运营该订单月的总销售额，即这批退货把那个月的净利率拉低了多少个百分点(pp)。'+
+    '<span class="src"><b>数据源</b>：return_case + profit_month_cohort(该运营当月销售)</span>'},
+  mo_cohort: {t:'月度侵蚀表怎么读', b:
+    '按<b>订单所属月</b>归集（不是退货月）：该月订单的非退货毛利 − 该月订单至今产生的全部退货期望损失 = 净利。<br>'+
+    '<b>侵蚀</b>=毛利率−净利率，就是退货吃掉的百分点。加粗行=全公司，缩进行=分运营。<br>'+
+    '注意：越近的月份退货还没退完（滞后30-90天），侵蚀数字后续还会变大。'+
+    '<span class="src"><b>数据源</b>：profit_month_cohort（每天05:30全量重算，随财务回填自动修正）</span>'},
+};
+document.addEventListener('DOMContentLoaded', () => {
+document.querySelectorAll('[data-help]').forEach(el => {
+  const h = HELP[el.dataset.help];
+  if (!h) return;
+  new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
+    trigger:'focus', placement:'bottom', container:'body'});
+});
+});
+</script>
+{% endblock %}

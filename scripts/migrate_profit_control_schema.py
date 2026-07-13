@@ -120,6 +120,23 @@ DDL = [
     ) CHARACTER SET utf8mb4 COMMENT='利润控制台: SKU 90天指标(每日全量重建)'
     """,
     """
+    CREATE TABLE IF NOT EXISTS order_system.profit_month_cohort (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        order_month CHAR(7) NOT NULL COMMENT '订单所属月 YYYY-MM',
+        operator VARCHAR(32) NOT NULL,
+        orders INT DEFAULT 0,
+        sale DECIMAL(12,2) DEFAULT 0,
+        profit_gross DECIMAL(12,2) DEFAULT 0 COMMENT '非退货单毛利',
+        returns_cnt INT DEFAULT 0,
+        loss_expected DECIMAL(12,2) DEFAULT 0 COMMENT '该月订单的退货期望损失(至今累计)',
+        net DECIMAL(12,2) DEFAULT 0,
+        margin_gross DECIMAL(8,4) DEFAULT NULL,
+        margin_net DECIMAL(8,4) DEFAULT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_month_op (order_month, operator)
+    ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 订单月cohort(每日全量重建)'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS order_system.action_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         action_type VARCHAR(32) NOT NULL COMMENT 'raise_price/delist/recover/reroute',

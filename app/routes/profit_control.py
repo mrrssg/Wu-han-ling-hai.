@@ -209,6 +209,100 @@ def issues():
 
 
 # ---------------------------------------------------------------
+# 月度影响：退货损失按订单月归因 → 对各月利润/利润率的侵蚀
+# ---------------------------------------------------------------
+
+def _store_recovery_rates() -> Dict[str, float]:
+    rows = _query(
+        """SELECT store, SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
+           FROM order_system.return_case
+           WHERE state='recovered' OR age_days > 90 GROUP BY store""")
+    return {x["store"]: (min(1.0, _f(x["r"]) / _f(x["c"])) if _f(x["c"]) > 0 else 0.0)
+            for x in rows}
+
+
+@profit_control_bp.route("/monthly")
+def monthly():
+    rr = _store_recovery_rates()
+    days = 14
+    since = date.today() - timedelta(days=days - 1)
+    cases = _query(
+        """SELECT return_date, operator, store, state, confirmed_loss, exposure,
+                  DATE_FORMAT(order_date, '%%Y-%%m') AS om
+           FROM order_system.return_case
+           WHERE return_date >= %s AND return_date <= CURDATE()""", (since,))
+
+    def case_loss(c) -> float:
+        return _f(c["confirmed_loss"]) + _f(c["exposure"]) * (1.0 - rr.get(c["store"], 0.0))
+
+    # 堆叠图：近14天 每日损失 × 订单月
+    day_labels = [(since + timedelta(days=i)) for i in range(days)]
+    months_seen = sorted(set(c["om"] for c in cases))
+    stack: Dict[str, Dict[str, float]] = {m: {} for m in months_seen}
+    detail: Dict[tuple, float] = {}
+    for c in cases:
+        loss = case_loss(c)
+        if loss <= 0:
+            continue
+        dkey = c["return_date"].strftime("%Y-%m-%d")
+        stack[c["om"]][dkey] = stack[c["om"]].get(dkey, 0.0) + loss
+        k = (c["return_date"], c["operator"], c["om"])
+        detail[k] = detail.get(k, 0.0) + loss
+    chart_json = json.dumps({
+        "labels": [d.strftime("%m-%d") for d in day_labels],
+        "months": months_seen,
+        "series": {m: [round(stack[m].get(d.strftime("%Y-%m-%d"), 0.0), 0)
+                       for d in day_labels] for m in months_seen},
+    }, ensure_ascii=False)
+
+    # cohort：近6个订单月 × 运营（含公司合计行）
+    cohort_rows = _query(
+        """SELECT * FROM order_system.profit_month_cohort
+           WHERE order_month >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m')
+           ORDER BY order_month DESC, sale DESC""")
+    months: Dict[str, Dict] = {}
+    op_month_sale: Dict[tuple, float] = {}
+    for r in cohort_rows:
+        m = months.setdefault(r["order_month"], {
+            "month": r["order_month"], "sale": 0.0, "profit_gross": 0.0,
+            "loss": 0.0, "net": 0.0, "orders": 0, "returns": 0, "ops": []})
+        m["sale"] += _f(r["sale"]); m["profit_gross"] += _f(r["profit_gross"])
+        m["loss"] += _f(r["loss_expected"]); m["net"] += _f(r["net"])
+        m["orders"] += int(r["orders"] or 0); m["returns"] += int(r["returns_cnt"] or 0)
+        m["ops"].append(r)
+        op_month_sale[(r["operator"], r["order_month"])] = _f(r["sale"])
+    month_list = sorted(months.values(), key=lambda x: x["month"], reverse=True)
+    for m in month_list:
+        m["margin_gross"] = m["profit_gross"] / m["sale"] if m["sale"] > 0 else None
+        m["margin_net"] = m["net"] / m["sale"] if m["sale"] > 0 else None
+        m["erosion_pp"] = (m["loss"] / m["sale"] * 100) if m["sale"] > 0 else None
+
+    # 归因明细（近7天，含对该运营该订单月的利润率影响）
+    detail_rows = []
+    for (rd, op, om), loss in detail.items():
+        if rd < date.today() - timedelta(days=6):
+            continue
+        msale = op_month_sale.get((op, om), 0.0)
+        detail_rows.append({
+            "return_date": rd, "operator": op, "order_month": om,
+            "loss": round(loss, 2), "month_sale": msale,
+            "impact_pp": (loss / msale * 100) if msale > 0 else None,
+        })
+    detail_rows.sort(key=lambda x: (x["return_date"], -x["loss"]), reverse=True)
+
+    # 每日合计（给明细表分组头用）
+    day_totals: Dict[str, float] = {}
+    for r in detail_rows:
+        k = r["return_date"].strftime("%Y-%m-%d")
+        day_totals[k] = day_totals.get(k, 0.0) + r["loss"]
+
+    return render_template("profit_control/monthly.html",
+                           chart_json=chart_json, detail_rows=detail_rows,
+                           day_totals=day_totals, month_list=month_list,
+                           baseline=BASELINE)
+
+
+# ---------------------------------------------------------------
 # 行动清单（只读 + CSV 导出）
 # ---------------------------------------------------------------
 
