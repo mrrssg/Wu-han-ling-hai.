@@ -18,7 +18,7 @@
 
 <div class="card p-2 mb-3"><div class="kpi-sub px-2" style="line-height:1.7">
   这些单已被标记退货（有退货原因），但退货的后果还没体现在账上，分两种：<br>
-  🟠 <b>买家退款未入账</b>（{{ totals.unbooked_n }}笔）：「实际到账」还挂着收款、<b>实际利润仍为正</b>——等账单导入后会被扣回，目前让飞书的Σ实际利润<b>虚高</b>；<br>
+  🟠 <b>买家退款未扣回</b>（{{ totals.unbooked_n }}笔）：Macy还没把买家货款从「实际到账」里扣走、<b>实际利润仍为正</b>——目前让飞书的Σ实际利润<b>虚高</b>。注意这和供应商退款是两笔钱：<b>供应商退了款的单也可能买家退款还没扣</b>（如4719687253-A：Costway已退$89.25，但$107.40的买家货款还挂在账上，实际利润虚高+$107.40）；<br>
   ⚪ <b>账单未导入</b>（{{ totals.n - totals.unbooked_n }}笔）：整单还没有实际结算数据，暂按预估。<br>
   （部分退款但亏损已入账的单——实际利润已为负——不在此列。）<br>
   合计：售价 ${{ '{:,.0f}'.format(totals.sale) }} ｜ 成本 ${{ '{:,.0f}'.format(totals.cost) }} ｜ 还挂在账上的到账 ${{ '{:,.0f}'.format(totals.income) }}
@@ -49,7 +49,7 @@
           {{ '{:,.2f}'.format(r.income_actual|float) if r.income_actual is not none else '—' }}</td>
         <td class="text-end">{{ '{:,.2f}'.format(r.profit_actual|float) if r.profit_actual is not none else '—' }}</td>
         <td class="text-end">{{ '{:,.2f}'.format(r.supplier_refund|float) if r.supplier_refund is not none else '—' }}</td>
-        <td>{% if r.status == '买家退款未入账' %}<span class="badge text-bg-warning">退款未入账</span>
+        <td>{% if r.status == '买家退款未入账' %}<span class="badge text-bg-warning">买家退款未扣回</span>
             {% else %}<span class="badge text-bg-light border">账单未导入</span>{% endif %}</td>
       </tr>
       {% else %}
