@@ -159,6 +159,14 @@
       <div class="net" style="width:{{ m.net_w }}%"></div>
       <div class="eaten" style="width:{{ m.loss_w }}%"></div>
     </div>
+    <div class="mt-2" style="font-size:.9rem">
+      💰 <b>目前实际落袋</b>（供应商退款只算已到账的）：
+      <b>${{ '{:,.0f}'.format(m.net_actual) }}</b>（{{ '%.1f%%' % (m.margin_net_actual*100) if m.margin_net_actual is not none else '—' }}）
+      {% if m.hanging > 1 %}
+      <span class="text-muted">｜ 还压在供应商那边、预计能退回 ≈ <b class="text-warning">${{ '{:,.0f}'.format(m.hanging) }}</b>，
+        全部到账后 → ${{ '{:,.0f}'.format(m.net) }}（{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}）</span>
+      {% endif %}
+    </div>
     <div class="kpi-sub mt-1">{{ m.ops_line }}</div>
   </div>
   {% endfor %}
@@ -229,10 +237,11 @@ const HELP = {
     '每张卡片=一天的退货，按"扣哪个月的账"分组；每行=一个运营：'+
     '扣多少钱、该月净利从多少变到多少、利润率从几变到几（红色=跌破基线10%）。'},
   mo_cohort: {t:'活账本怎么读', b:
-    '每个月一行账：<b>本来能赚</b>（该月卖出且没退货的订单毛利）<b>− 退货扣掉</b>（该月卖出、'+
-    '后来退货的损失，含已发生的和按回收率预计收不回的）<b>= 实际赚</b>。<br>'+
-    '为什么叫"活"账本：财务回填供应商退款、或新退货进来，每天凌晨自动重算，数字会变。'+
-    '越近的月份退货还没退完，红色部分还会变长。'+
+    '每个月两本账：<br><b>预计最终赚</b>（等式那行）= 本来能赚 − 退货扣掉，其中待追回的供应商退款'+
+    '按回收率规则(Macy-Costway 90%/司顺0)先记上；<br>'+
+    '<b>目前实际落袋</b>（💰那行）= 供应商退款<b>只算已经到账回填的</b>，没到账的一分不算——'+
+    '这是最保守的现金口径。两者的差 = 还压在供应商那边预计能退回的钱。<br>'+
+    '财务回填退款后，实际落袋逐步向预计数靠拢；每天凌晨自动重算。'+
     '<span class="src"><b>数据源</b>：profit_month_cohort（飞书订单表按下单月聚合，每天05:30重算）</span>'},
 };
 document.addEventListener('DOMContentLoaded', () => {

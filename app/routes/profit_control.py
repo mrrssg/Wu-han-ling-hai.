@@ -319,9 +319,11 @@ def monthly():
     for r in cohort_rows:
         m = months.setdefault(r["order_month"], {
             "month": r["order_month"], "sale": 0.0, "profit_gross": 0.0,
-            "loss": 0.0, "net": 0.0, "orders": 0, "returns": 0, "ops": []})
+            "loss": 0.0, "net": 0.0, "loss_actual": 0.0, "net_actual": 0.0,
+            "orders": 0, "returns": 0, "ops": []})
         m["sale"] += _f(r["sale"]); m["profit_gross"] += _f(r["profit_gross"])
         m["loss"] += _f(r["loss_expected"]); m["net"] += _f(r["net"])
+        m["loss_actual"] += _f(r["loss_actual"]); m["net_actual"] += _f(r["net_actual"])
         m["orders"] += int(r["orders"] or 0); m["returns"] += int(r["returns_cnt"] or 0)
         m["ops"].append(r)
         op_month_sale[(r["operator"], r["order_month"])] = _f(r["sale"])
@@ -329,6 +331,8 @@ def monthly():
     for m in month_list:
         m["margin_gross"] = m["profit_gross"] / m["sale"] if m["sale"] > 0 else None
         m["margin_net"] = m["net"] / m["sale"] if m["sale"] > 0 else None
+        m["margin_net_actual"] = m["net_actual"] / m["sale"] if m["sale"] > 0 else None
+        m["hanging"] = m["loss_actual"] - m["loss"]   # 挂在供应商那边、按规则预计能退回的钱
         m["erosion_pp"] = (m["loss"] / m["sale"] * 100) if m["sale"] > 0 else None
 
     # 近7天：每天的退货记到哪个月的账上，逐条写成"账本变化"：

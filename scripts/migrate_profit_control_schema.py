@@ -164,6 +164,11 @@ ALTERS = [
     "ALTER TABLE order_system.return_case MODIFY COLUMN state "
     "ENUM('pending','recovered','written_off','not_charged') DEFAULT 'pending' "
     "COMMENT 'not_charged=有退货标记但账单未扣款,按正常单计'",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN loss_actual DECIMAL(12,2) DEFAULT 0 "
+    "COMMENT '实际口径损失(供应商退款只认已到账)'",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN net_actual DECIMAL(12,2) DEFAULT 0 "
+    "COMMENT '目前实际落袋=毛利-实际口径损失'",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN margin_net_actual DECIMAL(8,4) DEFAULT NULL",
 ]
 
 
