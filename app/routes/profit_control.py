@@ -100,7 +100,7 @@ def overview():
     rec = _query(
         """SELECT SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
            FROM order_system.return_case
-           WHERE (state='recovered' OR age_days > 90)
+           WHERE state <> 'not_charged' AND (state='recovered' OR age_days > 90)
              AND store='Macys-Kuyotq' AND supplier='Costway'""")
     if rec and rec[0]["c"] and _f(rec[0]["c"]) > 0:
         kpi["recovery_rate"] = _f(rec[0]["r"]) / _f(rec[0]["c"])
@@ -222,7 +222,8 @@ def _recovery_rates_pairs() -> Dict:
         """SELECT store, supplier, COUNT(*) AS n,
                   SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
            FROM order_system.return_case
-           WHERE state='recovered' OR age_days > 90 GROUP BY store, supplier""")
+           WHERE state <> 'not_charged' AND (state='recovered' OR age_days > 90)
+           GROUP BY store, supplier""")
     rates: Dict = {}
     store_agg: Dict[str, list] = {}
     for x in rows:
@@ -372,13 +373,13 @@ def monthly():
     # 每月"未记全的退货"数量 → 活账本按钮
     # 判定：账单未导入(income_actual IS NULL) 或 实际利润仍>0(退货后果没体现在账上)。
     # 注意不能只看"实际到账>1"——部分退款的单到账留有余额但亏损已入账(实际利润为负)，不算未记全。
-    # 用户规则(2026-07-13)：有「供应商退款」的单一律视为已闭环，不进未记全清单
+    # 未定案的退货标记单：账单未导入(暂按退货计) 或 账单未扣款(已按正常单计)。
+    # 用户规则：有「供应商退款」的一律视为已闭环，不进清单。
     unbooked_counts = {r["m"]: int(r["n"]) for r in _query(
         """SELECT DATE_FORMAT(order_date,'%Y-%m') AS m, COUNT(*) AS n
            FROM order_system.return_case
            WHERE COALESCE(supplier_refund, 0) <= 0
-             AND (income_actual IS NULL
-                  OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0))
+             AND (income_actual IS NULL OR state = 'not_charged')
            GROUP BY DATE_FORMAT(order_date,'%Y-%m')""")}
 
     # 每月活账本：条形图宽度 + 白话行
@@ -406,9 +407,10 @@ def monthly():
 
 @profit_control_bp.route("/monthly/unbooked")
 def monthly_unbooked():
-    """某订单月里"退货了但流水还没记全"的订单明细。
-    判定：income_actual IS NULL（账单还没导入）或 实际利润仍>0（退货后果没体现在账上）。
-    部分退款的单（到账留余额但实际利润已为负，如 4720321679-A）不算未记全。"""
+    """某订单月里有退货标记、但账单还没定案的订单明细。
+    ⚪ 账单未导入(income_actual IS NULL)：暂按退货预判、计期望损失；
+    🟢 账单未扣款(state='not_charged')：买家货款没被扣回 → 不算退货，已按正常单计利润。
+    有「供应商退款」的一律视为已闭环，不出现（用户规则）。"""
     month = (request.args.get("month") or "")[:7]
     rows = _query(
         """SELECT order_id, store, operator, supplier, shop_sku, order_date, return_date,
@@ -417,11 +419,10 @@ def monthly_unbooked():
            FROM order_system.return_case
            WHERE DATE_FORMAT(order_date,'%%Y-%%m') = %s
              AND COALESCE(supplier_refund, 0) <= 0
-             AND (income_actual IS NULL
-                  OR (income_actual > 1 AND COALESCE(profit_actual, 1) > 0))
+             AND (income_actual IS NULL OR state = 'not_charged')
            ORDER BY income_actual DESC, cost DESC""", (month,))
     for r in rows:
-        r["status"] = "账单未导入" if r["income_actual"] is None else "买家退款未入账"
+        r["status"] = "账单未导入" if r["income_actual"] is None else "账单未扣款"
     totals = {
         "n": len(rows),
         "sale": sum(_f(r["sale"]) for r in rows),

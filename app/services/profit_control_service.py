@@ -173,10 +173,14 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
 
         est_rfee = _gn(f.get("预估退货运费"))
         reason = _gt(f.get("退货原因"))
-        is_return = (est_rfee is not None) and reason != ""
+        # 退货判定(用户规则 2026-07-13)：标记(预估退货运费+退货原因)只代表"申请过退货"，
+        # 真退货必须账单坐实——实际到账≈0(买家货款被扣回)才算；
+        # 账单未导入(实际到账为空)暂按退货预判；账单到了但没扣款(>1)的按正常单算利润。
+        return_marked = (est_rfee is not None) and reason != ""
+        is_return = return_marked and (inc_a is None or inc_a <= 1)
 
         rfee = 0.0
-        if is_return:
+        if return_marked:
             rfee_a = _gn(f.get("退货运费"))
             if use_actual and rfee_a is not None:
                 rfee = rfee_a
@@ -199,6 +203,7 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
             "cost": cost or 0.0,
             "profit": profit or 0.0,
             "is_return": is_return,
+            "return_marked": return_marked,
             "return_fee": rfee,
             "supplier_refund": sup_refund_actual,
             "actual_cost_filled": (cost_a is not None and cost_a != 0),
@@ -245,7 +250,7 @@ def rebuild_return_cases(conn, parsed: List[Dict], return_dates: Dict[str, datet
     cutoff_ts = (now_cn - timedelta(days=365)).timestamp() * 1000
     rows = []
     for o in parsed:
-        if not o["is_return"] or o["order_ts"] <= cutoff_ts:
+        if not o["return_marked"] or o["order_ts"] <= cutoff_ts:
             continue
         order_date = datetime.fromtimestamp(o["order_ts"] / 1000, tz=CN_TZ).date()
         rd = return_dates.get(_bare(o["order_id"]))
@@ -254,7 +259,12 @@ def rebuild_return_cases(conn, parsed: List[Dict], return_dates: Dict[str, datet
         refund = o["supplier_refund"]
         cost = round(o["cost"], 2)
         fee = round(o["return_fee"], 2)
-        if refund is not None and refund > 0:
+        if not o["is_return"]:
+            # 账单到了但买家货款没被扣回 → 不算退货，按正常单计利润（不计任何退货损失）
+            state = "not_charged"
+            confirmed_loss = 0.0
+            exposure = 0.0
+        elif refund is not None and refund > 0:
             state = "recovered"
             confirmed_loss = round(max(0.0, cost - refund) + fee, 2)
             exposure = 0.0
@@ -313,7 +323,7 @@ def compute_recovery_rates(conn) -> Dict[Tuple[str, str], float]:
                    SUM(COALESCE(supplier_refund,0)) AS refund_sum,
                    SUM(cost) AS cost_sum, COUNT(*) AS n
             FROM order_system.return_case
-            WHERE state='recovered' OR age_days > %s
+            WHERE state <> 'not_charged' AND (state='recovered' OR age_days > %s)
             GROUP BY store, supplier
         """, (MATURED_AGE_DAYS,))
         for row in cur.fetchall():

@@ -161,6 +161,9 @@ ALTERS = [
     "COMMENT '实际到账快照(买家退款入账后≈0; >1=退款未入账; NULL=账单未导入)'",
     "ALTER TABLE order_system.return_case ADD COLUMN profit_actual DECIMAL(10,2) DEFAULT NULL "
     "COMMENT '飞书实际利润快照(仍>0=退货后果未体现在账上)'",
+    "ALTER TABLE order_system.return_case MODIFY COLUMN state "
+    "ENUM('pending','recovered','written_off','not_charged') DEFAULT 'pending' "
+    "COMMENT 'not_charged=有退货标记但账单未扣款,按正常单计'",
 ]
 
 
