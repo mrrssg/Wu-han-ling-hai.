@@ -155,6 +155,13 @@ DDL = [
 ]
 
 
+ALTERS = [
+    "ALTER TABLE order_system.return_case ADD COLUMN sale DECIMAL(10,2) DEFAULT NULL COMMENT '售价(整单总价)'",
+    "ALTER TABLE order_system.return_case ADD COLUMN income_actual DECIMAL(10,2) DEFAULT NULL "
+    "COMMENT '实际到账快照(买家退款入账后≈0; >1=退款未入账; NULL=账单未导入)'",
+]
+
+
 def main() -> int:
     config_name = os.environ.get("FLASK_CONFIG", "production")
     app = create_app(config_name)
@@ -164,8 +171,14 @@ def main() -> int:
             with conn.cursor() as cur:
                 for ddl in DDL:
                     cur.execute(ddl)
+                for alter in ALTERS:
+                    try:
+                        cur.execute(alter)
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
-            print("profit_control schema OK: profit_cell_daily / return_case / issue_log / action_log")
+            print("profit_control schema OK: profit_cell_daily / return_case(+sale,income_actual) / issue_log / action_log")
         finally:
             conn.close()
     return 0

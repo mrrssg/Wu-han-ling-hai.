@@ -369,8 +369,16 @@ def monthly():
                            "total": sum(m["loss"] for m in months_list),
                            "months": months_list})
 
+    # 每月"未记全的退货"数量（买家退款未入账 或 账单未导入）→ 活账本按钮
+    unbooked_counts = {r["m"]: int(r["n"]) for r in _query(
+        """SELECT DATE_FORMAT(order_date,'%Y-%m') AS m, COUNT(*) AS n
+           FROM order_system.return_case
+           WHERE income_actual IS NULL OR income_actual > 1
+           GROUP BY DATE_FORMAT(order_date,'%Y-%m')""")}
+
     # 每月活账本：条形图宽度 + 白话行
     for m in month_list:
+        m["unbooked_n"] = unbooked_counts.get(m["month"], 0)
         gross = m["profit_gross"]
         if gross > 0:
             net_w = max(0.0, m["net"]) / gross * 100
@@ -389,6 +397,40 @@ def monthly():
                            op_cols=op_cols, store_cols=store_cols,
                            pivot_days=pivot_days, pivot_totals=pivot_totals,
                            latest=latest, baseline=BASELINE)
+
+
+@profit_control_bp.route("/monthly/unbooked")
+def monthly_unbooked():
+    """某订单月里"退货了但流水还没记全"的订单明细。
+    判定：income_actual IS NULL（账单还没导入）或 income_actual > 1（买家退款未入账）。"""
+    month = (request.args.get("month") or "")[:7]
+    rows = _query(
+        """SELECT order_id, store, operator, supplier, shop_sku, order_date, return_date,
+                  age_days, sale, cost, income_actual, supplier_refund, return_fee, state
+           FROM order_system.return_case
+           WHERE DATE_FORMAT(order_date,'%%Y-%%m') = %s
+             AND (income_actual IS NULL OR income_actual > 1)
+           ORDER BY income_actual DESC, cost DESC""", (month,))
+    for r in rows:
+        r["status"] = "账单未导入" if r["income_actual"] is None else "买家退款未入账"
+    totals = {
+        "n": len(rows),
+        "sale": sum(_f(r["sale"]) for r in rows),
+        "cost": sum(_f(r["cost"]) for r in rows),
+        "income": sum(_f(r["income_actual"]) for r in rows),
+        "unbooked_n": sum(1 for r in rows if r["income_actual"] is not None),
+    }
+    if request.args.get("format") == "csv":
+        buf = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        return Response(("﻿" + buf.getvalue()).encode("utf-8"), mimetype="text/csv",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=unbooked_returns_{month}.csv"})
+    return render_template("profit_control/unbooked.html",
+                           month=month, rows=rows, totals=totals)
 
 
 # ---------------------------------------------------------------

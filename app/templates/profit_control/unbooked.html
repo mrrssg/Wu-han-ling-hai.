@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}未记全的退货 - {{ month }}{% endblock %}
+{% block content %}
+<style>
+.kpi-sub { font-size:.78rem; color:#898781; }
+</style>
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h4 class="mb-0"><i class="bi bi-hourglass-split"></i> {{ month[-2:]|int }}月卖出、退货了但流水还没记全的订单
+    <span class="badge text-bg-warning">{{ totals.n }} 笔</span></h4>
+  <div>
+    <a class="btn btn-sm btn-outline-success me-1"
+       href="{{ url_for('profit_control.monthly_unbooked', month=month, format='csv') }}">
+      <i class="bi bi-download"></i> 导出CSV</a>
+    <a href="{{ url_for('profit_control.monthly') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> 返回月度影响</a>
+  </div>
+</div>
+
+<div class="card p-2 mb-3"><div class="kpi-sub px-2" style="line-height:1.7">
+  这些单已被标记退货（有退货原因），但财务流水还没走完，分两种：<br>
+  🟠 <b>买家退款未入账</b>（{{ totals.unbooked_n }}笔）：「实际到账」还挂着卖出时的收款，等账单导入后会被扣回——它们目前让飞书的Σ实际利润<b>虚高</b>；<br>
+  ⚪ <b>账单未导入</b>（{{ totals.n - totals.unbooked_n }}笔）：整单还没有实际结算数据，暂按预估。<br>
+  合计：售价 ${{ '{:,.0f}'.format(totals.sale) }} ｜ 成本 ${{ '{:,.0f}'.format(totals.cost) }} ｜ 还挂在账上的到账 ${{ '{:,.0f}'.format(totals.income) }}
+</div></div>
+
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light"><tr>
+      <th>订单号</th><th>店铺</th><th>运营</th><th>供应商</th><th>SKU</th>
+      <th>退货日</th><th class="text-end">账龄(天)</th>
+      <th class="text-end">售价$</th><th class="text-end">成本$</th>
+      <th class="text-end">实际到账$</th><th class="text-end">供应商退款$</th>
+      <th>状态</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="font-monospace small">{{ r.order_id }}</td>
+        <td class="small">{{ r.store }}</td>
+        <td class="small">{{ r.operator }}</td>
+        <td class="small">{{ r.supplier }}</td>
+        <td class="small">{{ r.shop_sku }}</td>
+        <td class="text-nowrap small">{{ r.return_date }}</td>
+        <td class="text-end">{{ r.age_days }}</td>
+        <td class="text-end">{{ '{:,.2f}'.format(r.sale|float) if r.sale is not none else '—' }}</td>
+        <td class="text-end">{{ '{:,.2f}'.format(r.cost|float) }}</td>
+        <td class="text-end {{ 'fw-bold text-warning' if r.income_actual is not none }}">
+          {{ '{:,.2f}'.format(r.income_actual|float) if r.income_actual is not none else '—' }}</td>
+        <td class="text-end">{{ '{:,.2f}'.format(r.supplier_refund|float) if r.supplier_refund is not none else '—' }}</td>
+        <td>{% if r.status == '买家退款未入账' %}<span class="badge text-bg-warning">退款未入账</span>
+            {% else %}<span class="badge text-bg-light border">账单未导入</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="12" class="text-center text-muted py-4">这个月的退货流水都记全了 🎉</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+<p class="kpi-sub mt-2">账单导入、买家退款入账后，订单会自动从这张清单消失（每天05:30刷新）。</p>
+{% endblock %}

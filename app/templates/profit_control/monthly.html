@@ -148,7 +148,12 @@
         = 实际赚 <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">${{ '{:,.0f}'.format(m.net) }}</b>
       </div>
       <div>利润率 <b>{{ '%.1f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</b>
-        → <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</b></div>
+        → <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</b>
+        {% if m.unbooked_n %}
+        <a class="btn btn-sm btn-outline-warning ms-2"
+           href="{{ url_for('profit_control.monthly_unbooked', month=m.month) }}">
+          <i class="bi bi-hourglass-split"></i> 未记全的退货 {{ m.unbooked_n }}笔</a>
+        {% endif %}</div>
     </div>
     <div class="bar mt-2" title="绿=实际赚到 ${{ '{:,.0f}'.format(m.net) }}；红=被退货吃掉 ${{ '{:,.0f}'.format(m.loss) }}">
       <div class="net" style="width:{{ m.net_w }}%"></div>

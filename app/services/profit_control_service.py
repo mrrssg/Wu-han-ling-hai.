@@ -193,6 +193,7 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
             "operator": _gt(f.get("责任运营")) or "未分配",
             "sku": _gt(f.get("Shop SKU")) or _gt(f.get("供应商sku")),
             "order_ts": t,
+            "income_actual": inc_a,
             "sale": _gn(f.get("售价")) or 0.0,
             "cost": cost or 0.0,
             "profit": profit or 0.0,
@@ -269,21 +270,24 @@ def rebuild_return_cases(conn, parsed: List[Dict], return_dates: Dict[str, datet
             o["sku"], order_date, return_date, cost, fee,
             (round(refund, 2) if refund is not None else None),
             state, age_days, confirmed_loss, exposure,
+            round(o["sale"], 2),
+            (round(o["income_actual"], 2) if o["income_actual"] is not None else None),
         ))
 
     sql = """
         INSERT INTO order_system.return_case
             (order_id, order_line, store, operator, supplier, shop_sku,
              order_date, return_date, cost, return_fee, supplier_refund,
-             state, age_days, confirmed_loss, exposure)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             state, age_days, confirmed_loss, exposure, sale, income_actual)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
             store=VALUES(store), operator=VALUES(operator), supplier=VALUES(supplier),
             shop_sku=VALUES(shop_sku), return_date=VALUES(return_date),
             cost=VALUES(cost), return_fee=VALUES(return_fee),
             supplier_refund=VALUES(supplier_refund),
             state=VALUES(state), age_days=VALUES(age_days),
-            confirmed_loss=VALUES(confirmed_loss), exposure=VALUES(exposure)
+            confirmed_loss=VALUES(confirmed_loss), exposure=VALUES(exposure),
+            sale=VALUES(sale), income_actual=VALUES(income_actual)
     """
     with conn.cursor() as cur:
         for i in range(0, len(rows), 500):
