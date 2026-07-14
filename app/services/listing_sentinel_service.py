@@ -285,7 +285,8 @@ severe=存在high问题且与退货原因吻合；minor=只有mid/low问题；cl
 
 # ------------------------- 主流程 -------------------------
 
-def run_sentinel(base_dir: str, days: int = 1, limit: int = 0) -> Dict[str, Any]:
+def run_sentinel(base_dir: str, days: int = 1, limit: int = 0,
+                 skus: Optional[List[str]] = None) -> Dict[str, Any]:
     _ensure_openai_key(base_dir)
     headers = {"Authorization": f"Bearer {_token()}",
                "Content-Type": "application/json; charset=utf-8"}
@@ -295,14 +296,22 @@ def run_sentinel(base_dir: str, days: int = 1, limit: int = 0) -> Dict[str, Any]
              "clean": 0, "skipped": [], "errors": []}
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT rc.shop_sku, rc.store, rc.operator, rc.supplier, COUNT(*) AS n
-                FROM order_system.return_case rc
-                JOIN order_system.mirakl_returns mr ON mr.order_id = rc.order_id
-                WHERE mr.date_created >= DATE_SUB(NOW(), INTERVAL %s DAY)
-                  AND rc.shop_sku <> '' AND rc.state <> 'not_charged'
-                GROUP BY rc.shop_sku, rc.store, rc.operator, rc.supplier
-                ORDER BY n DESC""", (days,))
+            if skus:
+                ph = ",".join(["%s"] * len(skus))
+                cur.execute(f"""
+                    SELECT rc.shop_sku, rc.store, rc.operator, rc.supplier, COUNT(*) AS n
+                    FROM order_system.return_case rc
+                    WHERE rc.shop_sku IN ({ph}) AND rc.state <> 'not_charged'
+                    GROUP BY rc.shop_sku, rc.store, rc.operator, rc.supplier""", tuple(skus))
+            else:
+                cur.execute("""
+                    SELECT rc.shop_sku, rc.store, rc.operator, rc.supplier, COUNT(*) AS n
+                    FROM order_system.return_case rc
+                    JOIN order_system.mirakl_returns mr ON mr.order_id = rc.order_id
+                    WHERE mr.date_created >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                      AND rc.shop_sku <> '' AND rc.state <> 'not_charged'
+                    GROUP BY rc.shop_sku, rc.store, rc.operator, rc.supplier
+                    ORDER BY n DESC""", (days,))
             targets = cur.fetchall()
         if limit:
             targets = targets[:limit]

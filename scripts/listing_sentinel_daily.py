@@ -22,13 +22,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=1)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--skus", type=str, default="",
+                        help="逗号分隔的Shop SKU列表, 定向重审(忽略days窗口)")
     args = parser.parse_args()
 
     app = create_app(os.environ.get("FLASK_CONFIG", "production"))
     with app.app_context():
         from app.services.listing_sentinel_service import run_sentinel
         try:
-            result = run_sentinel(str(_PROJECT_ROOT), days=args.days, limit=args.limit)
+            skus = [s.strip() for s in args.skus.split(",") if s.strip()] or None
+            result = run_sentinel(str(_PROJECT_ROOT), days=args.days,
+                                  limit=args.limit, skus=skus)
             result["success"] = True
         except Exception as exc:
             import traceback
