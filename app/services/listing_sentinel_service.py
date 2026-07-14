@@ -102,22 +102,39 @@ def _mysql_one(conn, sql: str, params) -> Optional[Dict]:
 
 # ------------------------- 数据装配 -------------------------
 
-def _our_listing(headers, store: str, shop_sku: str) -> Optional[Dict]:
+def _our_listing(headers, conn, store: str, shop_sku: str) -> Optional[Dict]:
     tbl = STORE_TABLES.get(store)
-    if not tbl:
-        return None
-    f = _feishu_find(headers, tbl, "Shop SKU", shop_sku)
-    if not f:
-        return None
-    imgs = [_glink(f.get(f"第{i}张")) for i in range(1, 12)]
-    return {
-        "title": _gt(f.get("重写后标题")) or _gt(f.get("Item Name")),
-        "bullets": [_gt(f.get(f"fnb{i}")) for i in range(1, 6)],
-        "long_desc": _gt(f.get("productLongDescription")),
-        "images": [u for u in imgs if u and u.startswith("http")],
-        "supplier_sku": _gt(f.get("供应商SKU")),
-        "supplier": _gt(f.get("供应商")),
-    }
+    if tbl:
+        f = _feishu_find(headers, tbl, "Shop SKU", shop_sku)
+        if f and (_gt(f.get("重写后标题")) or _gt(f.get("productLongDescription"))
+                  or _gt(f.get("Item Name"))):
+            imgs = [_glink(f.get(f"第{i}张")) for i in range(1, 12)]
+            return {
+                "title": _gt(f.get("重写后标题")) or _gt(f.get("Item Name")),
+                "bullets": [_gt(f.get(f"fnb{i}")) for i in range(1, 6)],
+                "long_desc": _gt(f.get("productLongDescription")),
+                "images": [u for u in imgs if u and u.startswith("http")],
+                "supplier_sku": _gt(f.get("供应商SKU")),
+                "supplier": _gt(f.get("供应商")),
+            }
+    # 兜底：老SKU(如MRMC前缀)不在飞书新表 → MySQL macy_kuyotq_listing(平台侧快照)
+    if store == "Macys-Kuyotq":
+        row = _mysql_one(conn, """
+            SELECT productname, fnb1, fnb2, fnb3, fnb4, fnb5, productlongdescription,
+                   mainimage FROM order_system.macy_kuyotq_listing
+            WHERE shopsku=%s LIMIT 1""", (shop_sku,))
+        if row and (row["productname"] or row["productlongdescription"]):
+            mp = _mysql_one(conn, "SELECT warehouse_SKU FROM autooperate.mapping_table "
+                                  "WHERE SKU=%s LIMIT 1", (shop_sku,))
+            return {
+                "title": row["productname"] or "",
+                "bullets": [row[f"fnb{i}"] or "" for i in range(1, 6)],
+                "long_desc": row["productlongdescription"] or "",
+                "images": [row["mainimage"]] if (row["mainimage"] or "").startswith("http") else [],
+                "supplier_sku": (mp or {}).get("warehouse_SKU") or "",
+                "supplier": "",
+            }
+    return None
 
 
 def _supplier_listing(headers, supplier: str, supplier_sku: str) -> Optional[Dict]:
@@ -182,9 +199,24 @@ def _cut(s: str, n: int = MAX_TEXT) -> str:
     return s[:n]
 
 
-def _ai_compare(ours: Dict, sup: Dict, prices: Dict, reasons: str) -> Dict:
+# OpenAI 从香港服务器直连被 403(unsupported region)，必须走 Brightdata 美国代理
+# （不带 -ip- 固定，落在 isp_proxy5 池的任意美国IP上，不占用店铺专用IP的会话）
+_OPENAI_PROXY = ("http://brd-customer-hl_14404d60-zone-isp_proxy5:"
+                 "f73vfek34d52@brd.superproxy.io:33335")
+
+
+def _openai_client():
+    import httpx
     from openai import OpenAI
-    client = OpenAI()
+    try:
+        http_client = httpx.Client(proxy=_OPENAI_PROXY, timeout=180)
+    except TypeError:   # 老版本 httpx 用 proxies=
+        http_client = httpx.Client(proxies=_OPENAI_PROXY, timeout=180)
+    return OpenAI(http_client=http_client)
+
+
+def _ai_compare(ours: Dict, sup: Dict, prices: Dict, reasons: str) -> Dict:
+    client = _openai_client()
     prompt = f"""你是电商listing审计员。买家退货了，请对比"我方listing"与"供应商官方资料"，找出我方文案可能导致退货的问题。
 
 【退货背景】该SKU近90天退货原因分布: {reasons or '无记录'}
@@ -264,7 +296,7 @@ def run_sentinel(base_dir: str, days: int = 1, limit: int = 0) -> Dict[str, Any]
                       GROUP BY mr.reason_code) x""", (sku, store))
                 reasons = (r or {}).get("d") or ""
 
-                ours = _our_listing(headers, store, sku)
+                ours = _our_listing(headers, conn, store, sku)
                 if not ours or not (ours["title"] or ours["long_desc"]):
                     stats["skipped"].append(f"{sku}@{store}:飞书无文案")
                     continue
