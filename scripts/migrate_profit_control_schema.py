@@ -137,6 +137,19 @@ DDL = [
     ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 订单月cohort(每日全量重建)'
     """,
     """
+    CREATE TABLE IF NOT EXISTS order_system.profit_neg_orders (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        order_month CHAR(7) NOT NULL,
+        operator VARCHAR(32), store VARCHAR(64),
+        order_id VARCHAR(64), shop_sku VARCHAR(64),
+        order_date DATE,
+        sale DECIMAL(10,2), cost DECIMAL(10,2), profit DECIMAL(10,2),
+        is_actual TINYINT DEFAULT 0 COMMENT '1=实际利润 0=预估',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_cell (order_month, operator, store)
+    ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 亏本卖的正常单明细(每日重建,诊断查定价用)'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS order_system.action_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         action_type VARCHAR(32) NOT NULL COMMENT 'raise_price/delist/recover/reroute',

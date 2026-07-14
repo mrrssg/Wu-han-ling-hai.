@@ -342,6 +342,17 @@ def diagnose():
             tbl_sishun = {"head": ["SKU", "退货笔数", "损失$"],
                 "rows": [[r["shop_sku"], r["n"], f"{_f(r['loss']):,.0f}"] for r in sishun_rows],
                 "more": "司顺退货全损——这些SKU优先评估提价/换源/下架"}
+            neg_rows = _query("""
+                SELECT order_id, shop_sku, order_date, sale, cost, profit, is_actual
+                FROM order_system.profit_neg_orders
+                WHERE order_month=%s AND operator=%s AND store=%s
+                ORDER BY profit ASC LIMIT 20""", (month, operator, store))
+            tbl_neg = {"head": ["订单号", "SKU", "下单日", "售价$", "成本$", "利润$", "口径"],
+                "rows": [[r["order_id"], r["shop_sku"], str(r["order_date"]),
+                          f"{_f(r['sale']):,.2f}", f"{_f(r['cost']):,.2f}",
+                          f"{_f(r['profit']):,.2f}",
+                          "实际" if r["is_actual"] else "预估"] for r in neg_rows],
+                "more": "利润为负但没退货的单——核对售价是否低于成本线、活动折扣是否打穿"}
 
             rx = []
             expo_in_w = _f(recover_in_window["expo"])
@@ -383,10 +394,10 @@ def diagnose():
                     "how": "从下架/提价候选里优先处理司顺SKU"})
             if neg_profit < -100:
                 rx.append({"key": "negsale", "title": "亏本卖的正常单（查定价）",
-                    "amount": -neg_profit,
+                    "amount": -neg_profit, "table": tbl_neg,
                     "why": f"当月有{int(row['neg_n'] or 0)}单没退货也亏钱（合计−${-neg_profit:,.0f}）——"
                            f"通常是定价低于成本线或活动折扣打穿了",
-                    "how": "订单查询里按该店铺筛亏损单，核对价格公式"})
+                    "how": "展开下面的具体订单，核对售价与价格公式；批量问题走改价系统"})
 
             done = _rx_done_map(month)
             for x in rx:

@@ -650,6 +650,7 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
         "orders": 0, "sale": 0.0, "profit_gross": 0.0, "gross_est": 0.0,
         "returns_cnt": 0, "loss_expected": 0.0, "loss_actual": 0.0,
         "neg_profit": 0.0, "neg_n": 0})
+    neg_orders = []   # 亏本卖的正常单明细(诊断"查定价"处方展开用)
     for o in parsed:
         if o["order_ts"] <= cutoff_ts:
             continue
@@ -668,6 +669,11 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
             if o["profit"] < 0:
                 a["neg_profit"] += o["profit"]  # 亏本卖的正常单(诊断用)
                 a["neg_n"] += 1
+                neg_orders.append((
+                    month, o["operator"], o["store"], o["order_id"], o["sku"],
+                    datetime.fromtimestamp(o["order_ts"] / 1000, tz=CN_TZ).date(),
+                    round(o["sale"], 2), round(o["cost"], 2), round(o["profit"], 2),
+                    1 if o["use_actual"] else 0))
     rows = []
     for (month, operator, store), a in agg.items():
         net = a["profit_gross"] - a["loss_expected"]
@@ -693,6 +699,15 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
         """
         for i in range(0, len(rows), 500):
             cur.executemany(sql, rows[i:i + 500])
+        cur.execute("DELETE FROM order_system.profit_neg_orders")
+        neg_sql = """
+            INSERT INTO order_system.profit_neg_orders
+                (order_month, operator, store, order_id, shop_sku, order_date,
+                 sale, cost, profit, is_actual)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        for i in range(0, len(neg_orders), 500):
+            cur.executemany(neg_sql, neg_orders[i:i + 500])
     conn.commit()
     return len(rows)
 
