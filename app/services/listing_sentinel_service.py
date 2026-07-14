@@ -116,6 +116,9 @@ def _our_listing(headers, conn, store: str, shop_sku: str) -> Optional[Dict]:
                 "images": [u for u in imgs if u and u.startswith("http")],
                 "supplier_sku": _gt(f.get("供应商SKU")),
                 "supplier": _gt(f.get("供应商")),
+                # 真实成交价=折扣后价格(飞书公式)；活动折扣用于兜底换算
+                "price_discounted": _gn(f.get("折扣后价格")),
+                "discount_factor": _gn(f.get("活动折扣")),
             }
     # 兜底：老SKU(如MRMC前缀)不在飞书新表 → MySQL macy_kuyotq_listing(平台侧快照)
     if store == "Macys-Kuyotq":
@@ -166,13 +169,23 @@ def _supplier_listing(headers, supplier: str, supplier_sku: str) -> Optional[Dic
 
 
 def _prices(conn, shop_sku: str, supplier: str, supplier_sku: str,
-            feishu_supplier_price) -> Dict:
-    ours = _mysql_one(conn, """
+            feishu_supplier_price, our_listing: Dict) -> Dict:
+    """我方真实成交价 = 折扣后价格。取价优先级：
+    ①平台在线 discount_price ②飞书「折扣后价格」公式值 ③原价×飞书活动折扣 ④原价"""
+    row = _mysql_one(conn, """
         SELECT origin_price, discount_price FROM order_system.offerprice_listing
         WHERE shop_sku=%s LIMIT 1""", (shop_sku,))
+    origin = float(row["origin_price"] or 0) if row else 0.0
+    disc_live = float(row["discount_price"] or 0) if row else 0.0
     price_ours = None
-    if ours:
-        price_ours = float(ours["discount_price"] or 0) or float(ours["origin_price"] or 0) or None
+    if disc_live > 0:
+        price_ours = disc_live
+    elif our_listing.get("price_discounted"):
+        price_ours = our_listing["price_discounted"]
+    elif origin > 0 and our_listing.get("discount_factor"):
+        price_ours = round(origin * our_listing["discount_factor"], 2)
+    elif origin > 0:
+        price_ours = origin
     tbl = "newestdropship" if supplier.strip().lower() == "costway" else "newestdropship_vevor"
     sup = _mysql_one(conn, f"SELECT Price FROM autooperate.{tbl} WHERE SKU=%s", (supplier_sku,))
     price_sup = float(sup["Price"]) if sup and sup.get("Price") is not None else feishu_supplier_price
@@ -306,7 +319,7 @@ def run_sentinel(base_dir: str, days: int = 1, limit: int = 0) -> Dict[str, Any]
                     stats["skipped"].append(f"{sku}@{store}:供应商资料缺({ours['supplier']}/{ours['supplier_sku']})")
                     continue
                 prices = _prices(conn, sku, ours["supplier"] or t["supplier"],
-                                 ours["supplier_sku"], sup.get("price"))
+                                 ours["supplier_sku"], sup.get("price"), ours)
 
                 ai = _ai_compare(ours, sup, prices, reasons)
                 verdict = (ai.get("verdict") or "minor").lower()
