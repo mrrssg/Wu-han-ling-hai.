@@ -466,9 +466,23 @@ def diagnose():
             if _f(recover_all_months["expo"]) > expo_in_w + 1:
                 cross_note = (f"（该cell其他月份还挂着{int(recover_all_months['n']) - int(recover_in_window['n'])}笔、"
                               f"${_f(recover_all_months['expo']) - expo_in_w:,.0f}在窗口内，去行动清单→追款清单看全量）")
-            if _f(claimed_month["expo"]) > 0:
-                cross_note += (f"（另有{claimed_month['n']}笔${_f(claimed_month['expo']):,.0f}"
+            claimed_expo = _f(claimed_month["expo"])
+            if claimed_expo > 0 and expo_in_w > 50:
+                cross_note += (f"（另有{claimed_month['n']}笔${claimed_expo:,.0f}"
                                f"已在退货登记表追过款，只等豪雅退款，不列进追款动作）")
+            elif claimed_expo > 50:
+                # 该月退货基本都登记追过款了 → 不出追款动作，出一条"等钱到账"说明
+                rate_cw0 = _recovery_rate(rr, store, "Costway")
+                rx.append({"key": "recover_wait",
+                    "title": f"{int(month[5:])}月的豪雅追款已全部登记，等退款到账",
+                    "amount": claimed_expo * (rate_cw0 if rate_cw0 > 0 else 1.0),
+                    "table": None,
+                    "why": f"该月{claimed_month['n']}笔待追豪雅退货（货值${claimed_expo:,.0f}）"
+                           f"都已在退货登记表登记追款——追款动作已经做了，"
+                           + (f"按回收率{rate_cw0*100:.0f}%预计能退回${claimed_expo*rate_cw0:,.0f}，" if rate_cw0 > 0
+                              else f"能退回多少看豪雅逐笔反馈，")
+                           + "退款回填「供应商退款」后该月净利自动改善",
+                    "how": "催豪雅按登记表反馈；财务收到退款后回填飞书「供应商退款」字段即自动闭环"})
             if expo_in_w > 50:
                 rate_cw = _recovery_rate(rr, store, "Costway")
                 mon_label = f"{int(month[5:])}月"
