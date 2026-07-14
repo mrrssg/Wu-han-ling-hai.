@@ -32,7 +32,9 @@
 
 <ul class="nav nav-tabs mb-3" role="tablist">
   <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-recover" type="button">
-    💰 追款清单 <span class="badge text-bg-warning">{{ counts.recover }} 笔 · ${{ '{:,.0f}'.format(totals.recover_expo) }}</span></button></li>
+    💰 追款清单
+    {% if counts.recover %}<span class="badge text-bg-danger">漏网 {{ counts.recover }}</span>{% endif %}
+    <span class="badge text-bg-primary">等退款 {{ claimed.n }} 笔 · ${{ '{:,.0f}'.format(claimed.expo|float) }}</span></button></li>
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-delist" type="button">
     ⚫ 下架候选 <span class="badge text-bg-danger">{{ counts.delist }} 个 · 净亏 ${{ '{:,.0f}'.format(-totals.delist_net) }}</span></button></li>
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-raise" type="button">
