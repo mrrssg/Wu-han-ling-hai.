@@ -913,6 +913,16 @@ def _raise_list() -> List[Dict]:
     return rows
 
 
+# 已登记等退款的账龄分档（天数下限, 上限, 标签, 颜色）——等越久颜色越深
+CLAIM_AGE_BUCKETS = [
+    (0,   30,     "<30天",    "#c9c6bd"),
+    (30,  60,     "30-59天",  "#f0c36a"),
+    (60,  90,     "60-89天",  "#eda100"),
+    (90,  150,    "90-149天", "#e0731f"),
+    (150, 10**9,  "≥150天",   "#d03b3b"),
+]
+
+
 @profit_control_bp.route("/actions")
 def actions():
     recover = _recover_list()
@@ -922,6 +932,30 @@ def actions():
         "recover_expo": sum(_f(r["exposure"]) for r in recover),
         "delist_net": sum(_f(r["net"]) for r in delist),
         "raise_sale": sum(_f(r["sale"]) for r in raise_rows),
+    }
+    # 已登记等退款：账龄分布 / 催办统计 / 店铺筛选
+    claimed_rows = _claim_filed_list()
+    aging = [{"label": lab, "color": col, "n": 0, "expo": 0.0, "lo": lo}
+             for lo, hi, lab, col in CLAIM_AGE_BUCKETS]
+    stores_count: Dict[str, int] = {}
+    for r in claimed_rows:
+        d = int(r["days_waiting"] or 0)
+        r["age_color"] = CLAIM_AGE_BUCKETS[-1][3]
+        for i, (lo, hi, lab, col) in enumerate(CLAIM_AGE_BUCKETS):
+            if lo <= d < hi:
+                aging[i]["n"] += 1
+                aging[i]["expo"] += _f(r["exposure"])
+                r["age_color"] = col
+                break
+        stores_count[r["store"]] = stores_count.get(r["store"], 0) + 1
+    claim_total_expo = sum(b["expo"] for b in aging) or 1.0
+    for b in aging:
+        b["pct"] = round(b["expo"] / claim_total_expo * 100, 1)
+    claim_urgent = {
+        "wait60_n": sum(1 for r in claimed_rows if int(r["days_waiting"] or 0) >= 60),
+        "wait60_expo": sum(_f(r["exposure"]) for r in claimed_rows if int(r["days_waiting"] or 0) >= 60),
+        "near_n": sum(1 for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
+        "near_expo": sum(_f(r["exposure"]) for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
     }
     # 已标记下架的SKU若之后仍有销量 → 顶部警告（由每日规则引擎写入 issue_log）
     delist_warns = _query("""
@@ -934,7 +968,9 @@ def actions():
                            expired=_recover_expired_stats(),
                            expired_rows=_recover_expired_list()[:200],
                            claimed=_claim_filed_stats(),
-                           claimed_rows=_claim_filed_list()[:300],
+                           claimed_rows=claimed_rows[:400],
+                           claim_aging=aging, claim_urgent=claim_urgent,
+                           claim_stores=sorted(stores_count.items(), key=lambda x: -x[1]),
                            marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})

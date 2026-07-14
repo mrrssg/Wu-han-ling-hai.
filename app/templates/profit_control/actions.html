@@ -10,6 +10,19 @@
   padding:4px 8px; margin-top:6px; display:block; }
 .note-in { min-width:160px; font-size:.8rem; }
 .days-urgent { color:#d03b3b; font-weight:700; }
+.stat-tile { border:1px solid #e1e0d9; border-left-width:5px; border-radius:8px;
+  background:#fff; padding:.65rem .9rem; height:100%; }
+.stat-tile .v { font-size:1.35rem; font-weight:700; line-height:1.2; }
+.stat-tile .l { font-size:.78rem; color:#52514e; }
+.stat-tile .s { font-size:.72rem; color:#898781; }
+.age-bar { display:flex; height:22px; border-radius:6px; overflow:hidden; }
+.age-bar > div { min-width:2px; }
+.age-chip { display:inline-flex; align-items:center; gap:4px; font-size:.74rem;
+  color:#52514e; margin-right:10px; }
+.age-chip .sw { width:10px; height:10px; border-radius:2px; display:inline-block; }
+.age-badge { font-size:.74rem; font-weight:700; padding:2px 7px; border-radius:10px;
+  color:#fff; white-space:nowrap; }
+.store-chip { cursor:pointer; }
 </style>
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h4 class="mb-0"><i class="bi bi-list-check"></i> 行动清单</h4>
@@ -30,11 +43,48 @@
 
   {# ================= 追款 ================= #}
   <div class="tab-pane fade show active" id="tab-recover">
-    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-      <span class="text-muted small">只列<b>豪雅(Costway)</b>——司顺追不了款；追款窗口=<b>下单90天内</b>，按剩余天数排序（快过期的在最上面）。
-        备注随手记（找谁、什么进度），每天重算不会丢。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_recover"></a></span>
-      <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
-        <i class="bi bi-download"></i> 导出CSV</a>
+    <div class="text-muted small mb-2">只管<b>豪雅(Costway)</b>——司顺追不了款。每天05:30和飞书「退货登记表」自动核对：
+      没登记的=漏网要去追，登记了的=等豪雅退款。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_recover"></a></div>
+
+    {# ---- 四张统计卡 ---- #}
+    <div class="row g-2 mb-3">
+      <div class="col-6 col-lg-3"><div class="stat-tile" style="border-left-color:{{ '#d03b3b' if counts.recover else '#1baf7a' }}">
+        <div class="l">❗ 漏网未登记（要去追）</div>
+        <div class="v {{ 'text-danger' if counts.recover }}">{{ counts.recover }} 笔 <span class="fs-6">· ${{ '{:,.0f}'.format(totals.recover_expo) }}</span></div>
+        <div class="s">{{ '退货了但登记表里没有，赶紧登记' if counts.recover else '常态——退货都登记过了 ✓' }}</div>
+      </div></div>
+      <div class="col-6 col-lg-3"><div class="stat-tile" style="border-left-color:#2a78d6">
+        <div class="l">⏳ 已登记，等豪雅退款</div>
+        <div class="v">{{ claimed.n }} 笔 <span class="fs-6">· ${{ '{:,.0f}'.format(claimed.expo|float) }}</span></div>
+        <div class="s">压在豪雅那边的钱，回填「供应商退款」后核销</div>
+      </div></div>
+      <div class="col-6 col-lg-3"><div class="stat-tile" style="border-left-color:#eda100">
+        <div class="l">🔔 等了≥60天（该催）</div>
+        <div class="v">{{ claim_urgent.wait60_n }} 笔 <span class="fs-6">· ${{ '{:,.0f}'.format(claim_urgent.wait60_expo) }}</span></div>
+        <div class="s">正常退款不该等这么久，逐笔催豪雅</div>
+      </div></div>
+      <div class="col-6 col-lg-3"><div class="stat-tile" style="border-left-color:#d03b3b">
+        <div class="l">⚠️ 临近180天核销线（≥150天）</div>
+        <div class="v {{ 'text-danger' if claim_urgent.near_n }}">{{ claim_urgent.near_n }} 笔 <span class="fs-6">· ${{ '{:,.0f}'.format(claim_urgent.near_expo) }}</span></div>
+        <div class="s">到180天没回款就按全损记账，最优先处理</div>
+      </div></div>
+    </div>
+
+    {# ---- 账龄分布条 ---- #}
+    <div class="card p-2 mb-3">
+      <div class="small fw-semibold mb-1">等待退款的钱压了多久（按货值$分布）</div>
+      <div class="age-bar mb-1">
+        {% for b in claim_aging %}{% if b.expo > 0 %}
+        <div style="width:{{ b.pct }}%;background:{{ b.color }}"
+             title="{{ b.label }}：{{ b.n }}笔 ${{ '{:,.0f}'.format(b.expo) }}（{{ b.pct }}%）"></div>
+        {% endif %}{% endfor %}
+      </div>
+      <div>
+        {% for b in claim_aging %}
+        <span class="age-chip"><span class="sw" style="background:{{ b.color }}"></span>
+          {{ b.label }} {{ b.n }}笔 ${{ '{:,.0f}'.format(b.expo) }}</span>
+        {% endfor %}
+      </div>
     </div>
     {% if expired and expired.n %}
     <div class="alert alert-secondary py-2 small mb-2">
@@ -63,10 +113,14 @@
       </details>
     </div>
     {% endif %}
-    <div class="sec-split fw-semibold small mb-1 mt-2">
-      ❗ 未登记追款（要去追的）
-      <span class="badge text-bg-danger">{{ counts.recover }} 笔 · ${{ '{:,.0f}'.format(totals.recover_expo) }}</span>
-      <span class="text-muted fw-normal">——退货了但还没在退货登记表登记，别漏</span>
+    <div class="sec-split fw-semibold small mb-1 mt-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>❗ 未登记追款（要去追的）
+        <span class="badge text-bg-danger">{{ counts.recover }} 笔 · ${{ '{:,.0f}'.format(totals.recover_expo) }}</span>
+        <span class="text-muted fw-normal">——退货了但还没在退货登记表登记，别漏</span></span>
+      {% if counts.recover %}
+      <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
+        <i class="bi bi-download"></i> 导出CSV</a>
+      {% endif %}
     </div>
     <div class="card"><div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0">
@@ -103,28 +157,37 @@
 
     <div class="sec-split fw-semibold small mb-1 mt-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
       <span>⏳ 已登记，等豪雅退款
-        <span class="badge text-bg-success">{{ claimed.n }} 笔 · ${{ '{:,.0f}'.format(claimed.expo|float) }}</span>
+        <span class="badge text-bg-primary">{{ claimed.n }} 笔 · ${{ '{:,.0f}'.format(claimed.expo|float) }}</span>
         <span class="text-muted fw-normal">——追款动作做过了，等最久的排最上面，该催豪雅了</span></span>
-      <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover_claimed') }}">
-        <i class="bi bi-download"></i> 导出CSV</a>
+      <span class="d-flex align-items-center gap-1 flex-wrap">
+        <button class="btn btn-sm btn-secondary store-chip" data-store="" onclick="filterStore(this)">全部 {{ claimed.n }}</button>
+        {% for st, n in claim_stores %}
+        <button class="btn btn-sm btn-outline-secondary store-chip" data-store="{{ st }}" onclick="filterStore(this)">{{ st }} {{ n }}</button>
+        {% endfor %}
+        <a class="btn btn-sm btn-outline-success ms-1" href="{{ url_for('profit_control.actions_export', list='recover_claimed') }}">
+          <i class="bi bi-download"></i> 导出CSV</a>
+      </span>
     </div>
-    <div class="card"><div class="table-responsive" style="max-height:420px;overflow-y:auto">
-      <table class="table table-sm table-hover align-middle mb-0">
-        <thead class="table-light" style="position:sticky;top:0"><tr>
+    <div class="card"><div class="table-responsive" style="max-height:480px;overflow-y:auto">
+      <table class="table table-sm table-hover align-middle mb-0" id="claimedTbl">
+        <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
           <th>订单号</th><th>店铺</th><th>SKU</th>
           <th>下单日</th><th>退货日</th>
           <th class="text-end">退货后已等</th>
+          <th class="text-end">距核销</th>
           <th class="text-end">货值敞口$</th>
           <th style="min-width:220px">备注</th></tr></thead>
         <tbody>
           {% for r in claimed_rows %}
-          <tr class="{{ 'table-warning' if r.days_waiting >= 60 }}">
+          <tr data-store="{{ r.store }}" class="{{ 'table-danger' if r.days_waiting >= 150 }}">
             <td class="font-monospace small">{{ r.order_id }}</td>
             <td class="small">{{ r.store }}</td>
             <td class="small">{{ r.shop_sku }}</td>
             <td class="text-nowrap small">{{ r.order_date }}</td>
             <td class="text-nowrap small">{{ r.return_date }}</td>
-            <td class="text-end {{ 'days-urgent' if r.days_waiting >= 60 }}">{{ r.days_waiting }} 天</td>
+            <td class="text-end"><span class="age-badge" style="background:{{ r.age_color }}">{{ r.days_waiting }} 天</span></td>
+            <td class="text-end small {{ 'days-urgent' if (180 - r.days_waiting) <= 30 else 'text-muted' }}">
+              {{ [180 - r.days_waiting, 0] | max }} 天</td>
             <td class="text-end fw-bold">{{ '{:,.0f}'.format(r.exposure|float) }}</td>
             <td>
               <div class="input-group input-group-sm">
@@ -134,11 +197,12 @@
               </div>
             </td>
           </tr>
-          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">没有等待中的登记退款</td></tr>{% endfor %}
+          {% else %}<tr><td colspan="9" class="text-center text-muted py-4">没有等待中的登记退款</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>
-    <p class="small text-muted mt-1">黄色行=退货后等了≥60天还没退款。显示前300笔，全量用CSV导出；财务回填「供应商退款」后自动消失。</p>
+    <p class="small text-muted mt-1">「距核销」=还差多少天到180天全损线（红字=只剩30天内）。红底行=已≥150天，最优先催。
+      显示前400笔（等最久优先），全量用CSV导出；财务回填「供应商退款」后自动消失。</p>
   </div>
 
   {# ================= 下架 ================= #}
@@ -236,6 +300,16 @@ async function saveNote(id, btn) {
   const res = await postJSON('{{ url_for("profit_control.recover_note") }}', {id:id, note:v});
   btn.textContent = res.ok ? '✓' : '✗';
   setTimeout(()=>{btn.textContent='存'; btn.disabled=false;}, 1200);
+}
+function filterStore(btn) {
+  const store = btn.dataset.store;
+  document.querySelectorAll('.store-chip').forEach(b => {
+    b.classList.toggle('btn-secondary', b === btn);
+    b.classList.toggle('btn-outline-secondary', b !== btn);
+  });
+  document.querySelectorAll('#claimedTbl tbody tr[data-store]').forEach(tr => {
+    tr.style.display = (!store || tr.dataset.store === store) ? '' : 'none';
+  });
 }
 async function markDelist(sku, store, rowId, btn) {
   if (!confirm('确认已在店铺后台把 '+sku+' 下架？点确认后它将从清单消失，若之后仍出单会自动报警。')) return;
