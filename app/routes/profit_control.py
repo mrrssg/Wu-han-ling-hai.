@@ -355,7 +355,8 @@ def diagnose():
                             AND DATEDIFF(CURDATE(), order_date) > 90 THEN exposure+confirmed_loss ELSE 0 END) AS l_expired,
                   SUM(CASE WHEN state IN ('pending','written_off') AND supplier<>'Costway'
                            THEN exposure+confirmed_loss ELSE 0 END) AS l_norefund,
-                  SUM(CASE WHEN state='pending' THEN return_fee ELSE 0 END) AS l_fee
+                  SUM(CASE WHEN state='pending' THEN return_fee ELSE 0 END) AS l_fee,
+                  SUM(CASE WHEN state='warehouse' THEN confirmed_loss ELSE 0 END) AS l_warehouse
                 FROM order_system.return_case
                 WHERE DATE_FORMAT(order_date,'%%Y-%%m')=%s AND operator=%s AND store=%s
                   AND state <> 'not_charged'
@@ -363,11 +364,13 @@ def diagnose():
             rr = _recovery_rates_pairs()
             from app.services.profit_control_service import _recovery_rate
             loss_parts = {"sishun": 0.0, "haoya_in": 0.0, "haoya_in_recoverable": 0.0,
-                          "haoya_expired": 0.0, "fee": 0.0, "recovered": 0.0}
+                          "haoya_expired": 0.0, "fee": 0.0, "recovered": 0.0,
+                          "warehouse": 0.0}
             for p in parts:
                 sup = str(p["supplier"] or "")
                 loss_parts["recovered"] += _f(p["l_recovered"])
                 loss_parts["fee"] += _f(p["l_fee"])
+                loss_parts["warehouse"] += _f(p["l_warehouse"])
                 if sup == "Costway":
                     expo_in = _f(p["expo_in"])
                     rate = _recovery_rate(rr, store, "Costway")
@@ -585,7 +588,8 @@ def _recovery_rates_pairs() -> Dict:
         """SELECT store, supplier, COUNT(*) AS n,
                   SUM(COALESCE(supplier_refund,0)) AS r, SUM(cost) AS c
            FROM order_system.return_case
-           WHERE state <> 'not_charged' AND (state='recovered' OR age_days > 90)
+           WHERE state NOT IN ('not_charged','warehouse')
+             AND (state='recovered' OR age_days > 90)
            GROUP BY store, supplier""")
     rates: Dict = {}
     store_agg: Dict[str, list] = {}
@@ -957,18 +961,25 @@ def actions():
         "near_n": sum(1 for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
         "near_expo": sum(_f(r["exposure"]) for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
     }
-    # Lowes-Autool 退货跟进四态：有跟踪号 / 无跟踪号但已回复邮件 / 弃货 / 没动静
+    # Lowes-Autool 退货跟进四态：退回海外仓(有跟踪号,state=warehouse只亏运费) /
+    # 无跟踪号但已回复邮件 / 弃货 / 没动静。前者已不在等退款清单里，单独查。
+    wh = _query("""
+        SELECT COUNT(*) AS n, COALESCE(SUM(confirmed_loss),0) AS fee
+        FROM order_system.return_case
+        WHERE store='Lowes-Autool' AND state='warehouse'""")[0]
     lw = [r for r in claimed_rows if r["store"] == "Lowes-Autool"]
     lowes_track = {
-        "total": len(lw),
-        "trk_n": sum(1 for r in lw if (r["claim_tracking"] or "").strip()),
+        "trk_n": int(wh["n"] or 0) + sum(1 for r in lw if (r["claim_tracking"] or "").strip()),
+        "trk_fee": _f(wh["fee"]),
         "replied_n": sum(1 for r in lw if not (r["claim_tracking"] or "").strip()
                          and (r["claim_result"] or "") == "已回复邮件"),
         "discard_n": sum(1 for r in lw if not (r["claim_tracking"] or "").strip()
                          and (r["claim_result"] or "") == "弃货"),
     }
-    lowes_track["silent_n"] = (lowes_track["total"] - lowes_track["trk_n"]
+    lowes_track["silent_n"] = (len(lw) - sum(1 for r in lw if (r["claim_tracking"] or "").strip())
                                - lowes_track["replied_n"] - lowes_track["discard_n"])
+    lowes_track["total"] = lowes_track["trk_n"] + lowes_track["replied_n"] \
+        + lowes_track["discard_n"] + lowes_track["silent_n"]
     # 已标记下架的SKU若之后仍有销量 → 顶部警告（由每日规则引擎写入 issue_log）
     delist_warns = _query("""
         SELECT entity, impact_usd, evidence FROM order_system.issue_log

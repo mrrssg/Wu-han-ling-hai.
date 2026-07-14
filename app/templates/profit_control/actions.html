@@ -172,12 +172,13 @@
     </div>
     {% if lowes_track.total %}
     <div class="alert alert-light border py-2 small mb-2 d-flex align-items-center flex-wrap gap-3">
-      <b>Lowes-Autool 退货跟进（等退款的 {{ lowes_track.total }} 笔）：</b>
-      <span>📦 有退货跟踪号 <b>{{ lowes_track.trk_n }}</b></span>
+      <b>Lowes-Autool 退货跟进（{{ lowes_track.total }} 笔）：</b>
+      <span>📦 退回海外仓 <b>{{ lowes_track.trk_n }}</b>
+        <span class="text-muted">（有跟踪号=货回来了，不付供应商货款，只亏运费≈${{ '{:,.0f}'.format(lowes_track.trk_fee) }}，已从下表移出）</span></span>
       <span>✉️ 已回复邮件·无跟踪号 <b>{{ lowes_track.replied_n }}</b></span>
       <span>🗑️ 弃货 <b>{{ lowes_track.discard_n }}</b></span>
       <span class="{{ 'text-danger fw-bold' if lowes_track.silent_n }}">⚪ 没动静（无跟踪号也没回复）<b>{{ lowes_track.silent_n }}</b></span>
-      <span class="text-muted">——点右上「Lowes-Autool」筛选看明细；数据来自登记表「（退货）Tracking Number」和「处理结果」列</span>
+      <span class="text-muted">——数据来自登记表「（退货）Tracking Number」和「处理结果」列，每天05:30同步</span>
     </div>
     {% endif %}
     <div class="card"><div class="table-responsive" style="max-height:480px;overflow-y:auto">

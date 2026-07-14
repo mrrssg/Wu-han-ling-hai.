@@ -113,6 +113,9 @@
         {% if detail.loss_parts.haoya_expired > 10 %}
         <tr><td class="ps-4">豪雅退货·已超90天追款窗（教训：追晚了）</td>
           <td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.haoya_expired) }}</td></tr>{% endif %}
+        {% if detail.loss_parts.warehouse > 10 %}
+        <tr><td class="ps-4">退回海外仓·只亏运费（货没丢，按售价10%估）</td>
+          <td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.warehouse) }}</td></tr>{% endif %}
         {% if detail.loss_parts.fee > 10 %}
         <tr><td class="ps-4">退货运费</td><td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.fee) }}</td></tr>{% endif %}
         {% if detail.loss_parts.recovered > 10 %}

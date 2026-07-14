@@ -51,6 +51,9 @@ ORDER_TABLE_ID = "tbl4LDs0H5M8Pq5n"
 # 退货登记表（财务/客服追款登记）：登记过「订单」的=已向供应商追过款，只等退款，
 # 不再进追款清单（用户规则 2026-07-14）
 CLAIM_TABLE_ID = "tblCqER404qe57vV"
+# Lowes退货有跟踪号=货退回我们海外仓：不向供应商付货款，唯一损失=退货运费，
+# 暂按售价10%估（用户规则 2026-07-15）
+WAREHOUSE_FEE_RATE = 0.10
 
 PAGE_SIZE = 500
 REQUEST_TIMEOUT = 60
@@ -191,11 +194,12 @@ def fetch_claim_filed_orders() -> Dict[str, Dict[str, str]]:
     return orders
 
 
-def sync_claim_filed(conn) -> int:
+def sync_claim_filed(conn, claimed: Optional[Dict[str, Dict[str, str]]] = None) -> int:
     """return_case.claim_filed/claim_tracking/claim_result 同步：
     在退货登记表登记过的订单=已追过款，同时带回退货跟踪号与处理结果。
     每日重建后调用（rebuild 的 UPSERT 不含这些列，重跑不丢，全量重刷保证登记撤销可回退）。"""
-    claimed = fetch_claim_filed_orders()
+    if claimed is None:
+        claimed = fetch_claim_filed_orders()
     with conn.cursor() as cur:
         cur.execute("SELECT DISTINCT order_id FROM order_system.return_case")
         existing = {r["order_id"] for r in cur.fetchall()}
@@ -352,6 +356,11 @@ def rebuild_return_cases(conn, parsed: List[Dict], return_dates: Dict[str, datet
             state = "recovered"
             confirmed_loss = round(max(0.0, cost - refund) + fee, 2)
             exposure = 0.0
+        elif o.get("wh_return"):
+            # Lowes退货有跟踪号=货退回海外仓：不付供应商货款，只亏运费(售价10%估)
+            state = "warehouse"
+            confirmed_loss = round(WAREHOUSE_FEE_RATE * o["sale"], 2)
+            exposure = 0.0
         elif age_days > WRITEOFF_DAYS:
             state = "written_off"
             confirmed_loss = round(cost + fee, 2)
@@ -407,7 +416,8 @@ def compute_recovery_rates(conn) -> Dict[Tuple[str, str], float]:
                    SUM(COALESCE(supplier_refund,0)) AS refund_sum,
                    SUM(cost) AS cost_sum, COUNT(*) AS n
             FROM order_system.return_case
-            WHERE state <> 'not_charged' AND (state='recovered' OR age_days > %s)
+            WHERE state NOT IN ('not_charged','warehouse')
+              AND (state='recovered' OR age_days > %s)
             GROUP BY store, supplier
         """, (MATURED_AGE_DAYS,))
         for row in cur.fetchall():
@@ -611,6 +621,9 @@ def _order_expected_loss(o, rates) -> float:
     refund = o["supplier_refund"]
     if refund is not None and refund > 0:
         return max(0.0, o["cost"] - refund) + o["return_fee"]
+    if o.get("wh_return"):
+        # 货退回海外仓：不付供应商货款，只亏运费(售价10%估)
+        return o["sale"] * WAREHOUSE_FEE_RATE
     rr = _recovery_rate(rates, o["store"], o["supplier"])
     return o["cost"] * (1.0 - rr) + o["return_fee"]
 
@@ -722,6 +735,9 @@ def _order_actual_loss(o) -> float:
     refund = o["supplier_refund"]
     if refund is not None and refund > 0:
         return max(0.0, o["cost"] - refund) + o["return_fee"]
+    if o.get("wh_return"):
+        # 货退回海外仓：货款根本不用付，实际口径同样只亏运费
+        return o["sale"] * WAREHOUSE_FEE_RATE
     return o["cost"] + o["return_fee"]
 
 
@@ -950,11 +966,22 @@ def run_daily_aggregation() -> Dict[str, Any]:
     raw = fetch_feishu_orders()
     parsed = parse_orders(raw)
 
+    # 退货登记表：追款标记 + Lowes海外仓退货识别（有跟踪号=货回来了，只亏运费）
+    claimed = fetch_claim_filed_orders()
+    wh_orders = {k for k, v in claimed.items() if v["tracking"]}
+    n_wh = 0
+    for o in parsed:
+        if (o["is_return"] and o["store"].startswith(LOWES_STORE_PREFIX)
+                and o["order_id"] in wh_orders):
+            o["wh_return"] = True
+            n_wh += 1
+
     conn = DBManager.get_connection()
     try:
         return_dates = load_return_dates(conn)
         case_stats = rebuild_return_cases(conn, parsed, return_dates, now_cn)
-        case_stats["claim_filed"] = sync_claim_filed(conn)
+        case_stats["claim_filed"] = sync_claim_filed(conn, claimed)
+        case_stats["warehouse_returns"] = n_wh
         rates = compute_recovery_rates(conn)
         maturity = build_maturity_model(parsed, return_dates, now_cn)
         snapshots = build_cell_snapshots(conn, parsed, rates, maturity, now_cn)
