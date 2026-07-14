@@ -98,7 +98,7 @@
 {# ============ 最近7天的退货，记在哪个月的账上 ============ #}
 <div class="card p-3 mb-3">
   <div class="sec-title mb-1">最近7天的退货，记在哪个月的账上<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_detail"></a></div>
-  <div class="kpi-sub mb-2">退货虽然发生在最近，但钱要从<b>卖出那个月</b>的利润里扣。每条直接写成账本变化：<b>该月净利 扣钱前→扣钱后（利润率 前→后）</b>。</div>
+  <div class="kpi-sub mb-2">退货虽然发生在最近，但钱要从<b>卖出那个月</b>的利润里扣。每条直接写成账本变化：<b>该月预估净利 扣钱前→扣钱后（预估利润率 前→后）</b>。</div>
   <div class="row g-2">
     {% for db in day_blocks %}
     <div class="col-lg-6">
@@ -113,7 +113,7 @@
               <td class="text-nowrap" style="width:70px">{{ l.op }}</td>
               <td class="text-nowrap text-danger" style="width:60px">−${{ '{:,.0f}'.format(l.loss) }}</td>
               {% if l.after is defined %}
-              <td class="text-nowrap">{{ m.label }}净利 ${{ '{:,.0f}'.format(l.before) }} <b>→</b> ${{ '{:,.0f}'.format(l.after) }}</td>
+              <td class="text-nowrap">{{ m.label }}预估净利 ${{ '{:,.0f}'.format(l.before) }} <b>→</b> ${{ '{:,.0f}'.format(l.after) }}</td>
               <td class="text-nowrap">利润率 {{ '%.2f' % l.m_before }}% <b>→</b>
                 <span class="{{ 'text-danger fw-bold' if l.m_after < 10 else 'text-success' }}">{{ '%.2f' % l.m_after }}%</span></td>
               {% else %}
@@ -136,7 +136,7 @@
 {# ============ 每月活账本 ============ #}
 <div class="card p-3 mb-3">
   <div class="sec-title mb-1">每个月的生意，最终赚了多少（活账本）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mo_cohort"></a></div>
-  <div class="kpi-sub mb-3">按<b>卖出月份</b>算账：本来能赚的钱 − 退货扣掉的钱 = 实际赚到的钱。绿色=落袋，红色=被退货吃掉。越近的月份退货还没退完，红色还会变长。</div>
+  <div class="kpi-sub mb-3">按<b>卖出月份</b>算账：本来能赚(预估) − 预计退货扣掉 = <b>预估净利</b>。绿色=预估净赚，红色=被退货吃掉。越近的月份退货还没退完，红色还会变长。</div>
   {% for m in month_list %}
   <div class="ledger p-3 mb-2">
     <div class="d-flex justify-content-between flex-wrap gap-2 align-items-baseline">
@@ -145,9 +145,9 @@
       <div class="eq">
         本来能赚 <b>${{ '{:,.0f}'.format(m.profit_gross) }}</b>
         <span class="text-danger">− 退货扣掉 <b>${{ '{:,.0f}'.format(m.loss) }}</b></span>
-        = 实际赚 <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">${{ '{:,.0f}'.format(m.net) }}</b>
+        = 预估净利 <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">${{ '{:,.0f}'.format(m.net) }}</b>
       </div>
-      <div>利润率 <b>{{ '%.1f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</b>
+      <div>预估利润率 <b>{{ '%.1f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</b>
         → <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</b>
         {% if m.unbooked_n %}
         <a class="btn btn-sm btn-outline-warning ms-2"
@@ -155,7 +155,7 @@
           <i class="bi bi-hourglass-split"></i> 退货待定案 {{ m.unbooked_n }}笔</a>
         {% endif %}</div>
     </div>
-    <div class="bar mt-2" title="绿=实际赚到 ${{ '{:,.0f}'.format(m.net) }}；红=被退货吃掉 ${{ '{:,.0f}'.format(m.loss) }}">
+    <div class="bar mt-2" title="绿=预估净赚 ${{ '{:,.0f}'.format(m.net) }}；红=被退货吃掉 ${{ '{:,.0f}'.format(m.loss) }}">
       <div class="net" style="width:{{ m.net_w }}%"></div>
       <div class="eaten" style="width:{{ m.loss_w }}%"></div>
     </div>
@@ -240,7 +240,7 @@ const HELP = {
     '一件6月卖出的货在7月被退，退货损失是"6月那笔生意"造成的——所以从6月的利润里扣，'+
     '这样每个月的利润才是真实的，不会把老订单的锅甩给新月份。<br>'+
     '每张卡片=一天的退货，按"扣哪个月的账"分组；每行=一个运营：'+
-    '扣多少钱、该月净利从多少变到多少、利润率从几变到几（红色=跌破基线10%）。'},
+    '扣多少钱、该月预估净利从多少变到多少、预估利润率从几变到几（红色=跌破基线10%）。'},
   mo_cohort: {t:'活账本怎么读', b:
     '每个月两本账：<br><b>预计最终赚</b>（等式那行）= 本来能赚 − 退货扣掉，其中待追回的供应商退款'+
     '按回收率规则(Macy-Costway 90%/司顺0)先记上；<br>'+

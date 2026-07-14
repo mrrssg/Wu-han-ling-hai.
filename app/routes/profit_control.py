@@ -399,7 +399,7 @@ def monthly():
             m["net_w"], m["loss_w"] = 0.0, 100.0
         m["label"] = f"{int(m['month'][5:])}月"
         m["ops_line"] = " ｜ ".join(
-            f"{r['operator']} 实赚${_f(r['net']):,.0f}（被扣${_f(r['loss_expected']):,.0f}）"
+            f"{r['operator']} 预估净利${_f(r['net']):,.0f}（被扣${_f(r['loss_expected']):,.0f}）"
             for r in m["ops"])
 
     return render_template("profit_control/monthly.html",
