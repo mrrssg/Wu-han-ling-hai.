@@ -14,7 +14,7 @@ import json
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
-from flask import Blueprint, Response, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from app.models.db_manager import DBManager
 
@@ -453,21 +453,47 @@ def monthly_unbooked():
 # ---------------------------------------------------------------
 
 def _recover_list() -> List[Dict]:
+    """追款清单：只有豪雅(Costway)可追款，窗口=下单90天内（用户规则 2026-07-14）。
+    按剩余天数升序（快过期的排前面），同天数按敞口降序。"""
     return _query("""
-        SELECT order_id, store, operator, supplier, shop_sku, order_date, return_date,
-               age_days, cost, exposure
+        SELECT id, order_id, store, operator, shop_sku, order_date, return_date,
+               age_days, cost, exposure, recover_note,
+               90 - DATEDIFF(CURDATE(), order_date) AS days_left
         FROM order_system.return_case
-        WHERE state='pending' AND cost >= 20
-        ORDER BY exposure DESC LIMIT 500""")
+        WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND DATEDIFF(CURDATE(), order_date) <= 90
+        ORDER BY days_left ASC, exposure DESC LIMIT 500""")
+
+
+def _recover_expired_stats() -> Dict:
+    rows = _query("""
+        SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS expo
+        FROM order_system.return_case
+        WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND DATEDIFF(CURDATE(), order_date) > 90""")
+    return rows[0] if rows else {"n": 0, "expo": 0}
 
 
 def _delist_list() -> List[Dict]:
+    """下架候选：排除已被人工标记"已下架"的（action_log delist/executed）。"""
     return _query("""
-        SELECT shop_sku, store, operator, supplier, orders, sale, profit_gross,
-               returns_cnt, loss_expected, net, margin
-        FROM order_system.profit_sku_90d
-        WHERE returns_cnt >= 2 AND net < -50
-        ORDER BY net ASC LIMIT 300""")
+        SELECT s.shop_sku, s.store, s.operator, s.supplier, s.orders, s.sale, s.profit_gross,
+               s.returns_cnt, s.loss_expected, s.net, s.margin
+        FROM order_system.profit_sku_90d s
+        WHERE s.returns_cnt >= 2 AND s.net < -50
+          AND NOT EXISTS (
+            SELECT 1 FROM order_system.action_log a
+            WHERE a.action_type='delist' AND a.status='executed'
+              AND a.target=CONCAT(s.shop_sku,'@',s.store))
+        ORDER BY s.net ASC LIMIT 300""")
+
+
+def _delist_marked() -> List[Dict]:
+    return _query("""
+        SELECT id, target, store, created_at
+        FROM order_system.action_log
+        WHERE action_type='delist' AND status='executed'
+        ORDER BY created_at DESC LIMIT 200""")
 
 
 def _raise_list() -> List[Dict]:
@@ -494,11 +520,72 @@ def actions():
         "delist_net": sum(_f(r["net"]) for r in delist),
         "raise_sale": sum(_f(r["sale"]) for r in raise_rows),
     }
+    # 已标记下架的SKU若之后仍有销量 → 顶部警告（由每日规则引擎写入 issue_log）
+    delist_warns = _query("""
+        SELECT entity, impact_usd, evidence FROM order_system.issue_log
+        WHERE issue_type='delisted_but_selling' AND status='open'
+        ORDER BY impact_usd DESC""")
     return render_template("profit_control/actions.html",
                            recover=recover[:100], delist=delist[:100],
                            raise_rows=raise_rows[:100], totals=totals,
+                           expired=_recover_expired_stats(),
+                           marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})
+
+
+# ---------------------------------------------------------------
+# 行动交互（写路径：备注 / 标记下架 / 撤销）
+# ---------------------------------------------------------------
+
+def _exec(sql: str, params) -> None:
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@profit_control_bp.route("/recover/note", methods=["POST"])
+def recover_note():
+    data = request.get_json(silent=True) or {}
+    rid = int(data.get("id") or 0)
+    note = (data.get("note") or "").strip()[:250]
+    if not rid:
+        return jsonify({"ok": False, "msg": "missing id"}), 400
+    _exec("UPDATE order_system.return_case SET recover_note=%s, note_time=NOW() WHERE id=%s",
+          (note or None, rid))
+    return jsonify({"ok": True})
+
+
+@profit_control_bp.route("/delist/mark", methods=["POST"])
+def delist_mark():
+    data = request.get_json(silent=True) or {}
+    sku = (data.get("sku") or "").strip()
+    store = (data.get("store") or "").strip()
+    if not sku or not store:
+        return jsonify({"ok": False, "msg": "missing sku/store"}), 400
+    target = f"{sku}@{store}"
+    exists = _query("""SELECT id FROM order_system.action_log
+                       WHERE action_type='delist' AND status='executed' AND target=%s""",
+                    (target,))
+    if not exists:
+        _exec("""INSERT INTO order_system.action_log (action_type, target, store, status)
+                 VALUES ('delist', %s, %s, 'executed')""", (target, store))
+    return jsonify({"ok": True})
+
+
+@profit_control_bp.route("/delist/unmark", methods=["POST"])
+def delist_unmark():
+    data = request.get_json(silent=True) or {}
+    aid = int(data.get("id") or 0)
+    if not aid:
+        return jsonify({"ok": False, "msg": "missing id"}), 400
+    _exec("UPDATE order_system.action_log SET status='cancelled' WHERE id=%s AND action_type='delist'",
+          (aid,))
+    return jsonify({"ok": True})
 
 
 @profit_control_bp.route("/actions/export")

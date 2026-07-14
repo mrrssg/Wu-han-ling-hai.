@@ -171,6 +171,9 @@ ALTERS = [
     "ALTER TABLE order_system.profit_month_cohort ADD COLUMN margin_net_actual DECIMAL(8,4) DEFAULT NULL",
     "ALTER TABLE order_system.profit_month_cohort ADD COLUMN gross_est DECIMAL(12,2) DEFAULT 0 "
     "COMMENT '毛利中暂按预估占位的部分(账单未到/残缺)'",
+    "ALTER TABLE order_system.return_case ADD COLUMN recover_note VARCHAR(255) DEFAULT NULL "
+    "COMMENT '追款备注(人工填,每日重建不覆盖)'",
+    "ALTER TABLE order_system.return_case ADD COLUMN note_time DATETIME DEFAULT NULL",
 ]
 
 

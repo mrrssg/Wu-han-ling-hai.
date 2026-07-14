@@ -142,7 +142,7 @@
     <div class="card p-3">
       <div class="sec-title mb-2">未处理问题</div>
       {% set type_names = {'cell_below_baseline':'Cell破线','negative_ev_sku':'负期望SKU',
-                           'recovery_overdue':'追款超期','data_stale':'数据滞后','return_spike':'退货异动'} %}
+                           'recovery_overdue':'追款超期','data_stale':'数据滞后','return_spike':'退货异动','delisted_but_selling':'已下架仍出单'} %}
       {% for t in open_issues %}
       <a class="chip badge rounded-pill text-bg-light border me-1 mb-1"
          href="{{ url_for('profit_control.issues', type=t.issue_type) }}">

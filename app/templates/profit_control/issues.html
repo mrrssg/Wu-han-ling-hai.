@@ -18,7 +18,7 @@
 {# 类型汇总卡 #}
 <div class="row g-2 mb-3">
   {% set type_names = {'cell_below_baseline':'Cell破线','negative_ev_sku':'负期望SKU',
-                       'recovery_overdue':'追款超期','data_stale':'数据滞后','return_spike':'退货异动'} %}
+                       'recovery_overdue':'追款超期','data_stale':'数据滞后','return_spike':'退货异动','delisted_but_selling':'已下架仍出单'} %}
   {% for t in type_counts %}
   <div class="col-auto">
     <a class="btn btn-sm {{ 'btn-primary' if itype == t.issue_type else 'btn-outline-primary' }}"

@@ -8,10 +8,11 @@
 .popover-body { font-size:.82rem; line-height:1.5; }
 .popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
   padding:4px 8px; margin-top:6px; display:block; }
+.note-in { min-width:160px; font-size:.8rem; }
+.days-urgent { color:#d03b3b; font-weight:700; }
 </style>
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-list-check"></i> 行动清单
-    <small class="text-muted fs-6 ms-2">Phase 1 为只读建议；执行（OF21/OF24推价）在 Phase 2 接入</small></h4>
+  <h4 class="mb-0"><i class="bi bi-list-check"></i> 行动清单</h4>
   <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left"></i> 返回总览</a>
 </div>
@@ -29,38 +30,63 @@
 
   {# ================= 追款 ================= #}
   <div class="tab-pane fade show active" id="tab-recover">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-      <span class="text-muted small">供应商退款未回填的退货单（货值≥$20），按敞口从大到小。财务对账回填「供应商退款」后自动核销。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_recover"></a></span>
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <span class="text-muted small">只列<b>豪雅(Costway)</b>——司顺追不了款；追款窗口=<b>下单90天内</b>，按剩余天数排序（快过期的在最上面）。
+        备注随手记（找谁、什么进度），每天重算不会丢。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_recover"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
-        <i class="bi bi-download"></i> 导出CSV（全量{{ counts.recover }}笔）</a>
+        <i class="bi bi-download"></i> 导出CSV</a>
     </div>
+    {% if expired and expired.n %}
+    <div class="alert alert-secondary py-2 small mb-2">
+      另有 <b>{{ expired.n }}</b> 笔豪雅退货已超90天追款窗口（货值 ${{ '{:,.0f}'.format(expired.expo|float) }}）——按规则已无法追款，不在下表显示。
+    </div>
+    {% endif %}
     <div class="card"><div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0">
         <thead class="table-light"><tr>
-          <th>订单号</th><th>店铺</th><th>供应商</th><th>SKU</th>
-          <th>下单日</th><th>退货日</th><th class="text-end">账龄(天)</th>
-          <th class="text-end">货值敞口$</th></tr></thead>
+          <th>订单号</th><th>店铺</th><th>SKU</th>
+          <th>下单日</th><th>退货日</th>
+          <th class="text-end">剩余追款天数</th>
+          <th class="text-end">货值敞口$</th>
+          <th style="min-width:220px">备注</th></tr></thead>
         <tbody>
           {% for r in recover %}
-          <tr class="{{ 'table-warning' if r.age_days > 60 }}">
+          <tr class="{{ 'table-warning' if r.days_left <= 15 }}">
             <td class="font-monospace small">{{ r.order_id }}</td>
-            <td>{{ r.store }}</td><td>{{ r.supplier }}</td>
+            <td class="small">{{ r.store }}</td>
             <td class="small">{{ r.shop_sku }}</td>
             <td class="text-nowrap small">{{ r.order_date }}</td>
             <td class="text-nowrap small">{{ r.return_date }}</td>
-            <td class="text-end {{ 'fw-bold text-danger' if r.age_days > 60 }}">{{ r.age_days }}</td>
-            <td class="text-end fw-bold">{{ '{:,.0f}'.format(r.exposure|float) }}</td></tr>
-          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">没有待追回的退货</td></tr>{% endfor %}
+            <td class="text-end {{ 'days-urgent' if r.days_left <= 15 }}">{{ r.days_left }} 天</td>
+            <td class="text-end fw-bold">{{ '{:,.0f}'.format(r.exposure|float) }}</td>
+            <td>
+              <div class="input-group input-group-sm">
+                <input class="form-control note-in" id="note-{{ r.id }}"
+                       value="{{ r.recover_note or '' }}" placeholder="记录追款进度...">
+                <button class="btn btn-outline-primary" onclick="saveNote({{ r.id }}, this)">存</button>
+              </div>
+            </td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">窗口内没有待追回的豪雅退货 🎉</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>
-    <p class="small text-muted mt-1">页面显示前100条，CSV含全量。黄色行=账龄超60天。</p>
+    <p class="small text-muted mt-1">黄色行=剩余≤15天，抓紧。财务回填「供应商退款」后自动核销消失。</p>
   </div>
 
   {# ================= 下架 ================= #}
   <div class="tab-pane fade" id="tab-delist">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU：卖得越多亏得越多，建议下架或查listing是否引导了错误预期。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_delist"></a></span>
+    {% if delist_warns %}
+    <div class="alert alert-danger py-2 mb-2">
+      <b>⚠️ 已点下架但仍在出单（去店铺后台核实！）：</b>
+      {% for w in delist_warns %}
+      <div class="small">{{ w.entity }} —— {{ w.evidence }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU。你在店铺后台下架后点「已下架」，该行从清单消失；
+        <b>之后若再出现该SKU的销量，系统会自动报警</b>。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_delist"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='delist') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
@@ -69,20 +95,37 @@
         <thead class="table-light"><tr>
           <th>SKU</th><th>店铺</th><th>运营</th>
           <th class="text-end">90D单数</th><th class="text-end">退货</th>
-          <th class="text-end">销售$</th><th class="text-end">非退货毛利$</th>
-          <th class="text-end">退货期望损失$</th><th class="text-end">净贡献$</th></tr></thead>
+          <th class="text-end">销售$</th><th class="text-end">净贡献$</th>
+          <th class="text-center">操作</th></tr></thead>
         <tbody>
           {% for r in delist %}
-          <tr><td class="small">{{ r.shop_sku }}</td><td>{{ r.store }}</td><td>{{ r.operator }}</td>
+          <tr id="dl-{{ loop.index }}">
+            <td class="small">{{ r.shop_sku }}</td><td class="small">{{ r.store }}</td><td>{{ r.operator }}</td>
             <td class="text-end">{{ r.orders }}</td><td class="text-end">{{ r.returns_cnt }}</td>
             <td class="text-end">{{ '{:,.0f}'.format(r.sale|float) }}</td>
-            <td class="text-end">{{ '{:,.0f}'.format(r.profit_gross|float) }}</td>
-            <td class="text-end">{{ '{:,.0f}'.format(r.loss_expected|float) }}</td>
-            <td class="text-end fw-bold text-danger">{{ '{:,.0f}'.format(r.net|float) }}</td></tr>
-          {% else %}<tr><td colspan="9" class="text-center text-muted py-4">没有负期望SKU 🎉</td></tr>{% endfor %}
+            <td class="text-end fw-bold text-danger">{{ '{:,.0f}'.format(r.net|float) }}</td>
+            <td class="text-center">
+              <button class="btn btn-sm btn-outline-dark"
+                      onclick="markDelist('{{ r.shop_sku }}','{{ r.store }}','dl-{{ loop.index }}',this)">
+                ✅ 已下架</button></td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">没有负期望SKU 🎉</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>
+    {% if marked %}
+    <details class="mt-2">
+      <summary class="small text-muted">已标记下架（{{ marked|length }}个，点开可撤销）</summary>
+      <table class="table table-sm mt-1" style="max-width:640px">
+        {% for a in marked %}
+        <tr id="mk-{{ a.id }}"><td class="small">{{ a.target }}</td>
+          <td class="small text-muted">{{ a.created_at }}</td>
+          <td><button class="btn btn-sm btn-outline-secondary py-0"
+                onclick="unmarkDelist({{ a.id }}, 'mk-{{ a.id }}')">撤销</button></td></tr>
+        {% endfor %}
+      </table>
+    </details>
+    {% endif %}
   </div>
 
   {# ================= 提价 ================= #}
@@ -100,7 +143,7 @@
           <th class="text-end">净利率</th><th class="text-end">建议提价</th></tr></thead>
         <tbody>
           {% for r in raise_rows %}
-          <tr><td class="small">{{ r.shop_sku }}</td><td>{{ r.store }}</td><td>{{ r.operator }}</td>
+          <tr><td class="small">{{ r.shop_sku }}</td><td class="small">{{ r.store }}</td><td>{{ r.operator }}</td>
             <td class="text-end">{{ r.orders }}</td>
             <td class="text-end">{{ '{:,.0f}'.format(r.sale|float) }}</td>
             <td class="text-end {{ 'text-danger' if r.margin|float < 0.05 }}">{{ '%.1f' % (r.margin|float*100) }}%</td>
@@ -115,23 +158,46 @@
 </div>
 
 <script>
+async function postJSON(url, body) {
+  const r = await fetch(url, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
+}
+async function saveNote(id, btn) {
+  const v = document.getElementById('note-'+id).value;
+  btn.disabled = true;
+  const res = await postJSON('{{ url_for("profit_control.recover_note") }}', {id:id, note:v});
+  btn.textContent = res.ok ? '✓' : '✗';
+  setTimeout(()=>{btn.textContent='存'; btn.disabled=false;}, 1200);
+}
+async function markDelist(sku, store, rowId, btn) {
+  if (!confirm('确认已在店铺后台把 '+sku+' 下架？点确认后它将从清单消失，若之后仍出单会自动报警。')) return;
+  btn.disabled = true;
+  const res = await postJSON('{{ url_for("profit_control.delist_mark") }}', {sku:sku, store:store});
+  if (res.ok) { const tr = document.getElementById(rowId); tr && tr.remove(); }
+  else { btn.disabled = false; alert('保存失败'); }
+}
+async function unmarkDelist(id, rowId) {
+  const res = await postJSON('{{ url_for("profit_control.delist_unmark") }}', {id:id});
+  if (res.ok) { const tr = document.getElementById(rowId); tr && tr.remove(); }
+}
+
 const SRC_ORDER = '飞书「订单丨📦Mysql订单数据库」(tbl4LDs0H5M8Pq5n)';
 const HELP = {
   act_recover: {t:'追款清单口径', b:
-    '<b>入选</b>：退货三态=待追回（「供应商退款」为空、退货≤180天）且货值≥$20。按货值敞口降序。<br>'+
-    '<b>核销</b>：财务在飞书订单表回填「供应商退款」后，次日05:30自动转"已收回"、从清单消失。'+
-    '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+
-    '（成本·实际成本/供应商退款/预估退货运费+退货原因）× MySQL mirakl_returns（真实退货日）</span>'},
+    '<b>入选</b>：供应商=豪雅(Costway)、退货三态=待追回、货值≥$20、且<b>下单至今≤90天</b>（追款窗口，用户规则）。'+
+    '司顺不可追款所以不列；超窗的单独计数不进表。<br>'+
+    '<b>核销</b>：财务回填「供应商退款」后次日自动消失。备注存 return_case.recover_note，每日重算保留。'+
+    '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+' × mirakl_returns</span>'},
   act_delist: {t:'下架候选口径', b:
-    '<b>入选</b>：近90天(按下单日) 退货≥2笔 且 净贡献 &lt; −$50。<br>'+
-    '<b>净贡献</b> = 非退货单毛利合计 − 退货期望损失（有退款按差额，没退款按 成本×(1−店铺回收率)+运费）。'+
-    '<span class="src"><b>数据源</b>：profit_sku_90d（每日全量重建）；'+
-    '上游='+SRC_ORDER+'：Shop SKU/售价/实际·预估利润/成本/供应商退款/退货标记</span>'},
+    '<b>入选</b>：近90天退货≥2笔 且 净贡献&lt;−$50，且未被标记"已下架"。<br>'+
+    '<b>已下架监控</b>：标记后每天检查该SKU是否仍有新订单，有则生成高级别警告'+
+    '（问题清单+本页顶部红条），防止"点了下架店铺却没下"。'+
+    '<span class="src"><b>数据源</b>：profit_sku_90d + action_log(标记) + issue_log(警告)</span>'},
   act_raise: {t:'提价候选口径', b:
-    '<b>入选</b>：近90天销售≥$1,000、≥5单、净利率&lt;基线10%、且净贡献&gt;−$50（亏穿的去下架清单）。<br>'+
-    '<b>建议提价%</b> = (10% − 当前净利率) ÷ 0.7，即补足缺口并把涨价部分要被抽走的佣金摊回来；'+
-    '下限1%上限8%，防止一次跳太多掉量。'+
-    '<span class="src"><b>数据源</b>：profit_sku_90d；建议幅度是算术结果，最终以你确认为准</span>'},
+    '<b>入选</b>：近90天销售≥$1,000、≥5单、净利率&lt;基线10%、且净贡献&gt;−$50。<br>'+
+    '<b>建议提价%</b> = (10% − 当前净利率) ÷ 0.7（摊回佣金），1%~8%封顶。'+
+    '<span class="src"><b>数据源</b>：profit_sku_90d；最终以你确认为准</span>'},
 };
 document.addEventListener('DOMContentLoaded', () => {
 document.querySelectorAll('[data-help]').forEach(el => {

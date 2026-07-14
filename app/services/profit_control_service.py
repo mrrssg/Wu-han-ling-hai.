@@ -793,6 +793,25 @@ def run_issue_rules(conn, snapshots: List[Dict], parsed: List[Dict],
                 f"近7天退货 {w1} 笔，前4周周均 {weekly_avg:.1f} 笔（按下单日口径，实际还会滞后放大）",
                 "检查该店近期上架/改价/物流是否有异常")
 
+    # R6 已点"已下架"但之后仍有销量（店铺可能没真正下架）
+    with conn.cursor() as cur:
+        cur.execute("""SELECT id, target, store, created_at FROM order_system.action_log
+                       WHERE action_type='delist' AND status='executed'""")
+        delist_rows = cur.fetchall()
+    for row in delist_rows:
+        target = row["target"] if isinstance(row, dict) else row[1]
+        store_d = row["store"] if isinstance(row, dict) else row[2]
+        created = row["created_at"] if isinstance(row, dict) else row[3]
+        sku_d = target.split("@")[0]
+        mark_ts = created.timestamp() * 1000 if created else 0
+        sold = [o for o in parsed
+                if o["sku"] == sku_d and o["store"] == store_d and o["order_ts"] > mark_ts]
+        if sold:
+            add("delisted_but_selling", target, "high", sum(o["sale"] for o in sold),
+                f"已于 {created:%m-%d %H:%M} 标记下架，此后仍有 {len(sold)} 单成交、"
+                f"销售额 ${sum(o['sale'] for o in sold):,.0f}",
+                "店铺可能没有真正下架——去平台后台核实 offer 状态并下架")
+
     # 写库：当天同 (type, entity) 幂等；昨天仍 open 但今天未再检出的自动关闭
     with conn.cursor() as cur:
         cur.executemany("""
