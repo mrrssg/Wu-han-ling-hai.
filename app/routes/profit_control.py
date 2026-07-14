@@ -128,7 +128,7 @@ def overview():
         "baseline": BASELINE * 100,
     }, ensure_ascii=False)
 
-    # ---- 热力矩阵（运营 × 店铺 修正净利率） ----
+    # ---- 热力矩阵（运营 × 店铺 修正净利率），90天考核口径 + 最近3个订单月 ----
     ops = sorted(set(c["operator"] for c in cells))
     stores = sorted(set(c["store"] for c in cells),
                     key=lambda s: -sum(_f(c["sale_90d"]) for c in cells if c["store"] == s))
@@ -146,6 +146,28 @@ def overview():
                 "color": _heat_color(m),
             })
         matrix.append(row)
+
+    # 月度视图（订单月口径=活账本预估净利率，可点击直达该月诊断）
+    month_rows = _query("""
+        SELECT order_month, operator, store, sale, net, margin_net
+        FROM order_system.profit_month_cohort
+        WHERE order_month >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 2 MONTH), '%Y-%m')""")
+    month_names = sorted(set(r["order_month"] for r in month_rows), reverse=True)
+    month_matrices = []
+    for mon in month_names:
+        mmap = {(r["operator"], r["store"]): r for r in month_rows if r["order_month"] == mon}
+        rows_m = []
+        for op in ops:
+            row = {"operator": op, "cols": []}
+            for st in stores:
+                r = mmap.get((op, st))
+                m = float(r["margin_net"]) if (r and r["margin_net"] is not None) else None
+                sale = _f(r["sale"]) if r else 0.0
+                gap = max(0.0, sale * BASELINE - _f(r["net"])) if r else 0.0
+                row["cols"].append({"store": st, "margin": m, "sale": sale,
+                                    "gap": gap, "color": _heat_color(m)})
+            rows_m.append(row)
+        month_matrices.append({"month": mon, "label": f"{int(mon[5:])}月", "rows": rows_m})
 
     # ---- 退货损失结构（按店铺 stacked） ----
     loss_by_store: Dict[str, Dict[str, float]] = {}
@@ -182,6 +204,7 @@ def overview():
 
     return render_template("profit_control/overview.html",
                            snap_date=snap_date, kpi=kpi, matrix=matrix, stores=stores,
+                           month_matrices=month_matrices,
                            trend_json=trend_json, loss_json=loss_json,
                            states=states, open_issues=open_issues, fresh=fresh,
                            baseline=BASELINE)

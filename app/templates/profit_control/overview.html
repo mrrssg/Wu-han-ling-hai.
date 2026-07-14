@@ -91,21 +91,31 @@
   </div></div>
 </div>
 
-{# ============ 热力矩阵 ============ #}
+{# ============ 热力矩阵（90天考核 + 月度切换） ============ #}
 <div class="card p-3 mb-3">
-  <div class="sec-title mb-2">运营 × 店铺 修正净利率热力图（滚动90天）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="heatmap"></a>
-    <span class="kpi-sub">蓝=高于基线，红=低于基线，颜色越深偏离越大；格内为 净利率 / 90天销售</span></div>
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="sec-title">运营 × 店铺 净利率热力图<a class="pc-i bi bi-info-circle" tabindex="0" data-help="heatmap"></a>
+      <span class="kpi-sub">蓝=高于基线，红=低于基线，颜色越深偏离越大；月度视图点格子直达该月诊断</span></div>
+    <div class="btn-group btn-group-sm" id="heatBtns">
+      <button class="btn btn-primary" data-hm="hm-90d">滚动90天·考核</button>
+      {% for mm in month_matrices %}
+      <button class="btn btn-outline-primary" data-hm="hm-{{ mm.month }}">{{ mm.label }}</button>
+      {% endfor %}
+    </div>
+  </div>
+  {% macro heat_table(rows, clickable_month=None) %}
   <div class="table-responsive"><table class="table table-borderless align-middle mb-0" style="border-spacing:4px;border-collapse:separate">
     <thead><tr><th class="kpi-sub"></th>
       {% for st in stores %}<th class="kpi-sub text-center">{{ st }}</th>{% endfor %}
     </tr></thead>
     <tbody>
-      {% for row in matrix %}
+      {% for row in rows %}
       <tr><td class="fw-semibold text-nowrap">{{ row.operator }}</td>
         {% for c in row.cols %}
         <td>{% if c.margin is not none %}
-          <div class="heat-cell" style="background:{{ c.color.bg }};color:{{ c.color.ink }}"
-               title="{{ row.operator }}-{{ c.store }}：修正净利率 {{ '%.2f' % (c.margin*100) }}%，90天销售 ${{ '{:,.0f}'.format(c.sale) }}{% if c.gap > 0 %}，距基线缺口 ${{ '{:,.0f}'.format(c.gap) }}{% endif %}">
+          <div class="heat-cell" style="background:{{ c.color.bg }};color:{{ c.color.ink }}{{ ';cursor:pointer' if clickable_month }}"
+               {% if clickable_month %}onclick="location='{{ url_for('profit_control.diagnose', month=clickable_month, operator=row.operator, store=c.store) }}'"{% endif %}
+               title="{{ row.operator }}-{{ c.store }}：净利率 {{ '%.2f' % (c.margin*100) }}%，销售 ${{ '{:,.0f}'.format(c.sale) }}{% if c.gap > 0 %}，距基线缺口 ${{ '{:,.0f}'.format(c.gap) }}{% endif %}">
             <div class="m">{{ '%.1f' % (c.margin*100) }}%</div>
             <div class="s">${{ '{:,.0f}'.format(c.sale/1000) }}k{% if c.gap > 0 %} · 缺${{ '{:,.0f}'.format(c.gap) }}{% endif %}</div>
           </div>
@@ -115,6 +125,13 @@
       {% endfor %}
     </tbody>
   </table></div>
+  {% endmacro %}
+  <div id="hm-90d">{{ heat_table(matrix) }}
+    <div class="kpi-sub mt-1">滚动90天=考核口径（含链梯未成熟预扣，退货成熟度最完整）</div></div>
+  {% for mm in month_matrices %}
+  <div id="hm-{{ mm.month }}" style="display:none">{{ heat_table(mm.rows, mm.month) }}
+    <div class="kpi-sub mt-1">{{ mm.label }}订单口径（=活账本预估净利率；越近的月份退货没退完、数字会继续变）</div></div>
+  {% endfor %}
 </div>
 
 {# ============ 损失结构 + 三态 + 问题摘要 ============ #}
@@ -281,10 +298,12 @@ const HELP = {
     '<span class="src"><b>数据源</b>：profit_trend_daily.net_1d；'+
     '上游字段同"滚动30天净利率"卡</span>'},
   heatmap: {t:'热力图怎么读', b:
-    '每格=该运营×店铺的<b>90天修正净利率</b>（考核口径，同第2张KPI卡公式）。<br>'+
+    '每格=该运营×店铺的净利率。默认<b>滚动90天修正净利率</b>（考核口径，同第2张KPI卡公式）——'+
+    '用90天是因为退货滞后30-90天才成熟，单月口径退货没退完会虚高，考核以90天为准。<br>'+
+    '右上角可切到<b>按订单月</b>看（=活账本的预估净利率，越近的月数字还会变），月度格子点击直达该月诊断。<br>'+
     '灰=正好在基线附近；蓝=高于基线；红=低于基线；每差2个百分点加深一档。'+
-    '格内第二行=90天销售额，破线的还标了补到基线要多赚的缺口$。'+
-    '<span class="src"><b>数据源</b>：profit_cell_daily 当日快照；鼠标悬停有精确数值</span>'},
+    '格内第二行=销售额，破线的还标了补到基线要多赚的缺口$。'+
+    '<span class="src"><b>数据源</b>：90天=profit_cell_daily 当日快照；月度=profit_month_cohort；鼠标悬停有精确数值</span>'},
   loss_stack: {t:'退货损失三段怎么算', b:
     '<b>红·确认损失</b>：已收回案例的差额+运费，加上收不回案例(超180天)的全额成本+运费。<br>'+
     '<b>黄·待追期望损失</b>：待追敞口×(1−该店回收率)，即按历史经验预计追不回来的部分。<br>'+
@@ -306,6 +325,15 @@ document.querySelectorAll('[data-help]').forEach(el => {
   new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
     trigger:'focus', placement:'bottom', container:'body'});
 });
+// 热力图窗口切换：90天考核 / 各订单月
+const heatBtns = document.querySelectorAll('#heatBtns button');
+heatBtns.forEach(btn => btn.addEventListener('click', () => {
+  heatBtns.forEach(b => {
+    b.classList.toggle('btn-primary', b === btn);
+    b.classList.toggle('btn-outline-primary', b !== btn);
+    document.getElementById(b.dataset.hm).style.display = (b === btn) ? '' : 'none';
+  });
+}));
 });
 </script>
 {% endblock %}
