@@ -36,11 +36,6 @@
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
-    {% if claimed and claimed.n %}
-    <div class="alert alert-success py-2 small mb-2">
-      ✅ 另有 <b>{{ claimed.n }}</b> 笔已在<b>退货登记表</b>追过款（货值 ${{ '{:,.0f}'.format(claimed.expo|float) }}）——只等豪雅退款，不列进本清单；退款回填后自动闭环。
-    </div>
-    {% endif %}
     {% if expired and expired.n %}
     <div class="alert alert-secondary py-2 small mb-2">
       另有 <b>{{ expired.n }}</b> 笔豪雅退货已超90天追款窗口（货值 ${{ '{:,.0f}'.format(expired.expo|float) }}）——按规则已无法追款。
@@ -68,6 +63,11 @@
       </details>
     </div>
     {% endif %}
+    <div class="sec-split fw-semibold small mb-1 mt-2">
+      ❗ 未登记追款（要去追的）
+      <span class="badge text-bg-danger">{{ counts.recover }} 笔 · ${{ '{:,.0f}'.format(totals.recover_expo) }}</span>
+      <span class="text-muted fw-normal">——退货了但还没在退货登记表登记，别漏</span>
+    </div>
     <div class="card"><div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0">
         <thead class="table-light"><tr>
@@ -94,11 +94,51 @@
               </div>
             </td>
           </tr>
-          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">窗口内没有待追回的豪雅退货 🎉</td></tr>{% endfor %}
+          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">
+            ✅ 窗口内的退货全部都登记过追款了，没有漏网的（每天05:30重新核对）</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>
-    <p class="small text-muted mt-1">黄色行=剩余≤15天，抓紧。财务回填「供应商退款」后自动核销消失。</p>
+    <p class="small text-muted mt-1">黄色行=剩余≤15天，抓紧。在退货登记表登记后次日自动挪到下面"已登记"；财务回填「供应商退款」后彻底核销。</p>
+
+    <div class="sec-split fw-semibold small mb-1 mt-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>⏳ 已登记，等豪雅退款
+        <span class="badge text-bg-success">{{ claimed.n }} 笔 · ${{ '{:,.0f}'.format(claimed.expo|float) }}</span>
+        <span class="text-muted fw-normal">——追款动作做过了，等最久的排最上面，该催豪雅了</span></span>
+      <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover_claimed') }}">
+        <i class="bi bi-download"></i> 导出CSV</a>
+    </div>
+    <div class="card"><div class="table-responsive" style="max-height:420px;overflow-y:auto">
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead class="table-light" style="position:sticky;top:0"><tr>
+          <th>订单号</th><th>店铺</th><th>SKU</th>
+          <th>下单日</th><th>退货日</th>
+          <th class="text-end">退货后已等</th>
+          <th class="text-end">货值敞口$</th>
+          <th style="min-width:220px">备注</th></tr></thead>
+        <tbody>
+          {% for r in claimed_rows %}
+          <tr class="{{ 'table-warning' if r.days_waiting >= 60 }}">
+            <td class="font-monospace small">{{ r.order_id }}</td>
+            <td class="small">{{ r.store }}</td>
+            <td class="small">{{ r.shop_sku }}</td>
+            <td class="text-nowrap small">{{ r.order_date }}</td>
+            <td class="text-nowrap small">{{ r.return_date }}</td>
+            <td class="text-end {{ 'days-urgent' if r.days_waiting >= 60 }}">{{ r.days_waiting }} 天</td>
+            <td class="text-end fw-bold">{{ '{:,.0f}'.format(r.exposure|float) }}</td>
+            <td>
+              <div class="input-group input-group-sm">
+                <input class="form-control note-in" id="note-{{ r.id }}"
+                       value="{{ r.recover_note or '' }}" placeholder="催款进度/豪雅答复...">
+                <button class="btn btn-outline-primary" onclick="saveNote({{ r.id }}, this)">存</button>
+              </div>
+            </td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">没有等待中的登记退款</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div></div>
+    <p class="small text-muted mt-1">黄色行=退货后等了≥60天还没退款。显示前300笔，全量用CSV导出；财务回填「供应商退款」后自动消失。</p>
   </div>
 
   {# ================= 下架 ================= #}
@@ -212,10 +252,11 @@ async function unmarkDelist(id, rowId) {
 const SRC_ORDER = '飞书「订单丨📦Mysql订单数据库」(tbl4LDs0H5M8Pq5n)';
 const HELP = {
   act_recover: {t:'追款清单口径', b:
-    '<b>入选</b>：供应商=豪雅(Costway)、退货三态=待追回、货值≥$20、且<b>下单至今≤90天</b>（追款窗口，用户规则）。'+
-    '司顺不可追款所以不列；超窗的单独计数不进表。<br>'+
-    '<b>已追过款的不列</b>：在飞书「退货登记表」登记过订单号的=已向豪雅追过款、只等退款，'+
-    '每天05:30自动同步，绿条单独计数。<br>'+
+    '<b>范围</b>：供应商=豪雅(Costway)、退货三态=待追回、货值≥$20。司顺不可追款所以不列；'+
+    '超90天窗口的单独计数不进表（追款窗口=下单90天内，用户规则）。<br>'+
+    '<b>两段</b>：❗未登记=退货了但飞书「退货登记表」里查不到订单号（漏网，要去追）；'+
+    '⏳已登记=登记表里有=追款动作做过了，按退货后等待天数排序，等太久的催豪雅。'+
+    '每天05:30自动和登记表核对一遍。<br>'+
     '<b>核销</b>：财务回填「供应商退款」后次日自动消失。备注存 return_case.recover_note，每日重算保留。'+
     '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+' × mirakl_returns × 退货登记表(tblCqER404qe57vV)</span>'},
   act_delist: {t:'下架候选口径', b:

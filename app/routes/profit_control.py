@@ -866,6 +866,17 @@ def _claim_filed_stats() -> Dict:
     return rows[0] if rows else {"n": 0, "expo": 0}
 
 
+def _claim_filed_list() -> List[Dict]:
+    """已登记未退款明细：按退货后等待天数降序（等最久的最上面，优先催豪雅）。"""
+    return _query("""
+        SELECT id, order_id, store, operator, shop_sku, order_date, return_date,
+               cost, exposure, recover_note,
+               DATEDIFF(CURDATE(), return_date) AS days_waiting
+        FROM order_system.return_case
+        WHERE state='pending' AND supplier='Costway' AND claim_filed=1
+        ORDER BY days_waiting DESC, exposure DESC LIMIT 1000""")
+
+
 def _delist_list() -> List[Dict]:
     """下架候选：排除已被人工标记"已下架"的（action_log delist/executed）。"""
     return _query("""
@@ -923,6 +934,7 @@ def actions():
                            expired=_recover_expired_stats(),
                            expired_rows=_recover_expired_list()[:200],
                            claimed=_claim_filed_stats(),
+                           claimed_rows=_claim_filed_list()[:300],
                            marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})
@@ -989,6 +1001,8 @@ def actions_export():
         rows, name = _recover_list(), "追款清单"
     elif which == "recover_expired":
         rows, name = _recover_expired_list(), "超窗未追回"
+    elif which == "recover_claimed":
+        rows, name = _claim_filed_list(), "已登记未退款"
     elif which == "delist":
         rows, name = _delist_list(), "下架候选"
     else:
