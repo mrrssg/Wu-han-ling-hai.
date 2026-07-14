@@ -293,16 +293,17 @@ def diagnose():
             delist_rows = _query("""
                 SELECT shop_sku, orders, sale, returns_cnt, loss_expected, net
                 FROM order_system.profit_sku_90d
-                WHERE store=%s AND returns_cnt>=2 AND net<-50
+                WHERE store=%s AND operator=%s AND returns_cnt>=2 AND net<-50
                   AND NOT EXISTS (SELECT 1 FROM order_system.action_log a
                     WHERE a.action_type='delist' AND a.status='executed'
                       AND a.target=CONCAT(profit_sku_90d.shop_sku,'@',profit_sku_90d.store))
-                ORDER BY net ASC LIMIT 10""", (store,))
+                ORDER BY net ASC LIMIT 10""", (store, operator))
             raise_rows = _query("""
                 SELECT shop_sku, orders, sale, margin FROM order_system.profit_sku_90d
-                WHERE store=%s AND sale>=1000 AND orders>=5 AND margin IS NOT NULL
-                  AND margin < %s AND net > -50 ORDER BY sale DESC LIMIT 10""",
-                (store, BASELINE))
+                WHERE store=%s AND operator=%s AND sale>=1000 AND orders>=5
+                  AND margin IS NOT NULL AND margin < %s AND net > -50
+                ORDER BY sale DESC LIMIT 10""",
+                (store, operator, BASELINE))
             raise_uplift = sum(_f(r["sale"]) * (BASELINE - _f(r["margin"])) for r in raise_rows)
             recover_in_window = _query("""
                 SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
