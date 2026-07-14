@@ -212,6 +212,51 @@ def issues():
 
 
 # ---------------------------------------------------------------
+# Listing哨兵：退货触发的 我方listing vs 供应商listing 对比结果
+# ---------------------------------------------------------------
+
+@profit_control_bp.route("/sentinel")
+def sentinel():
+    verdict = request.args.get("verdict", "")
+    status = request.args.get("status", "open")
+    conds, params = [], []
+    if verdict:
+        conds.append("verdict=%s")
+        params.append(verdict)
+    if status and status != "all":
+        conds.append("status=%s")
+        params.append(status)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    rows = _query(
+        f"""SELECT * FROM order_system.listing_sentinel_findings {where}
+            ORDER BY FIELD(verdict,'severe','minor','clean'), returns_recent DESC,
+                     audit_date DESC LIMIT 200""",
+        tuple(params) if params else None)
+    for r in rows:
+        try:
+            r["issues"] = json.loads(r["issues_json"] or "[]")
+        except Exception:
+            r["issues"] = []
+    counts = {c["k"]: int(c["n"]) for c in _query(
+        """SELECT CONCAT(verdict,'-',status) AS k, COUNT(*) AS n
+           FROM order_system.listing_sentinel_findings GROUP BY verdict, status""")}
+    return render_template("profit_control/sentinel.html",
+                           rows=rows, verdict=verdict, status=status, counts=counts)
+
+
+@profit_control_bp.route("/sentinel/mark", methods=["POST"])
+def sentinel_mark():
+    data = request.get_json(silent=True) or {}
+    fid = int(data.get("id") or 0)
+    new_status = (data.get("status") or "").strip()
+    if not fid or new_status not in ("fixed", "false_positive", "open"):
+        return jsonify({"ok": False}), 400
+    _exec("UPDATE order_system.listing_sentinel_findings SET status=%s WHERE id=%s",
+          (new_status, fid))
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------
 # 月度诊断：为什么没达基线 → 谁 → 缺口拆解 → 量化处方 → 标记已做
 # ---------------------------------------------------------------
 

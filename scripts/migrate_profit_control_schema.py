@@ -150,6 +150,28 @@ DDL = [
     ) CHARACTER SET utf8mb4 COMMENT='利润控制台: 亏本卖的正常单明细(每日重建,诊断查定价用)'
     """,
     """
+    CREATE TABLE IF NOT EXISTS order_system.listing_sentinel_findings (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        audit_date DATE NOT NULL,
+        store VARCHAR(64), operator VARCHAR(32), supplier VARCHAR(32),
+        shop_sku VARCHAR(64) NOT NULL, supplier_sku VARCHAR(64),
+        returns_recent INT DEFAULT 0,
+        reason_dist VARCHAR(255),
+        price_ours DECIMAL(10,2), price_supplier DECIMAL(10,2), price_ratio DECIMAL(6,2),
+        verdict VARCHAR(12) COMMENT 'clean/minor/severe',
+        summary TEXT,
+        issues_json MEDIUMTEXT,
+        image_note VARCHAR(500),
+        our_title VARCHAR(500), supplier_title VARCHAR(500),
+        item_link VARCHAR(500),
+        status VARCHAR(16) DEFAULT 'open' COMMENT 'open/fixed/false_positive',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_sku_store (shop_sku, store),
+        KEY idx_date (audit_date), KEY idx_verdict (verdict)
+    ) CHARACTER SET utf8mb4 COMMENT='Listing哨兵: 退货触发的listing三方对比结果'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS order_system.action_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         action_type VARCHAR(32) NOT NULL COMMENT 'raise_price/delist/recover/reroute',
