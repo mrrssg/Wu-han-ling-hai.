@@ -134,6 +134,18 @@
           </div>
           <div class="kpi-sub mt-1"><b>为什么：</b>{{ x.why }}</div>
           <div class="kpi-sub"><b>怎么做：</b>{{ x.how }}</div>
+          {% if x.table and x.table.rows %}
+          <details class="mt-1">
+            <summary class="small text-primary" style="cursor:pointer">📋 看具体数据（{{ x.table.rows|length }}条）</summary>
+            <div class="table-responsive mt-1" style="max-height:260px;overflow-y:auto">
+              <table class="table table-sm mb-0">
+                <thead class="table-light"><tr>{% for h in x.table.head %}<th class="small">{{ h }}</th>{% endfor %}</tr></thead>
+                <tbody>{% for row in x.table.rows %}<tr>{% for cell in row %}<td class="small">{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% if x.table.more %}<div class="kpi-sub mt-1">{{ x.table.more }}</div>{% endif %}
+          </details>
+          {% endif %}
           <div class="mt-1">
             {% if x.done %}
             <span class="text-success small">✅ 已标记完成（{{ x.done_at }}）</span>

@@ -291,14 +291,15 @@ def diagnose():
 
             # 该店铺的处方素材（90天口径）
             delist_rows = _query("""
-                SELECT shop_sku, operator, net, returns_cnt FROM order_system.profit_sku_90d
+                SELECT shop_sku, orders, sale, returns_cnt, loss_expected, net
+                FROM order_system.profit_sku_90d
                 WHERE store=%s AND returns_cnt>=2 AND net<-50
                   AND NOT EXISTS (SELECT 1 FROM order_system.action_log a
                     WHERE a.action_type='delist' AND a.status='executed'
                       AND a.target=CONCAT(profit_sku_90d.shop_sku,'@',profit_sku_90d.store))
                 ORDER BY net ASC LIMIT 10""", (store,))
             raise_rows = _query("""
-                SELECT shop_sku, sale, margin FROM order_system.profit_sku_90d
+                SELECT shop_sku, orders, sale, margin FROM order_system.profit_sku_90d
                 WHERE store=%s AND sale>=1000 AND orders>=5 AND margin IS NOT NULL
                   AND margin < %s AND net > -50 ORDER BY sale DESC LIMIT 10""",
                 (store, BASELINE))
@@ -307,6 +308,39 @@ def diagnose():
                 SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
                   AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator))[0]
+            recover_rows = _query("""
+                SELECT order_id, shop_sku, return_date,
+                       90 - DATEDIFF(CURDATE(), order_date) AS days_left, exposure
+                FROM order_system.return_case
+                WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND DATEDIFF(CURDATE(), order_date) <= 90
+                ORDER BY days_left ASC, exposure DESC LIMIT 30""", (store, operator))
+            sishun_rows = _query("""
+                SELECT shop_sku, COUNT(*) AS n, ROUND(SUM(exposure + confirmed_loss)) AS loss
+                FROM order_system.return_case
+                WHERE store=%s AND operator=%s AND supplier <> 'Costway'
+                  AND state IN ('pending','written_off')
+                  AND DATE_FORMAT(order_date,'%%Y-%%m') = %s
+                GROUP BY shop_sku ORDER BY loss DESC LIMIT 15""", (store, operator, month))
+
+            tbl_recover = {"head": ["订单号", "SKU", "退货日", "剩余追款天数", "货值$"],
+                "rows": [[r["order_id"], r["shop_sku"], str(r["return_date"]),
+                          f"{r['days_left']}天", f"{_f(r['exposure']):,.0f}"] for r in recover_rows],
+                "more": f"共{recover_in_window['n']}笔，这里显示最急的30笔；全量在 行动清单→追款清单"}
+            tbl_delist = {"head": ["SKU", "90D单数", "退货", "销售$", "退货期望损失$", "净贡献$"],
+                "rows": [[r["shop_sku"], r["orders"], r["returns_cnt"],
+                          f"{_f(r['sale']):,.0f}", f"{_f(r['loss_expected']):,.0f}",
+                          f"{_f(r['net']):,.0f}"] for r in delist_rows],
+                "more": "去 行动清单→下架候选 操作并点「已下架」"}
+            tbl_raise = {"head": ["SKU", "90D单数", "销售$", "净利率", "建议提价"],
+                "rows": [[r["shop_sku"], r["orders"], f"{_f(r['sale']):,.0f}",
+                          f"{_f(r['margin'])*100:.1f}%",
+                          f"+{min(8.0, max(1.0, (BASELINE - _f(r['margin'])) * 100 / 0.7)):.1f}%"]
+                         for r in raise_rows],
+                "more": "全量与CSV在 行动清单→提价候选"}
+            tbl_sishun = {"head": ["SKU", "退货笔数", "损失$"],
+                "rows": [[r["shop_sku"], r["n"], f"{_f(r['loss']):,.0f}"] for r in sishun_rows],
+                "more": "司顺退货全损——这些SKU优先评估提价/换源/下架"}
 
             rx = []
             expo_in_w = _f(recover_in_window["expo"])
@@ -314,14 +348,14 @@ def diagnose():
                 rate_cw = _recovery_rate(rr, store, "Costway")
                 if rate_cw > 0:
                     rx.append({"key": "recover", "title": "追豪雅退款（见效最快）",
-                        "amount": expo_in_w * rate_cw,
+                        "amount": expo_in_w * rate_cw, "table": tbl_recover,
                         "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天追款窗口内、"
                                f"货值${expo_in_w:,.0f}——按回收率{rate_cw*100:.0f}%预计能收回"
                                f"${expo_in_w * rate_cw:,.0f}，财务对账回填后直接改善该月净利",
                         "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账"})
                 else:
                     rx.append({"key": "recover", "title": "试追豪雅退款（能否退回未知，窗口只有90天）",
-                        "amount": expo_in_w,
+                        "amount": expo_in_w, "table": tbl_recover,
                         "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天窗口内、"
                                f"货值敞口${expo_in_w:,.0f}。{store}至今没有任何供应商退款回填记录，"
                                f"能不能要回不确定——但按规则超90天就彻底追不了了，值得逐笔去谈；"
@@ -330,19 +364,19 @@ def diagnose():
             if delist_rows:
                 stop = -sum(_f(r["net"]) for r in delist_rows)
                 rx.append({"key": "delist", "title": f"下架{len(delist_rows)}个负期望SKU（止血）",
-                    "amount": stop,
+                    "amount": stop, "table": tbl_delist,
                     "why": f"{store}有{len(delist_rows)}个SKU退货≥2且净贡献为负（90天合计−${stop:,.0f}）——"
                            f"继续卖只会继续亏，下架不影响有效销量",
                     "how": "行动清单→下架候选（本店铺的），店铺后台下架后点「已下架」"})
             if raise_uplift > 50:
                 rx.append({"key": "raise", "title": "提价低利润SKU（可持续改善）",
-                    "amount": raise_uplift,
+                    "amount": raise_uplift, "table": tbl_raise,
                     "why": f"{store}有{len(raise_rows)}个SKU销量正常但净利率低于10%——"
                            f"按建议幅度提到基线，90天口径可增利≈${raise_uplift:,.0f}",
                     "how": "行动清单→提价候选，导出后走改价流程"})
             if loss_parts["sishun"] > 200:
                 rx.append({"key": "sishun", "title": "司顺退货是纯损失（结构性）",
-                    "amount": loss_parts["sishun"],
+                    "amount": loss_parts["sishun"], "table": tbl_sishun,
                     "why": f"该cell当月司顺退货损失${loss_parts['sishun']:,.0f}且一分收不回——"
                            f"司顺高退货率SKU要么提价覆盖风险，要么换豪雅货源/下架",
                     "how": "从下架/提价候选里优先处理司顺SKU"})
