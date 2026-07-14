@@ -453,16 +453,18 @@ def diagnose():
                         "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账，结果记备注"})
             if delist_rows:
                 stop = -sum(_f(r["net"]) for r in delist_rows)
-                rx.append({"key": "delist", "title": f"下架{len(delist_rows)}个负期望SKU（止血）",
+                rx.append({"key": "delist",
+                    "title": f"下架{len(delist_rows)}个负期望SKU（止血·近90天口径,不只{int(month[5:])}月）",
                     "amount": stop, "table": tbl_delist,
-                    "why": f"{store}有{len(delist_rows)}个SKU退货≥2且净贡献为负（90天合计−${stop:,.0f}）——"
-                           f"继续卖只会继续亏，下架不影响有效销量",
+                    "why": f"{store}该运营有{len(delist_rows)}个SKU退货≥2且净贡献为负（近90天合计−${stop:,.0f}，"
+                           f"单月样本太小易误判所以用90天证据）——继续卖只会继续亏，下架不影响有效销量",
                     "how": "行动清单→下架候选（本店铺的），店铺后台下架后点「已下架」"})
             if raise_uplift > 50:
-                rx.append({"key": "raise", "title": "提价低利润SKU（可持续改善）",
+                rx.append({"key": "raise",
+                    "title": f"提价低利润SKU（可持续改善·近90天口径,不只{int(month[5:])}月）",
                     "amount": raise_uplift, "table": tbl_raise,
-                    "why": f"{store}有{len(raise_rows)}个SKU销量正常但净利率低于10%——"
-                           f"按建议幅度提到基线，90天口径可增利≈${raise_uplift:,.0f}",
+                    "why": f"{store}该运营有{len(raise_rows)}个SKU销量正常但净利率低于10%——"
+                           f"按建议幅度提到基线，近90天口径可增利≈${raise_uplift:,.0f}（动作影响的是未来所有月份）",
                     "how": "行动清单→提价候选，导出后走改价流程"})
             if loss_parts["sishun"] > 200:
                 rx.append({"key": "sishun", "title": "司顺退货是纯损失（结构性）",
