@@ -474,6 +474,17 @@ def _recover_expired_stats() -> Dict:
     return rows[0] if rows else {"n": 0, "expo": 0}
 
 
+def _recover_expired_list() -> List[Dict]:
+    return _query("""
+        SELECT id, order_id, store, operator, shop_sku, order_date, return_date,
+               cost, exposure, recover_note,
+               DATEDIFF(CURDATE(), order_date) - 90 AS days_over
+        FROM order_system.return_case
+        WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND DATEDIFF(CURDATE(), order_date) > 90
+        ORDER BY exposure DESC LIMIT 500""")
+
+
 def _delist_list() -> List[Dict]:
     """下架候选：排除已被人工标记"已下架"的（action_log delist/executed）。"""
     return _query("""
@@ -529,6 +540,7 @@ def actions():
                            recover=recover[:100], delist=delist[:100],
                            raise_rows=raise_rows[:100], totals=totals,
                            expired=_recover_expired_stats(),
+                           expired_rows=_recover_expired_list()[:200],
                            marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})
@@ -593,6 +605,8 @@ def actions_export():
     which = request.args.get("list", "recover")
     if which == "recover":
         rows, name = _recover_list(), "追款清单"
+    elif which == "recover_expired":
+        rows, name = _recover_expired_list(), "超窗未追回"
     elif which == "delist":
         rows, name = _delist_list(), "下架候选"
     else:

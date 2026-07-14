@@ -38,7 +38,29 @@
     </div>
     {% if expired and expired.n %}
     <div class="alert alert-secondary py-2 small mb-2">
-      另有 <b>{{ expired.n }}</b> 笔豪雅退货已超90天追款窗口（货值 ${{ '{:,.0f}'.format(expired.expo|float) }}）——按规则已无法追款，不在下表显示。
+      另有 <b>{{ expired.n }}</b> 笔豪雅退货已超90天追款窗口（货值 ${{ '{:,.0f}'.format(expired.expo|float) }}）——按规则已无法追款。
+      <a class="ms-2" href="{{ url_for('profit_control.actions_export', list='recover_expired') }}">导出CSV</a>
+      <details class="mt-1">
+        <summary style="cursor:pointer">点开看明细（前200笔，按货值排序）</summary>
+        <div class="table-responsive mt-1" style="max-height:300px;overflow-y:auto">
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr>
+              <th>订单号</th><th>店铺</th><th>SKU</th><th>下单日</th><th>退货日</th>
+              <th class="text-end">超窗天数</th><th class="text-end">货值$</th><th>备注</th></tr></thead>
+            <tbody>
+              {% for r in expired_rows %}
+              <tr><td class="font-monospace small">{{ r.order_id }}</td>
+                <td class="small">{{ r.store }}</td><td class="small">{{ r.shop_sku }}</td>
+                <td class="text-nowrap small">{{ r.order_date }}</td>
+                <td class="text-nowrap small">{{ r.return_date }}</td>
+                <td class="text-end text-muted">+{{ r.days_over }}天</td>
+                <td class="text-end">{{ '{:,.0f}'.format(r.exposure|float) }}</td>
+                <td class="small text-muted">{{ r.recover_note or '' }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
     {% endif %}
     <div class="card"><div class="table-responsive">
