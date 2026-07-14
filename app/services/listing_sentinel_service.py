@@ -79,6 +79,10 @@ def _gn(v) -> Optional[float]:
             return float(v.replace("$", "").replace(",", ""))
         except ValueError:
             return None
+    if isinstance(v, dict):   # 飞书公式字段: {"type":..,"value":[44.98]}
+        val = v.get("value")
+        if isinstance(val, list) and val and isinstance(val[0], (int, float)):
+            return float(val[0])
     return None
 
 
@@ -176,16 +180,22 @@ STORE_DEFAULT_DISCOUNT = {"Macys-Kuyotq": 0.4}
 
 def _prices(conn, shop_sku: str, store: str, supplier: str, supplier_sku: str,
             feishu_supplier_price, our_listing: Dict) -> Dict:
-    """我方真实成交价 = 折扣后价格。取价优先级：
+    """我方价格=买家实付口径。取价优先级：
+    ⓪该SKU退货订单的实付均价(分析退货时买家真实花的钱,最相关)
     ①平台在线discount_price ②飞书「折扣后价格」 ③原价×飞书活动折扣
-    ④原价×offer_pricing_config的SKU级折扣 ⑤原价×店铺默认折扣 ⑥原价"""
+    ④原价×offer_pricing_config的SKU级折扣 ⑤原价×店铺默认折扣 ⑥原价 ⑦90天成交均价"""
+    paid = _mysql_one(conn, """
+        SELECT AVG(sale) AS p FROM order_system.return_case
+        WHERE shop_sku=%s AND store=%s AND sale > 0""", (shop_sku, store))
     row = _mysql_one(conn, """
         SELECT origin_price, discount_price FROM order_system.offerprice_listing
         WHERE shop_sku=%s LIMIT 1""", (shop_sku,))
     origin = float(row["origin_price"] or 0) if row else 0.0
     disc_live = float(row["discount_price"] or 0) if row else 0.0
     price_ours = None
-    if disc_live > 0:
+    if paid and paid.get("p"):
+        price_ours = round(float(paid["p"]), 2)
+    elif disc_live > 0:
         price_ours = disc_live
     elif our_listing.get("price_discounted"):
         price_ours = our_listing["price_discounted"]
