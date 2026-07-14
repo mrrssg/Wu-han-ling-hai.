@@ -309,14 +309,24 @@ def diagnose():
                   AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator))[0]
 
             rx = []
-            if _f(recover_in_window["expo"]) > 50:
-                amt = _f(recover_in_window["expo"]) * _recovery_rate(rr, store, "Costway")
-                rx.append({"key": "recover", "title": "追豪雅退款（见效最快）",
-                    "amount": amt,
-                    "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天追款窗口内、"
-                           f"货值${_f(recover_in_window['expo']):,.0f}——按回收率预计能收回${amt:,.0f}，"
-                           f"财务对账回填后直接改善该月净利",
-                    "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账"})
+            expo_in_w = _f(recover_in_window["expo"])
+            if expo_in_w > 50:
+                rate_cw = _recovery_rate(rr, store, "Costway")
+                if rate_cw > 0:
+                    rx.append({"key": "recover", "title": "追豪雅退款（见效最快）",
+                        "amount": expo_in_w * rate_cw,
+                        "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天追款窗口内、"
+                               f"货值${expo_in_w:,.0f}——按回收率{rate_cw*100:.0f}%预计能收回"
+                               f"${expo_in_w * rate_cw:,.0f}，财务对账回填后直接改善该月净利",
+                        "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账"})
+                else:
+                    rx.append({"key": "recover", "title": "试追豪雅退款（能否退回未知，窗口只有90天）",
+                        "amount": expo_in_w,
+                        "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天窗口内、"
+                               f"货值敞口${expo_in_w:,.0f}。{store}至今没有任何供应商退款回填记录，"
+                               f"能不能要回不确定——但按规则超90天就彻底追不了了，值得逐笔去谈；"
+                               f"只要谈回一部分，回收率和各月数字都会自动改善",
+                        "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账，结果记备注"})
             if delist_rows:
                 stop = -sum(_f(r["net"]) for r in delist_rows)
                 rx.append({"key": "delist", "title": f"下架{len(delist_rows)}个负期望SKU（止血）",

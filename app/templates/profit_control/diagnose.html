@@ -106,7 +106,9 @@
         <tr><td class="ps-4">司顺退货（一分收不回）</td><td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.sishun) }}</td></tr>{% endif %}
         {% if detail.loss_parts.haoya_in > 10 %}
         <tr><td class="ps-4">豪雅待追·窗口内按收不回部分计
-          <span class="text-success">（另有 ${{ '{:,.0f}'.format(detail.loss_parts.haoya_in_recoverable) }} 预计能追回！）</span></td>
+          {% if detail.loss_parts.haoya_in_recoverable > 1 %}
+          <span class="text-success">（另有 ${{ '{:,.0f}'.format(detail.loss_parts.haoya_in_recoverable) }} 预计能追回！）</span>
+          {% else %}<span class="kpi-sub">（该店无回填记录，能否追回未知，暂按全损）</span>{% endif %}</td>
           <td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.haoya_in) }}</td></tr>{% endif %}
         {% if detail.loss_parts.haoya_expired > 10 %}
         <tr><td class="ps-4">豪雅退货·已超90天追款窗（教训：追晚了）</td>
