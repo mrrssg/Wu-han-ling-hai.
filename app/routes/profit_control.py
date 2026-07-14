@@ -372,7 +372,13 @@ def diagnose():
                 ORDER BY sale DESC LIMIT 10""",
                 (store, operator, BASELINE))
             raise_uplift = sum(_f(r["sale"]) * (BASELINE - _f(r["margin"])) for r in raise_rows)
+            # 追款处方只算「本诊断月」的订单（和上方缺口拆解同口径）；跨月总量另行提示
             recover_in_window = _query("""
+                SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
+                WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND DATE_FORMAT(order_date,'%%Y-%%m') = %s
+                  AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator, month))[0]
+            recover_all_months = _query("""
                 SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
                   AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator))[0]
@@ -381,8 +387,9 @@ def diagnose():
                        90 - DATEDIFF(CURDATE(), order_date) AS days_left, exposure
                 FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND DATE_FORMAT(order_date,'%%Y-%%m') = %s
                   AND DATEDIFF(CURDATE(), order_date) <= 90
-                ORDER BY days_left ASC, exposure DESC LIMIT 30""", (store, operator))
+                ORDER BY days_left ASC, exposure DESC LIMIT 30""", (store, operator, month))
             sishun_rows = _query("""
                 SELECT shop_sku, COUNT(*) AS n, ROUND(SUM(exposure + confirmed_loss)) AS loss
                 FROM order_system.return_case
@@ -423,22 +430,26 @@ def diagnose():
 
             rx = []
             expo_in_w = _f(recover_in_window["expo"])
+            cross_note = ""
+            if _f(recover_all_months["expo"]) > expo_in_w + 1:
+                cross_note = (f"（该cell其他月份还挂着{int(recover_all_months['n']) - int(recover_in_window['n'])}笔、"
+                              f"${_f(recover_all_months['expo']) - expo_in_w:,.0f}在窗口内，去行动清单→追款清单看全量）")
             if expo_in_w > 50:
                 rate_cw = _recovery_rate(rr, store, "Costway")
+                mon_label = f"{int(month[5:])}月"
                 if rate_cw > 0:
-                    rx.append({"key": "recover", "title": "追豪雅退款（见效最快）",
+                    rx.append({"key": "recover", "title": f"追{mon_label}订单的豪雅退款（见效最快）",
                         "amount": expo_in_w * rate_cw, "table": tbl_recover,
-                        "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天追款窗口内、"
-                               f"货值${expo_in_w:,.0f}——按回收率{rate_cw*100:.0f}%预计能收回"
-                               f"${expo_in_w * rate_cw:,.0f}，财务对账回填后直接改善该月净利",
+                        "why": f"{mon_label}卖出、已退货的订单里还有{recover_in_window['n']}笔豪雅退款没回，"
+                               f"货值${expo_in_w:,.0f}、都在90天追款窗口内——按回收率{rate_cw*100:.0f}%"
+                               f"预计能收回${expo_in_w * rate_cw:,.0f}，回填后直接改善{mon_label}净利{cross_note}",
                         "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账"})
                 else:
-                    rx.append({"key": "recover", "title": "试追豪雅退款（能否退回未知，窗口只有90天）",
+                    rx.append({"key": "recover", "title": f"试追{mon_label}订单的豪雅退款（能否退回未知，窗口只有90天）",
                         "amount": expo_in_w, "table": tbl_recover,
-                        "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天窗口内、"
-                               f"货值敞口${expo_in_w:,.0f}。{store}至今没有任何供应商退款回填记录，"
-                               f"能不能要回不确定——但按规则超90天就彻底追不了了，值得逐笔去谈；"
-                               f"只要谈回一部分，回收率和各月数字都会自动改善",
+                        "why": f"{mon_label}卖出、已退货的订单里有{recover_in_window['n']}笔豪雅退款没回、"
+                               f"货值敞口${expo_in_w:,.0f}、都还在90天窗口内。{store}至今没有退款回填记录，"
+                               f"能不能要回不确定——但超窗就彻底追不了了，值得逐笔去谈{cross_note}",
                         "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账，结果记备注"})
             if delist_rows:
                 stop = -sum(_f(r["net"]) for r in delist_rows)
