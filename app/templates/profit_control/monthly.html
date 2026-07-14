@@ -149,8 +149,11 @@
       </div>
       <div>预估利润率 <b>{{ '%.1f%%' % (m.margin_gross*100) if m.margin_gross is not none else '—' }}</b>
         → <b class="{{ 'text-success' if m.margin_net is not none and m.margin_net >= baseline else 'text-danger' }}">{{ '%.1f%%' % (m.margin_net*100) if m.margin_net is not none else '—' }}</b>
+        <a class="btn btn-sm btn-primary ms-2"
+           href="{{ url_for('profit_control.diagnose', month=m.month) }}">
+          <i class="bi bi-clipboard2-pulse"></i> 诊断</a>
         {% if m.unbooked_n %}
-        <a class="btn btn-sm btn-outline-warning ms-2"
+        <a class="btn btn-sm btn-outline-warning ms-1"
            href="{{ url_for('profit_control.monthly_unbooked', month=m.month) }}">
           <i class="bi bi-hourglass-split"></i> 退货待定案 {{ m.unbooked_n }}笔</a>
         {% endif %}</div>

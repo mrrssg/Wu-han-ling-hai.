@@ -174,6 +174,12 @@ ALTERS = [
     "ALTER TABLE order_system.return_case ADD COLUMN recover_note VARCHAR(255) DEFAULT NULL "
     "COMMENT '追款备注(人工填,每日重建不覆盖)'",
     "ALTER TABLE order_system.return_case ADD COLUMN note_time DATETIME DEFAULT NULL",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN store VARCHAR(64) NOT NULL DEFAULT '' AFTER operator",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN neg_profit DECIMAL(12,2) DEFAULT 0 "
+    "COMMENT '亏本卖的正常单利润合计(负数,诊断用)'",
+    "ALTER TABLE order_system.profit_month_cohort ADD COLUMN neg_n INT DEFAULT 0",
+    "ALTER TABLE order_system.profit_month_cohort DROP INDEX uq_month_op",
+    "ALTER TABLE order_system.profit_month_cohort ADD UNIQUE KEY uq_mos (order_month, operator, store)",
 ]
 
 
@@ -190,7 +196,10 @@ def main() -> int:
                     try:
                         cur.execute(alter)
                     except Exception as exc:
-                        if "Duplicate column" not in str(exc):
+                        msg = str(exc)
+                        if not any(x in msg for x in
+                                   ("Duplicate column", "Duplicate key name",
+                                    "check that column/key exists")):
                             raise
             conn.commit()
             print("profit_control schema OK: profit_cell_daily / return_case(+sale,income_actual) / issue_log / action_log")

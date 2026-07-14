@@ -644,15 +644,17 @@ def _order_actual_loss(o) -> float:
 
 def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
                        months_back_days: int = 400) -> int:
+    """粒度：订单月 × 运营 × 店铺（诊断页要下钻到cell）。"""
     cutoff_ts = (now_cn - timedelta(days=months_back_days)).timestamp() * 1000
-    agg: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: {
+    agg: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(lambda: {
         "orders": 0, "sale": 0.0, "profit_gross": 0.0, "gross_est": 0.0,
-        "returns_cnt": 0, "loss_expected": 0.0, "loss_actual": 0.0})
+        "returns_cnt": 0, "loss_expected": 0.0, "loss_actual": 0.0,
+        "neg_profit": 0.0, "neg_n": 0})
     for o in parsed:
         if o["order_ts"] <= cutoff_ts:
             continue
         month = datetime.fromtimestamp(o["order_ts"] / 1000, tz=CN_TZ).strftime("%Y-%m")
-        a = agg[(month, o["operator"])]
+        a = agg[(month, o["operator"], o["store"])]
         a["orders"] += 1
         a["sale"] += o["sale"]
         if o["is_return"]:
@@ -663,26 +665,31 @@ def build_month_cohort(conn, parsed: List[Dict], rates, now_cn: datetime,
             a["profit_gross"] += o["profit"]
             if not o["use_actual"]:
                 a["gross_est"] += o["profit"]   # 账单未到/残缺,暂按预估占位的部分
+            if o["profit"] < 0:
+                a["neg_profit"] += o["profit"]  # 亏本卖的正常单(诊断用)
+                a["neg_n"] += 1
     rows = []
-    for (month, operator), a in agg.items():
+    for (month, operator, store), a in agg.items():
         net = a["profit_gross"] - a["loss_expected"]
         net_actual = a["profit_gross"] - a["loss_actual"]
-        rows.append((month, operator, a["orders"], round(a["sale"], 2),
+        rows.append((month, operator, store, a["orders"], round(a["sale"], 2),
                      round(a["profit_gross"], 2), a["returns_cnt"],
                      round(a["loss_expected"], 2), round(net, 2),
                      round(a["profit_gross"] / a["sale"], 4) if a["sale"] > 0 else None,
                      round(net / a["sale"], 4) if a["sale"] > 0 else None,
                      round(a["loss_actual"], 2), round(net_actual, 2),
                      round(net_actual / a["sale"], 4) if a["sale"] > 0 else None,
-                     round(a["gross_est"], 2)))
+                     round(a["gross_est"], 2),
+                     round(a["neg_profit"], 2), a["neg_n"]))
     with conn.cursor() as cur:
         cur.execute("DELETE FROM order_system.profit_month_cohort")
         sql = """
             INSERT INTO order_system.profit_month_cohort
-                (order_month, operator, orders, sale, profit_gross, returns_cnt,
+                (order_month, operator, store, orders, sale, profit_gross, returns_cnt,
                  loss_expected, net, margin_gross, margin_net,
-                 loss_actual, net_actual, margin_net_actual, gross_est)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 loss_actual, net_actual, margin_net_actual, gross_est,
+                 neg_profit, neg_n)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
         for i in range(0, len(rows), 500):
             cur.executemany(sql, rows[i:i + 500])

@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}诊断 - {{ m_label }}{% endblock %}
+{% block content %}
+<style>
+.kpi-sub { font-size:.78rem; color:#898781; }
+.sec-title { font-weight:600; font-size:.95rem; }
+.concl { border-left:5px solid {{ '#1baf7a' if summary.gap <= 0 else '#d03b3b' }};
+  background:#fafbfc; border-radius:6px; }
+.wf td { padding:.4rem .6rem; }
+.rx-card { border:1px solid #e1e0d9; border-radius:8px; }
+.rx-done { opacity:.55; background:#f4faf4; }
+.fail-row:hover { background:#fdf2f2; cursor:pointer; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-clipboard2-pulse"></i> {{ m_label }} 利润诊断
+    {% if operator %}<span class="text-muted fs-6">｜ {{ operator }} × {{ store }}</span>{% endif %}</h4>
+  <div>
+    {% if operator %}<a href="{{ url_for('profit_control.diagnose', month=month) }}" class="btn btn-outline-secondary btn-sm me-1">
+      <i class="bi bi-arrow-up"></i> 回{{ m_label }}总览</a>{% endif %}
+    <a href="{{ url_for('profit_control.monthly') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> 返回月度影响</a>
+  </div>
+</div>
+
+{% if not operator %}
+{# ================= L1：这个月达标了吗，谁没达标 ================= #}
+<div class="concl p-3 mb-3">
+  {% if summary.gap <= 0 %}
+  <b>✅ {{ m_label }}整体达标</b>：预估净利 ${{ '{:,.0f}'.format(summary.net) }}（{{ '%.1f%%' % (summary.margin*100) }}），高于基线10%。
+  {% else %}
+  <b>❌ {{ m_label }}整体没达基线</b>：预估净利 ${{ '{:,.0f}'.format(summary.net) }}（{{ '%.1f%%' % (summary.margin*100) }}），
+  按销售额${{ '{:,.0f}'.format(summary.sale) }}算，达标线是 ${{ '{:,.0f}'.format(summary.target) }}——
+  <b class="text-danger">缺口 ${{ '{:,.0f}'.format(summary.gap) }}</b>。缺口出在下面这些格子里，点行下钻看原因和处方。
+  {% endif %}
+</div>
+
+{% if fail_cells %}
+<div class="card mb-3">
+  <div class="card-header bg-white sec-title">没达基线的 运营×店铺（按缺口排序，点击下钻）</div>
+  <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light"><tr>
+      <th>运营 × 店铺</th><th class="text-end">销售$</th><th class="text-end">预估净利$</th>
+      <th class="text-end">净利率</th><th class="text-end">距基线缺口$</th><th></th></tr></thead>
+    <tbody>
+      {% for c in fail_cells %}
+      <tr class="fail-row" onclick="location='{{ url_for('profit_control.diagnose', month=month, operator=c.operator, store=c.store) }}'">
+        <td><b>{{ c.operator }}</b> × {{ c.store }}</td>
+        <td class="text-end">{{ '{:,.0f}'.format(c.sale|float) }}</td>
+        <td class="text-end">{{ '{:,.0f}'.format(c.net|float) }}</td>
+        <td class="text-end text-danger fw-bold">{{ '%.1f%%' % (c.margin_net|float*100) if c.margin_net is not none else '—' }}</td>
+        <td class="text-end text-danger fw-bold">{{ '{:,.0f}'.format(c.gap) }}</td>
+        <td class="text-end"><i class="bi bi-chevron-right text-muted"></i></td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header bg-white sec-title">全部格子（含达标的）</div>
+  <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light"><tr>
+      <th>运营 × 店铺</th><th class="text-end">销售$</th><th class="text-end">预估净利$</th>
+      <th class="text-end">净利率</th><th class="text-center">达标</th></tr></thead>
+    <tbody>
+      {% for c in cells %}
+      <tr class="fail-row" onclick="location='{{ url_for('profit_control.diagnose', month=month, operator=c.operator, store=c.store) }}'">
+        <td>{{ c.operator }} × {{ c.store }}</td>
+        <td class="text-end">{{ '{:,.0f}'.format(c.sale|float) }}</td>
+        <td class="text-end">{{ '{:,.0f}'.format(c.net|float) }}</td>
+        <td class="text-end">{{ '%.1f%%' % (c.margin_net|float*100) if c.margin_net is not none else '—' }}</td>
+        <td class="text-center">{{ '✅' if c.ok else '❌' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+{% else %}
+{# ================= L2：这个格子为什么没达标 + 处方 ================= #}
+{% if detail %}
+<div class="concl p-3 mb-3">
+  {% if detail.gap <= 0 %}
+  <b>✅ 达标</b>：{{ operator }} 在 {{ store }} 的{{ m_label }}订单，预估净利 ${{ '{:,.0f}'.format(detail.gross - detail.loss) }}，高于基线。
+  {% else %}
+  <b>❌ 为什么没达标</b>：{{ m_label }}卖了 ${{ '{:,.0f}'.format(detail.sale) }}，按基线10%应赚
+  <b>${{ '{:,.0f}'.format(detail.target) }}</b>，实际预估净利
+  <b>${{ '{:,.0f}'.format(detail.gross - detail.loss) }}</b>，<b class="text-danger">缺 ${{ '{:,.0f}'.format(detail.gap) }}</b>。钱漏在下面：
+  {% endif %}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="card h-100"><div class="card-header bg-white sec-title">缺口拆解（钱漏在哪）</div>
+      <table class="table table-sm mb-0 wf">
+        <tr><td>🎯 达标要赚（销售×10%）</td><td class="text-end fw-bold">${{ '{:,.0f}'.format(detail.target) }}</td></tr>
+        <tr><td>① 毛利本身够不够：本来能赚 ${{ '{:,.0f}'.format(detail.gross) }}
+          {% if detail.gross_gap > 0 %}<span class="text-danger">（就算零退货也差 ${{ '{:,.0f}'.format(detail.gross_gap) }} → 定价/成本问题）</span>
+          {% else %}<span class="text-success">（够，超出 ${{ '{:,.0f}'.format(detail.gross - detail.target) }}）</span>{% endif %}</td>
+          <td class="text-end">${{ '{:,.0f}'.format(detail.gross) }}</td></tr>
+        {% if detail.neg_profit < -50 %}
+        <tr><td class="ps-4 kpi-sub">↳ 其中亏本卖的正常单拖了 ${{ '{:,.0f}'.format(-detail.neg_profit) }}（{{ detail.row.neg_n }}单）</td><td></td></tr>
+        {% endif %}
+        <tr><td>② 退货扣掉合计</td><td class="text-end text-danger fw-bold">−${{ '{:,.0f}'.format(detail.loss) }}</td></tr>
+        {% if detail.loss_parts.sishun > 10 %}
+        <tr><td class="ps-4">司顺退货（一分收不回）</td><td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.sishun) }}</td></tr>{% endif %}
+        {% if detail.loss_parts.haoya_in > 10 %}
+        <tr><td class="ps-4">豪雅待追·窗口内按收不回部分计
+          <span class="text-success">（另有 ${{ '{:,.0f}'.format(detail.loss_parts.haoya_in_recoverable) }} 预计能追回！）</span></td>
+          <td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.haoya_in) }}</td></tr>{% endif %}
+        {% if detail.loss_parts.haoya_expired > 10 %}
+        <tr><td class="ps-4">豪雅退货·已超90天追款窗（教训：追晚了）</td>
+          <td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.haoya_expired) }}</td></tr>{% endif %}
+        {% if detail.loss_parts.fee > 10 %}
+        <tr><td class="ps-4">退货运费</td><td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.fee) }}</td></tr>{% endif %}
+        {% if detail.loss_parts.recovered > 10 %}
+        <tr><td class="ps-4">已收回案例的差额+运费</td><td class="text-end text-danger">−${{ '{:,.0f}'.format(detail.loss_parts.recovered) }}</td></tr>{% endif %}
+        <tr class="table-light"><td><b>= 预估净利</b></td>
+          <td class="text-end fw-bold">${{ '{:,.0f}'.format(detail.gross - detail.loss) }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card h-100"><div class="card-header bg-white sec-title">💊 处方（做完这些，下个月怎么达标）</div>
+      <div class="p-2">
+        {% for x in detail.rx %}
+        <div class="rx-card p-2 mb-2 {{ 'rx-done' if x.done }}" id="rx-{{ loop.index }}">
+          <div class="d-flex justify-content-between align-items-start">
+            <b>{{ loop.index }}. {{ x.title }}</b>
+            <span class="badge text-bg-light border">价值 ≈ ${{ '{:,.0f}'.format(x.amount) }}</span>
+          </div>
+          <div class="kpi-sub mt-1"><b>为什么：</b>{{ x.why }}</div>
+          <div class="kpi-sub"><b>怎么做：</b>{{ x.how }}</div>
+          <div class="mt-1">
+            {% if x.done %}
+            <span class="text-success small">✅ 已标记完成（{{ x.done_at }}）</span>
+            <button class="btn btn-sm btn-outline-secondary py-0 ms-2"
+                    onclick="rxUnmark({{ x.done_id }}, this)">撤销</button>
+            {% else %}
+            <button class="btn btn-sm btn-outline-success py-0"
+                    onclick="rxMark('{{ x.target_key }}', this)">标记已做</button>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="text-muted small p-2">这个格子没有明显可动的处方（缺口可能来自结构性毛利不足——考虑整体提价或选品调整）。</div>
+        {% endfor %}
+        <div class="kpi-sub mt-2">标记只代表"人已处理"；效果会体现在之后每天重算的数字里。已下架的SKU若再出单会自动报警。</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">没找到 {{ operator }} × {{ store }} 在 {{ m_label }} 的数据。</div>
+{% endif %}
+{% endif %}
+
+<script>
+async function postJSON(url, body) {
+  const r = await fetch(url, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
+}
+async function rxMark(key, btn) {
+  btn.disabled = true;
+  const res = await postJSON('{{ url_for("profit_control.diagnose_mark") }}', {key:key});
+  if (res.ok) location.reload(); else { btn.disabled=false; alert('保存失败'); }
+}
+async function rxUnmark(id, btn) {
+  btn.disabled = true;
+  const res = await postJSON('{{ url_for("profit_control.diagnose_unmark") }}', {id:id});
+  if (res.ok) location.reload(); else { btn.disabled=false; alert('失败'); }
+}
+</script>
+{% endblock %}

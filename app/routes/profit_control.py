@@ -14,7 +14,7 @@ import json
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, redirect, render_template, request, url_for
 
 from app.models.db_manager import DBManager
 
@@ -212,6 +212,184 @@ def issues():
 
 
 # ---------------------------------------------------------------
+# 月度诊断：为什么没达基线 → 谁 → 缺口拆解 → 量化处方 → 标记已做
+# ---------------------------------------------------------------
+
+def _rx_done_map(month: str) -> Dict[str, Dict]:
+    rows = _query("""SELECT id, target, created_at FROM order_system.action_log
+                     WHERE action_type='rx_done' AND status='executed'
+                       AND target LIKE %s""", (f"{month}|%",))
+    return {r["target"]: r for r in rows}
+
+
+@profit_control_bp.route("/diagnose")
+def diagnose():
+    month = (request.args.get("month") or "")[:7]
+    operator = (request.args.get("operator") or "").strip()
+    store = (request.args.get("store") or "").strip()
+    if not month:
+        return redirect(url_for("profit_control.monthly"))
+
+    cells = _query("""SELECT * FROM order_system.profit_month_cohort
+                      WHERE order_month=%s ORDER BY sale DESC""", (month,))
+    m_sale = sum(_f(c["sale"]) for c in cells)
+    m_net = sum(_f(c["net"]) for c in cells)
+    m_summary = {
+        "sale": m_sale, "net": m_net,
+        "margin": m_net / m_sale if m_sale > 0 else None,
+        "target": m_sale * BASELINE,
+        "gap": max(0.0, m_sale * BASELINE - m_net),
+    }
+    for c in cells:
+        sale = _f(c["sale"])
+        c["gap"] = max(0.0, sale * BASELINE - _f(c["net"]))
+        c["ok"] = _f(c["net"]) >= sale * BASELINE
+    fail_cells = sorted([c for c in cells if not c["ok"] and _f(c["sale"]) >= 500],
+                        key=lambda x: -x["gap"])
+
+    detail = None
+    if operator and store:
+        row = next((c for c in cells if c["operator"] == operator and c["store"] == store), None)
+        if row:
+            sale = _f(row["sale"])
+            gross = _f(row["profit_gross"])
+            loss = _f(row["loss_expected"])
+            target = sale * BASELINE
+            # 退货损失分解（该cell该月的确认退货）
+            parts = _query("""
+                SELECT supplier,
+                  SUM(CASE WHEN state='recovered' THEN GREATEST(cost-COALESCE(supplier_refund,0),0)+return_fee ELSE 0 END) AS l_recovered,
+                  SUM(CASE WHEN state IN ('pending','written_off') AND supplier='Costway'
+                            AND DATEDIFF(CURDATE(), order_date) <= 90 THEN exposure ELSE 0 END) AS expo_in,
+                  SUM(CASE WHEN state IN ('pending','written_off') AND supplier='Costway'
+                            AND DATEDIFF(CURDATE(), order_date) > 90 THEN exposure+confirmed_loss ELSE 0 END) AS l_expired,
+                  SUM(CASE WHEN state IN ('pending','written_off') AND supplier<>'Costway'
+                           THEN exposure+confirmed_loss ELSE 0 END) AS l_norefund,
+                  SUM(CASE WHEN state='pending' THEN return_fee ELSE 0 END) AS l_fee
+                FROM order_system.return_case
+                WHERE DATE_FORMAT(order_date,'%%Y-%%m')=%s AND operator=%s AND store=%s
+                  AND state <> 'not_charged'
+                GROUP BY supplier""", (month, operator, store))
+            rr = _recovery_rates_pairs()
+            from app.services.profit_control_service import _recovery_rate
+            loss_parts = {"sishun": 0.0, "haoya_in": 0.0, "haoya_in_recoverable": 0.0,
+                          "haoya_expired": 0.0, "fee": 0.0, "recovered": 0.0}
+            for p in parts:
+                sup = str(p["supplier"] or "")
+                loss_parts["recovered"] += _f(p["l_recovered"])
+                loss_parts["fee"] += _f(p["l_fee"])
+                if sup == "Costway":
+                    expo_in = _f(p["expo_in"])
+                    rate = _recovery_rate(rr, store, "Costway")
+                    loss_parts["haoya_in"] += expo_in * (1 - rate)
+                    loss_parts["haoya_in_recoverable"] += expo_in * rate
+                    loss_parts["haoya_expired"] += _f(p["l_expired"])
+                else:
+                    loss_parts["sishun"] += _f(p["l_norefund"]) + _f(p["l_expired"]) + _f(p["expo_in"])
+            neg_profit = _f(row["neg_profit"])
+            gross_gap = max(0.0, target - gross)   # 就算一分退货没有,毛利也不够到基线的部分
+
+            # 该店铺的处方素材（90天口径）
+            delist_rows = _query("""
+                SELECT shop_sku, operator, net, returns_cnt FROM order_system.profit_sku_90d
+                WHERE store=%s AND returns_cnt>=2 AND net<-50
+                  AND NOT EXISTS (SELECT 1 FROM order_system.action_log a
+                    WHERE a.action_type='delist' AND a.status='executed'
+                      AND a.target=CONCAT(profit_sku_90d.shop_sku,'@',profit_sku_90d.store))
+                ORDER BY net ASC LIMIT 10""", (store,))
+            raise_rows = _query("""
+                SELECT shop_sku, sale, margin FROM order_system.profit_sku_90d
+                WHERE store=%s AND sale>=1000 AND orders>=5 AND margin IS NOT NULL
+                  AND margin < %s AND net > -50 ORDER BY sale DESC LIMIT 10""",
+                (store, BASELINE))
+            raise_uplift = sum(_f(r["sale"]) * (BASELINE - _f(r["margin"])) for r in raise_rows)
+            recover_in_window = _query("""
+                SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
+                WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator))[0]
+
+            rx = []
+            if _f(recover_in_window["expo"]) > 50:
+                amt = _f(recover_in_window["expo"]) * _recovery_rate(rr, store, "Costway")
+                rx.append({"key": "recover", "title": "追豪雅退款（见效最快）",
+                    "amount": amt,
+                    "why": f"该运营在{store}还有{recover_in_window['n']}笔豪雅退货在90天追款窗口内、"
+                           f"货值${_f(recover_in_window['expo']):,.0f}——按回收率预计能收回${amt:,.0f}，"
+                           f"财务对账回填后直接改善该月净利",
+                    "how": "行动清单→追款清单（按店铺筛），逐笔找豪雅对账"})
+            if delist_rows:
+                stop = -sum(_f(r["net"]) for r in delist_rows)
+                rx.append({"key": "delist", "title": f"下架{len(delist_rows)}个负期望SKU（止血）",
+                    "amount": stop,
+                    "why": f"{store}有{len(delist_rows)}个SKU退货≥2且净贡献为负（90天合计−${stop:,.0f}）——"
+                           f"继续卖只会继续亏，下架不影响有效销量",
+                    "how": "行动清单→下架候选（本店铺的），店铺后台下架后点「已下架」"})
+            if raise_uplift > 50:
+                rx.append({"key": "raise", "title": "提价低利润SKU（可持续改善）",
+                    "amount": raise_uplift,
+                    "why": f"{store}有{len(raise_rows)}个SKU销量正常但净利率低于10%——"
+                           f"按建议幅度提到基线，90天口径可增利≈${raise_uplift:,.0f}",
+                    "how": "行动清单→提价候选，导出后走改价流程"})
+            if loss_parts["sishun"] > 200:
+                rx.append({"key": "sishun", "title": "司顺退货是纯损失（结构性）",
+                    "amount": loss_parts["sishun"],
+                    "why": f"该cell当月司顺退货损失${loss_parts['sishun']:,.0f}且一分收不回——"
+                           f"司顺高退货率SKU要么提价覆盖风险，要么换豪雅货源/下架",
+                    "how": "从下架/提价候选里优先处理司顺SKU"})
+            if neg_profit < -100:
+                rx.append({"key": "negsale", "title": "亏本卖的正常单（查定价）",
+                    "amount": -neg_profit,
+                    "why": f"当月有{int(row['neg_n'] or 0)}单没退货也亏钱（合计−${-neg_profit:,.0f}）——"
+                           f"通常是定价低于成本线或活动折扣打穿了",
+                    "how": "订单查询里按该店铺筛亏损单，核对价格公式"})
+
+            done = _rx_done_map(month)
+            for x in rx:
+                key = f"{month}|{operator}|{store}|{x['key']}"
+                x["target_key"] = key
+                d = done.get(key)
+                x["done"] = bool(d)
+                x["done_at"] = d["created_at"] if d else None
+                x["done_id"] = d["id"] if d else None
+
+            detail = {"row": row, "sale": sale, "gross": gross, "loss": loss,
+                      "target": target, "gap": max(0.0, target - (gross - loss)),
+                      "gross_gap": gross_gap, "neg_profit": neg_profit,
+                      "loss_parts": loss_parts, "rx": rx}
+
+    return render_template("profit_control/diagnose.html",
+                           month=month, m_label=f"{int(month[5:])}月",
+                           summary=m_summary, cells=cells, fail_cells=fail_cells,
+                           operator=operator, store=store, detail=detail,
+                           baseline=BASELINE)
+
+
+@profit_control_bp.route("/diagnose/mark", methods=["POST"])
+def diagnose_mark():
+    data = request.get_json(silent=True) or {}
+    key = (data.get("key") or "").strip()[:120]
+    if not key or key.count("|") != 3:
+        return jsonify({"ok": False, "msg": "bad key"}), 400
+    exists = _query("""SELECT id FROM order_system.action_log
+                       WHERE action_type='rx_done' AND status='executed' AND target=%s""", (key,))
+    if not exists:
+        _exec("""INSERT INTO order_system.action_log (action_type, target, store, status)
+                 VALUES ('rx_done', %s, %s, 'executed')""", (key, key.split("|")[2]))
+    return jsonify({"ok": True})
+
+
+@profit_control_bp.route("/diagnose/unmark", methods=["POST"])
+def diagnose_unmark():
+    data = request.get_json(silent=True) or {}
+    aid = int(data.get("id") or 0)
+    if not aid:
+        return jsonify({"ok": False}), 400
+    _exec("UPDATE order_system.action_log SET status='cancelled' WHERE id=%s AND action_type='rx_done'",
+          (aid,))
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------
 # 月度影响：退货损失按订单月归因 → 对各月利润/利润率的侵蚀
 # ---------------------------------------------------------------
 
@@ -316,18 +494,20 @@ def monthly():
            ORDER BY order_month DESC, sale DESC""")
     months: Dict[str, Dict] = {}
     op_month_sale: Dict[tuple, float] = {}
-    for r in cohort_rows:
+    for r in cohort_rows:   # 现为 月×运营×店铺 粒度，此处聚合到月/运营
         m = months.setdefault(r["order_month"], {
             "month": r["order_month"], "sale": 0.0, "profit_gross": 0.0,
             "loss": 0.0, "net": 0.0, "loss_actual": 0.0, "net_actual": 0.0,
-            "orders": 0, "returns": 0, "ops": []})
+            "orders": 0, "returns": 0, "op_agg": {}})
         m["sale"] += _f(r["sale"]); m["profit_gross"] += _f(r["profit_gross"])
         m["loss"] += _f(r["loss_expected"]); m["net"] += _f(r["net"])
         m["loss_actual"] += _f(r["loss_actual"]); m["net_actual"] += _f(r["net_actual"])
         m["gross_est"] = m.get("gross_est", 0.0) + _f(r.get("gross_est"))
         m["orders"] += int(r["orders"] or 0); m["returns"] += int(r["returns_cnt"] or 0)
-        m["ops"].append(r)
-        op_month_sale[(r["operator"], r["order_month"])] = _f(r["sale"])
+        od = m["op_agg"].setdefault(r["operator"], {"net": 0.0, "loss": 0.0})
+        od["net"] += _f(r["net"]); od["loss"] += _f(r["loss_expected"])
+        k = (r["operator"], r["order_month"])
+        op_month_sale[k] = op_month_sale.get(k, 0.0) + _f(r["sale"])
     month_list = sorted(months.values(), key=lambda x: x["month"], reverse=True)
     for m in month_list:
         m["margin_gross"] = m["profit_gross"] / m["sale"] if m["sale"] > 0 else None
@@ -338,8 +518,11 @@ def monthly():
 
     # 近7天：每天的退货记到哪个月的账上，逐条写成"账本变化"：
     # 扣$X ⇒ 该运营该月净利 before→after、净利率 before→after（以该月最新账为基准）
-    om_op = {(r["operator"], r["order_month"]): (_f(r["net"]), _f(r["sale"]))
-             for r in cohort_rows}
+    om_op: Dict[tuple, list] = {}
+    for r in cohort_rows:   # 店铺级行聚合到 运营×月
+        k = (r["operator"], r["order_month"])
+        cur = om_op.setdefault(k, [0.0, 0.0])
+        cur[0] += _f(r["net"]); cur[1] += _f(r["sale"])
     day_blocks = []
     for d in reversed(day_labels[-7:]):
         dkey = d.strftime("%Y-%m-%d")
@@ -399,8 +582,8 @@ def monthly():
             m["net_w"], m["loss_w"] = 0.0, 100.0
         m["label"] = f"{int(m['month'][5:])}月"
         m["ops_line"] = " ｜ ".join(
-            f"{r['operator']} 预估净利${_f(r['net']):,.0f}（被扣${_f(r['loss_expected']):,.0f}）"
-            for r in m["ops"])
+            f"{op} 预估净利${d['net']:,.0f}（被扣${d['loss']:,.0f}）"
+            for op, d in sorted(m["op_agg"].items(), key=lambda x: -x[1]["net"]))
 
     return render_template("profit_control/monthly.html",
                            chart_json=chart_json, day_blocks=day_blocks,
