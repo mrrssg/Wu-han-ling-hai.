@@ -215,6 +215,9 @@ ALTERS = [
     "ALTER TABLE order_system.profit_month_cohort ADD COLUMN neg_n INT DEFAULT 0",
     "ALTER TABLE order_system.profit_month_cohort DROP INDEX uq_month_op",
     "ALTER TABLE order_system.profit_month_cohort ADD UNIQUE KEY uq_mos (order_month, operator, store)",
+    "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_json MEDIUMTEXT "
+    "COMMENT 'AI修复方案(字段级现文案→改后文案+操作指引)'",
+    "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_time DATETIME DEFAULT NULL",
 ]
 
 

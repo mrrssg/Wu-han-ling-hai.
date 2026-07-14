@@ -73,7 +73,32 @@
     </table>
   </details>
   {% endif %}
+  {% if r.fix %}
+  <details class="mt-2" open>
+    <summary class="small text-success fw-bold" style="cursor:pointer">🤖 AI修复方案（{{ r.fix.steps|length }}处修改，逐字段可直接粘贴）</summary>
+    <table class="table table-sm mt-1 mb-1 iss">
+      <thead class="table-light"><tr><th style="width:70px">字段</th><th>修改后文案（直接可用）</th><th style="width:26%">为什么这么改</th></tr></thead>
+      <tbody>
+        {% for s in r.fix.steps %}
+        <tr>
+          <td class="text-nowrap"><b>{{ s.field }}</b></td>
+          <td><div class="quote2" style="display:block;white-space:pre-wrap">{{ s.fixed }}</div>
+              <div class="kpi-sub mt-1">原文：{{ s.current }}</div></td>
+          <td class="small">{{ s.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if r.fix.other_advice %}<div class="kpi-sub">其他建议：{{ r.fix.other_advice }}</div>{% endif %}
+    <div class="kpi-sub mt-1">📌 操作步骤：{{ r.fix.operation_guide }}</div>
+  </details>
+  {% endif %}
   <div class="mt-2">
+    {% if r.issues and not r.fix %}
+    <button class="btn btn-sm btn-success py-0" onclick="aiFix({{ r.id }}, false, this)">🤖 AI修复方案</button>
+    {% elif r.fix %}
+    <button class="btn btn-sm btn-outline-primary py-0" onclick="aiFix({{ r.id }}, true, this)">🔄 重新生成方案</button>
+    {% endif %}
     {% if r.status == 'open' %}
     <button class="btn btn-sm btn-outline-success py-0" onclick="mark({{ r.id }}, 'fixed', this)">✅ 已修复listing</button>
     <button class="btn btn-sm btn-outline-secondary py-0" onclick="mark({{ r.id }}, 'false_positive', this)">误报</button>
@@ -87,6 +112,19 @@
 {% endfor %}
 
 <script>
+async function aiFix(id, force, btn) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '⏳ AI生成中(约20秒)...';
+  try {
+    const r = await fetch('{{ url_for("profit_control.sentinel_fix") }}', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id, force:force})});
+    const res = await r.json();
+    if (res.ok) location.reload();
+    else { alert('生成失败: ' + (res.msg || '')); btn.textContent = old; btn.disabled = false; }
+  } catch (e) { alert('请求失败'); btn.textContent = old; btn.disabled = false; }
+}
 async function mark(id, status, btn) {
   btn.disabled = true;
   const r = await fetch('{{ url_for("profit_control.sentinel_mark") }}', {

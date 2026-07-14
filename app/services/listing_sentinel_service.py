@@ -300,6 +300,75 @@ severe=存在high问题且与退货原因吻合；minor=只有mid/low问题；cl
     return json.loads(resp.choices[0].message.content)
 
 
+# ------------------------- AI修复方案 -------------------------
+
+def generate_fix(base_dir: str, finding_id: int, force: bool = False) -> Dict[str, Any]:
+    """对一条哨兵发现生成字段级修复方案（缓存到 fix_json，force=True 重新生成）。"""
+    _ensure_openai_key(base_dir)
+    conn = DBManager.get_connection()
+    try:
+        row = _mysql_one(conn, """
+            SELECT * FROM order_system.listing_sentinel_findings WHERE id=%s""",
+            (finding_id,))
+        if not row:
+            return {"ok": False, "msg": "finding not found"}
+        if row.get("fix_json") and not force:
+            return {"ok": True, "fix": json.loads(row["fix_json"]), "cached": True}
+
+        headers = {"Authorization": f"Bearer {_token()}",
+                   "Content-Type": "application/json; charset=utf-8"}
+        ours = _our_listing(headers, conn, row["store"], row["shop_sku"])
+        sup = _supplier_listing(headers, row["supplier"] or "", row["supplier_sku"] or "")
+        if not ours or not sup:
+            return {"ok": False, "msg": "取不到我方或供应商资料，无法生成"}
+
+        issues = row["issues_json"] or "[]"
+        store_tbl_name = {"Macys-Kuyotq": "Macy-kuyotq-Mirakl", "Macys-Wopet": "Macy-Wopet-Mirakl",
+                          "Lowes-Autool": "Lowes-Autool-Mirakl",
+                          "Lowes-Yasonic": "Lowes-Yasonic-Mirakl"}.get(row["store"], row["store"])
+        prompt = f"""你是电商listing修复专家。哨兵审计发现我方listing存在以下问题（JSON）：
+{issues}
+
+【我方当前listing】
+标题: {_cut(ours['title'], 300)}
+五点: {_cut(' ||| '.join(b for b in ours['bullets'] if b))}
+长描述: {_cut(ours['long_desc'])}
+
+【供应商官方资料（修改的唯一事实依据）】
+标题: {_cut(sup['title'], 300)}
+Spec: {_cut(sup['spec'])}
+描述: {_cut(sup['desc'])}
+
+请给出精确到字段的修复方案。要求：
+1. 只改有问题的部分，没问题的字段不要动、不要列出
+2. fixed 给出该字段修改后的完整英文文案（不是描述怎么改，是直接可粘贴的成品）
+3. 修正后的数字/属性必须以供应商资料为准；供应商没写的承诺一律删除
+4. 保持原文案的风格和长度量级（标题仍是标题的长度，五点仍是一条bullet）
+5. reason 用中文说明为什么这么改
+只输出JSON：
+{{"steps":[{{"field":"标题|fnb1|fnb2|fnb3|fnb4|fnb5|长描述","current":"现文案(可截断)","fixed":"修改后完整英文文案","reason":"中文原因"}}],
+"other_advice":"图片/价格等非文案问题的中文处理建议(没有则空字符串)"}}"""
+        client = _openai_client()
+        resp = client.chat.completions.create(
+            model=MODEL_NAME, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": "Output valid JSON only."},
+                      {"role": "user", "content": prompt}])
+        fix = json.loads(resp.choices[0].message.content)
+        fix["operation_guide"] = (
+            f"① 在飞书「{store_tbl_name}」表里找到 Shop SKU={row['shop_sku']}，"
+            f"把下面各字段替换为修改后文案（标题→重写后标题，五点→fnb1~fnb5，长描述→productLongDescription）；"
+            f"② 内容改动需重新提交到平台：走该类目的模板重传流程（上传记录表）；"
+            f"③ 平台生效后回到哨兵页点「已修复listing」。")
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE order_system.listing_sentinel_findings
+                           SET fix_json=%s, fix_time=NOW() WHERE id=%s""",
+                        (json.dumps(fix, ensure_ascii=False), finding_id))
+        conn.commit()
+        return {"ok": True, "fix": fix, "cached": False}
+    finally:
+        conn.close()
+
+
 # ------------------------- 主流程 -------------------------
 
 def run_sentinel(base_dir: str, days: int = 1, limit: int = 0,

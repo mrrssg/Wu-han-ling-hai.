@@ -14,7 +14,8 @@ import json
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
-from flask import Blueprint, Response, jsonify, redirect, render_template, request, url_for
+from flask import (Blueprint, Response, current_app, jsonify, redirect,
+                   render_template, request, url_for)
 
 from app.models.db_manager import DBManager
 
@@ -237,11 +238,32 @@ def sentinel():
             r["issues"] = json.loads(r["issues_json"] or "[]")
         except Exception:
             r["issues"] = []
+        try:
+            r["fix"] = json.loads(r["fix_json"]) if r.get("fix_json") else None
+        except Exception:
+            r["fix"] = None
     counts = {c["k"]: int(c["n"]) for c in _query(
         """SELECT CONCAT(verdict,'-',status) AS k, COUNT(*) AS n
            FROM order_system.listing_sentinel_findings GROUP BY verdict, status""")}
     return render_template("profit_control/sentinel.html",
                            rows=rows, verdict=verdict, status=status, counts=counts)
+
+
+@profit_control_bp.route("/sentinel/fix", methods=["POST"])
+def sentinel_fix():
+    data = request.get_json(silent=True) or {}
+    fid = int(data.get("id") or 0)
+    force = bool(data.get("force"))
+    if not fid:
+        return jsonify({"ok": False, "msg": "missing id"}), 400
+    from app.services.listing_sentinel_service import generate_fix
+    try:
+        result = generate_fix(current_app.config.get("BASE_DIR")
+                              or str(__import__("pathlib").Path(__file__).resolve().parents[2]),
+                              fid, force=force)
+    except Exception as exc:
+        result = {"ok": False, "msg": str(exc)}
+    return jsonify(result)
 
 
 @profit_control_bp.route("/sentinel/mark", methods=["POST"])
