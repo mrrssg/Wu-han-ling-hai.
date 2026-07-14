@@ -220,6 +220,10 @@ ALTERS = [
     "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_time DATETIME DEFAULT NULL",
     "ALTER TABLE order_system.return_case ADD COLUMN claim_filed TINYINT(1) NOT NULL DEFAULT 0 "
     "COMMENT '已在飞书退货登记表追过款(每日从tblCqER404qe57vV同步),追款清单排除'",
+    "ALTER TABLE order_system.return_case ADD COLUMN claim_tracking VARCHAR(64) DEFAULT NULL "
+    "COMMENT '退货登记表(退货)Tracking Number,Lowes跟进退货是否真的寄回'",
+    "ALTER TABLE order_system.return_case ADD COLUMN claim_result VARCHAR(32) DEFAULT NULL "
+    "COMMENT '退货登记表处理结果(已回复邮件/弃货等)'",
 ]
 
 

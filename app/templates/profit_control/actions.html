@@ -170,11 +170,22 @@
           <i class="bi bi-download"></i> 导出CSV</a>
       </span>
     </div>
+    {% if lowes_track.total %}
+    <div class="alert alert-light border py-2 small mb-2 d-flex align-items-center flex-wrap gap-3">
+      <b>Lowes-Autool 退货跟进（等退款的 {{ lowes_track.total }} 笔）：</b>
+      <span>📦 有退货跟踪号 <b>{{ lowes_track.trk_n }}</b></span>
+      <span>✉️ 已回复邮件·无跟踪号 <b>{{ lowes_track.replied_n }}</b></span>
+      <span>🗑️ 弃货 <b>{{ lowes_track.discard_n }}</b></span>
+      <span class="{{ 'text-danger fw-bold' if lowes_track.silent_n }}">⚪ 没动静（无跟踪号也没回复）<b>{{ lowes_track.silent_n }}</b></span>
+      <span class="text-muted">——点右上「Lowes-Autool」筛选看明细；数据来自登记表「（退货）Tracking Number」和「处理结果」列</span>
+    </div>
+    {% endif %}
     <div class="card"><div class="table-responsive" style="max-height:480px;overflow-y:auto">
       <table class="table table-sm table-hover align-middle mb-0" id="claimedTbl">
         <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
           <th>订单号</th><th>店铺</th><th>SKU</th>
           <th>下单日</th><th>退货日</th>
+          <th>跟踪号</th>
           <th class="text-end">退货后已等</th>
           <th class="text-end">距核销</th>
           <th class="text-end">货值敞口$</th>
@@ -187,6 +198,12 @@
             <td class="small">{{ r.shop_sku }}</td>
             <td class="text-nowrap small">{{ r.order_date }}</td>
             <td class="text-nowrap small">{{ r.return_date }}</td>
+            <td class="small">
+              {% if r.claim_tracking %}<span class="font-monospace">{{ r.claim_tracking }}</span>
+              {% elif r.claim_result == '已回复邮件' %}<span class="badge text-bg-info">✉️ 已回复邮件</span>
+              {% elif r.claim_result %}<span class="badge text-bg-secondary">{{ r.claim_result }}</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
             <td class="text-end"><span class="age-badge" style="background:{{ r.age_color }}">{{ r.days_waiting }} 天</span></td>
             <td class="text-end small {{ 'days-urgent' if (180 - r.days_waiting) <= 30 else 'text-muted' }}">
               {{ [180 - r.days_waiting, 0] | max }} 天</td>
@@ -199,7 +216,7 @@
               </div>
             </td>
           </tr>
-          {% else %}<tr><td colspan="9" class="text-center text-muted py-4">没有等待中的登记退款</td></tr>{% endfor %}
+          {% else %}<tr><td colspan="10" class="text-center text-muted py-4">没有等待中的登记退款</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>

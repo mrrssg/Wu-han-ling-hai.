@@ -870,7 +870,7 @@ def _claim_filed_list() -> List[Dict]:
     """已登记未退款明细：按退货后等待天数降序（等最久的最上面，优先催豪雅）。"""
     return _query("""
         SELECT id, order_id, store, operator, shop_sku, order_date, return_date,
-               cost, exposure, recover_note,
+               cost, exposure, recover_note, claim_tracking, claim_result,
                DATEDIFF(CURDATE(), return_date) AS days_waiting
         FROM order_system.return_case
         WHERE state='pending' AND supplier='Costway' AND claim_filed=1
@@ -957,6 +957,18 @@ def actions():
         "near_n": sum(1 for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
         "near_expo": sum(_f(r["exposure"]) for r in claimed_rows if int(r["days_waiting"] or 0) >= 150),
     }
+    # Lowes-Autool 退货跟进四态：有跟踪号 / 无跟踪号但已回复邮件 / 弃货 / 没动静
+    lw = [r for r in claimed_rows if r["store"] == "Lowes-Autool"]
+    lowes_track = {
+        "total": len(lw),
+        "trk_n": sum(1 for r in lw if (r["claim_tracking"] or "").strip()),
+        "replied_n": sum(1 for r in lw if not (r["claim_tracking"] or "").strip()
+                         and (r["claim_result"] or "") == "已回复邮件"),
+        "discard_n": sum(1 for r in lw if not (r["claim_tracking"] or "").strip()
+                         and (r["claim_result"] or "") == "弃货"),
+    }
+    lowes_track["silent_n"] = (lowes_track["total"] - lowes_track["trk_n"]
+                               - lowes_track["replied_n"] - lowes_track["discard_n"])
     # 已标记下架的SKU若之后仍有销量 → 顶部警告（由每日规则引擎写入 issue_log）
     delist_warns = _query("""
         SELECT entity, impact_usd, evidence FROM order_system.issue_log
@@ -970,6 +982,7 @@ def actions():
                            claimed=_claim_filed_stats(),
                            claimed_rows=claimed_rows[:400],
                            claim_aging=aging, claim_urgent=claim_urgent,
+                           lowes_track=lowes_track,
                            claim_stores=sorted(stores_count.items(), key=lambda x: -x[1]),
                            marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),

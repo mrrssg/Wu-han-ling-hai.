@@ -136,9 +136,11 @@ def fetch_feishu_orders() -> List[Dict[str, Any]]:
     return items
 
 
-def fetch_claim_filed_orders() -> set:
-    """拉退货登记表的「订单」列 → 已追过款的订单号集合。
-    归一化：去空白；'4652515820-A-1' 这类拆包后缀同时收录基号 '4652515820-A'。"""
+def fetch_claim_filed_orders() -> Dict[str, Dict[str, str]]:
+    """拉退货登记表 → {订单号: {tracking, result}}。tracking=（退货）Tracking Number，
+    result=处理结果（已回复邮件/弃货等）。
+    归一化：去空白；'4652515820-A-1' 这类拆包后缀同时收录基号 '4652515820-A'。
+    同一订单多条登记时，有跟踪号的优先、其次有处理结果的。"""
     token = _feishu_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -146,11 +148,12 @@ def fetch_claim_filed_orders() -> set:
     }
     url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{ORDER_APP_TOKEN}"
            f"/tables/{CLAIM_TABLE_ID}/records/search?page_size={PAGE_SIZE}")
-    orders: set = set()
+    orders: Dict[str, Dict[str, str]] = {}
     page_token = None
     while True:
         u = url + (f"&page_token={page_token}" if page_token else "")
-        body = {"field_names": ["订单"], "automatic_fields": False}
+        body = {"field_names": ["订单", "（退货）Tracking Number", "处理结果"],
+                "automatic_fields": False}
         data = None
         for attempt in range(5):
             try:
@@ -166,13 +169,21 @@ def fetch_claim_filed_orders() -> set:
         if not data or data.get("data") is None:
             raise RuntimeError(f"feishu claim table fetch failed: {data}")
         for it in data["data"].get("items") or []:
-            o = _gt((it.get("fields") or {}).get("订单")).strip()
+            f = it.get("fields") or {}
+            o = _gt(f.get("订单")).strip()
             if not o:
                 continue
-            orders.add(o)
+            info = {"tracking": _gt(f.get("（退货）Tracking Number")).strip()[:64],
+                    "result": _gt(f.get("处理结果")).strip()[:32]}
+            keys = [o]
             m = re.match(r"^(.+-[A-Z])-\d+$", o)
             if m:
-                orders.add(m.group(1))
+                keys.append(m.group(1))
+            for k in keys:
+                old = orders.get(k)
+                if old is None or (info["tracking"] and not old["tracking"]) \
+                        or (not old["tracking"] and info["result"] and not old["result"]):
+                    orders[k] = info
         page_token = data["data"].get("page_token")
         if not page_token:
             break
@@ -181,18 +192,24 @@ def fetch_claim_filed_orders() -> set:
 
 
 def sync_claim_filed(conn) -> int:
-    """return_case.claim_filed 标记同步：在退货登记表登记过的订单=已追过款。
-    每日重建后调用（rebuild 的 UPSERT 不含该列，重跑不丢，此处全量重刷保证登记撤销也能回退）。"""
+    """return_case.claim_filed/claim_tracking/claim_result 同步：
+    在退货登记表登记过的订单=已追过款，同时带回退货跟踪号与处理结果。
+    每日重建后调用（rebuild 的 UPSERT 不含这些列，重跑不丢，全量重刷保证登记撤销可回退）。"""
     claimed = fetch_claim_filed_orders()
     with conn.cursor() as cur:
-        cur.execute("UPDATE order_system.return_case SET claim_filed=0 WHERE claim_filed=1")
+        cur.execute("SELECT DISTINCT order_id FROM order_system.return_case")
+        existing = {r["order_id"] for r in cur.fetchall()}
+        cur.execute("UPDATE order_system.return_case "
+                    "SET claim_filed=0, claim_tracking=NULL, claim_result=NULL "
+                    "WHERE claim_filed=1")
+        rows = [(v["tracking"] or None, v["result"] or None, k)
+                for k, v in claimed.items() if k in existing]
         flagged = 0
-        ids = sorted(claimed)
-        for i in range(0, len(ids), 500):
-            chunk = ids[i:i + 500]
-            ph = ",".join(["%s"] * len(chunk))
-            cur.execute(f"UPDATE order_system.return_case SET claim_filed=1 "
-                        f"WHERE order_id IN ({ph})", chunk)
+        for i in range(0, len(rows), 500):
+            cur.executemany(
+                "UPDATE order_system.return_case "
+                "SET claim_filed=1, claim_tracking=%s, claim_result=%s WHERE order_id=%s",
+                rows[i:i + 500])
             flagged += cur.rowcount
     conn.commit()
     return flagged
