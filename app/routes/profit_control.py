@@ -980,7 +980,7 @@ def actions():
                            expired=_recover_expired_stats(),
                            expired_rows=_recover_expired_list()[:200],
                            claimed=_claim_filed_stats(),
-                           claimed_rows=claimed_rows[:400],
+                           claimed_rows=claimed_rows,
                            claim_aging=aging, claim_urgent=claim_urgent,
                            lowes_track=lowes_track,
                            claim_stores=sorted(stores_count.items(), key=lambda x: -x[1]),
