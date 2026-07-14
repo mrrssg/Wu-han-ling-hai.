@@ -199,6 +199,13 @@ def _prices(conn, shop_sku: str, store: str, supplier: str, supplier_sku: str,
         factor = float(cfg["discount_factor"]) if cfg and cfg.get("discount_factor") else \
             STORE_DEFAULT_DISCOUNT.get(store)
         price_ours = round(origin * factor, 2) if factor else origin
+    if not price_ours:
+        # 最后兜底：offer已下线/无挂价时，用近90天实际成交均价（订单是最真实的价格）
+        avg = _mysql_one(conn, """
+            SELECT sale/orders AS p FROM order_system.profit_sku_90d
+            WHERE shop_sku=%s AND store=%s AND orders > 0""", (shop_sku, store))
+        if avg and avg.get("p"):
+            price_ours = round(float(avg["p"]), 2)
     tbl = "newestdropship" if supplier.strip().lower() == "costway" else "newestdropship_vevor"
     sup = _mysql_one(conn, f"SELECT Price FROM autooperate.{tbl} WHERE SKU=%s", (supplier_sku,))
     price_sup = float(sup["Price"]) if sup and sup.get("Price") is not None else feishu_supplier_price
