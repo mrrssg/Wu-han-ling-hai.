@@ -395,21 +395,30 @@ def diagnose():
                 ORDER BY sale DESC LIMIT 10""",
                 (store, operator, BASELINE))
             raise_uplift = sum(_f(r["sale"]) * (BASELINE - _f(r["margin"])) for r in raise_rows)
-            # 追款处方只算「本诊断月」的订单（和上方缺口拆解同口径）；跨月总量另行提示
+            # 追款处方只算「本诊断月」的订单（和上方缺口拆解同口径）；跨月总量另行提示。
+            # claim_filed=1（退货登记表已登记=追过款）不进追款动作，单独提示。
             recover_in_window = _query("""
                 SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND claim_filed=0
                   AND DATE_FORMAT(order_date,'%%Y-%%m') = %s
                   AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator, month))[0]
             recover_all_months = _query("""
                 SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND claim_filed=0
                   AND DATEDIFF(CURDATE(), order_date) <= 90""", (store, operator))[0]
+            claimed_month = _query("""
+                SELECT COUNT(*) n, COALESCE(SUM(exposure),0) expo FROM order_system.return_case
+                WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND claim_filed=1
+                  AND DATE_FORMAT(order_date,'%%Y-%%m') = %s""", (store, operator, month))[0]
             recover_rows = _query("""
                 SELECT order_id, shop_sku, return_date,
                        90 - DATEDIFF(CURDATE(), order_date) AS days_left, exposure
                 FROM order_system.return_case
                 WHERE store=%s AND operator=%s AND state='pending' AND supplier='Costway'
+                  AND claim_filed=0
                   AND DATE_FORMAT(order_date,'%%Y-%%m') = %s
                   AND DATEDIFF(CURDATE(), order_date) <= 90
                 ORDER BY days_left ASC, exposure DESC LIMIT 30""", (store, operator, month))
@@ -457,6 +466,9 @@ def diagnose():
             if _f(recover_all_months["expo"]) > expo_in_w + 1:
                 cross_note = (f"（该cell其他月份还挂着{int(recover_all_months['n']) - int(recover_in_window['n'])}笔、"
                               f"${_f(recover_all_months['expo']) - expo_in_w:,.0f}在窗口内，去行动清单→追款清单看全量）")
+            if _f(claimed_month["expo"]) > 0:
+                cross_note += (f"（另有{claimed_month['n']}笔${_f(claimed_month['expo']):,.0f}"
+                               f"已在退货登记表追过款，只等豪雅退款，不列进追款动作）")
             if expo_in_w > 50:
                 rate_cw = _recovery_rate(rr, store, "Costway")
                 mon_label = f"{int(month[5:])}月"
@@ -796,6 +808,7 @@ def monthly_unbooked():
 
 def _recover_list() -> List[Dict]:
     """追款清单：只有豪雅(Costway)可追款，窗口=下单90天内（用户规则 2026-07-14）。
+    已在飞书退货登记表登记的（claim_filed=1）=追过款只等退款，不再列（用户规则 2026-07-14）。
     按剩余天数升序（快过期的排前面），同天数按敞口降序。"""
     return _query("""
         SELECT id, order_id, store, operator, shop_sku, order_date, return_date,
@@ -803,6 +816,7 @@ def _recover_list() -> List[Dict]:
                90 - DATEDIFF(CURDATE(), order_date) AS days_left
         FROM order_system.return_case
         WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND claim_filed=0
           AND DATEDIFF(CURDATE(), order_date) <= 90
         ORDER BY days_left ASC, exposure DESC LIMIT 500""")
 
@@ -812,6 +826,7 @@ def _recover_expired_stats() -> Dict:
         SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS expo
         FROM order_system.return_case
         WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND claim_filed=0
           AND DATEDIFF(CURDATE(), order_date) > 90""")
     return rows[0] if rows else {"n": 0, "expo": 0}
 
@@ -823,8 +838,18 @@ def _recover_expired_list() -> List[Dict]:
                DATEDIFF(CURDATE(), order_date) - 90 AS days_over
         FROM order_system.return_case
         WHERE state='pending' AND supplier='Costway' AND cost >= 20
+          AND claim_filed=0
           AND DATEDIFF(CURDATE(), order_date) > 90
         ORDER BY exposure DESC LIMIT 500""")
+
+
+def _claim_filed_stats() -> Dict:
+    """已在退货登记表追过款、供应商还没退的豪雅单（不进追款清单，单独展示）。"""
+    rows = _query("""
+        SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS expo
+        FROM order_system.return_case
+        WHERE state='pending' AND supplier='Costway' AND claim_filed=1""")
+    return rows[0] if rows else {"n": 0, "expo": 0}
 
 
 def _delist_list() -> List[Dict]:
@@ -883,6 +908,7 @@ def actions():
                            raise_rows=raise_rows[:100], totals=totals,
                            expired=_recover_expired_stats(),
                            expired_rows=_recover_expired_list()[:200],
+                           claimed=_claim_filed_stats(),
                            marked=_delist_marked(), delist_warns=delist_warns,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})

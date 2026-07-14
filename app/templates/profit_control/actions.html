@@ -36,6 +36,11 @@
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='recover') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
+    {% if claimed and claimed.n %}
+    <div class="alert alert-success py-2 small mb-2">
+      ✅ 另有 <b>{{ claimed.n }}</b> 笔已在<b>退货登记表</b>追过款（货值 ${{ '{:,.0f}'.format(claimed.expo|float) }}）——只等豪雅退款，不列进本清单；退款回填后自动闭环。
+    </div>
+    {% endif %}
     {% if expired and expired.n %}
     <div class="alert alert-secondary py-2 small mb-2">
       另有 <b>{{ expired.n }}</b> 笔豪雅退货已超90天追款窗口（货值 ${{ '{:,.0f}'.format(expired.expo|float) }}）——按规则已无法追款。
@@ -209,8 +214,10 @@ const HELP = {
   act_recover: {t:'追款清单口径', b:
     '<b>入选</b>：供应商=豪雅(Costway)、退货三态=待追回、货值≥$20、且<b>下单至今≤90天</b>（追款窗口，用户规则）。'+
     '司顺不可追款所以不列；超窗的单独计数不进表。<br>'+
+    '<b>已追过款的不列</b>：在飞书「退货登记表」登记过订单号的=已向豪雅追过款、只等退款，'+
+    '每天05:30自动同步，绿条单独计数。<br>'+
     '<b>核销</b>：财务回填「供应商退款」后次日自动消失。备注存 return_case.recover_note，每日重算保留。'+
-    '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+' × mirakl_returns</span>'},
+    '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+' × mirakl_returns × 退货登记表(tblCqER404qe57vV)</span>'},
   act_delist: {t:'下架候选口径', b:
     '<b>入选</b>：近90天退货≥2笔 且 净贡献&lt;−$50，且未被标记"已下架"。<br>'+
     '<b>已下架监控</b>：标记后每天检查该SKU是否仍有新订单，有则生成高级别警告'+

@@ -21,6 +21,7 @@
 """
 import json
 import math
+import re
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -47,6 +48,9 @@ FEISHU_APP_ID = "cli_a940a2a1067adbd2"
 FEISHU_APP_SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
 ORDER_APP_TOKEN = "WKeRbmf7ra9nJZs77smc2AA2nAg"
 ORDER_TABLE_ID = "tbl4LDs0H5M8Pq5n"
+# 退货登记表（财务/客服追款登记）：登记过「订单」的=已向供应商追过款，只等退款，
+# 不再进追款清单（用户规则 2026-07-14）
+CLAIM_TABLE_ID = "tblCqER404qe57vV"
 
 PAGE_SIZE = 500
 REQUEST_TIMEOUT = 60
@@ -130,6 +134,68 @@ def fetch_feishu_orders() -> List[Dict[str, Any]]:
             break
         time.sleep(PAGE_DELAY_SECONDS)
     return items
+
+
+def fetch_claim_filed_orders() -> set:
+    """拉退货登记表的「订单」列 → 已追过款的订单号集合。
+    归一化：去空白；'4652515820-A-1' 这类拆包后缀同时收录基号 '4652515820-A'。"""
+    token = _feishu_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{ORDER_APP_TOKEN}"
+           f"/tables/{CLAIM_TABLE_ID}/records/search?page_size={PAGE_SIZE}")
+    orders: set = set()
+    page_token = None
+    while True:
+        u = url + (f"&page_token={page_token}" if page_token else "")
+        body = {"field_names": ["订单"], "automatic_fields": False}
+        data = None
+        for attempt in range(5):
+            try:
+                resp = requests.post(u, headers=headers,
+                                     data=json.dumps(body).encode("utf-8"),
+                                     timeout=REQUEST_TIMEOUT)
+                data = resp.json()
+                if data.get("data") is not None:
+                    break
+            except Exception:
+                data = None
+            time.sleep(1.5 * (attempt + 1))
+        if not data or data.get("data") is None:
+            raise RuntimeError(f"feishu claim table fetch failed: {data}")
+        for it in data["data"].get("items") or []:
+            o = _gt((it.get("fields") or {}).get("订单")).strip()
+            if not o:
+                continue
+            orders.add(o)
+            m = re.match(r"^(.+-[A-Z])-\d+$", o)
+            if m:
+                orders.add(m.group(1))
+        page_token = data["data"].get("page_token")
+        if not page_token:
+            break
+        time.sleep(PAGE_DELAY_SECONDS)
+    return orders
+
+
+def sync_claim_filed(conn) -> int:
+    """return_case.claim_filed 标记同步：在退货登记表登记过的订单=已追过款。
+    每日重建后调用（rebuild 的 UPSERT 不含该列，重跑不丢，此处全量重刷保证登记撤销也能回退）。"""
+    claimed = fetch_claim_filed_orders()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE order_system.return_case SET claim_filed=0 WHERE claim_filed=1")
+        flagged = 0
+        ids = sorted(claimed)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ",".join(["%s"] * len(chunk))
+            cur.execute(f"UPDATE order_system.return_case SET claim_filed=1 "
+                        f"WHERE order_id IN ({ph})", chunk)
+            flagged += cur.rowcount
+    conn.commit()
+    return flagged
 
 
 # =====================================================================
@@ -871,6 +937,7 @@ def run_daily_aggregation() -> Dict[str, Any]:
     try:
         return_dates = load_return_dates(conn)
         case_stats = rebuild_return_cases(conn, parsed, return_dates, now_cn)
+        case_stats["claim_filed"] = sync_claim_filed(conn)
         rates = compute_recovery_rates(conn)
         maturity = build_maturity_model(parsed, return_dates, now_cn)
         snapshots = build_cell_snapshots(conn, parsed, rates, maturity, now_cn)

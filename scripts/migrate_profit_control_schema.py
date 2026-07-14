@@ -218,6 +218,8 @@ ALTERS = [
     "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_json MEDIUMTEXT "
     "COMMENT 'AI修复方案(字段级现文案→改后文案+操作指引)'",
     "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_time DATETIME DEFAULT NULL",
+    "ALTER TABLE order_system.return_case ADD COLUMN claim_filed TINYINT(1) NOT NULL DEFAULT 0 "
+    "COMMENT '已在飞书退货登记表追过款(每日从tblCqER404qe57vV同步),追款清单排除'",
 ]
 
 
