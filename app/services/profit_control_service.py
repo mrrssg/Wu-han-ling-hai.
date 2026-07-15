@@ -54,6 +54,9 @@ CLAIM_TABLE_ID = "tblCqER404qe57vV"
 # Lowes退货有跟踪号=货退回我们海外仓：不向供应商付货款，唯一损失=退货运费，
 # 暂按售价10%估（用户规则 2026-07-15）
 WAREHOUSE_FEE_RATE = 0.10
+# Lowes扣款滞后（用户规则 2026-07-16）：退货申请+全款到账=扣款在路上按退货预判，
+# 退货后超过N天扣款没来才判"退货没成"转正常单。只适用Lowes，Macy维持原规则。
+LOWES_CLAWBACK_WAIT_DAYS = 120
 
 PAGE_SIZE = 500
 REQUEST_TIMEOUT = 60
@@ -265,10 +268,10 @@ def refresh_recent_trend(days_back: int = 2) -> Dict[str, Any]:
     让首页"昨日/今日销售"跟上飞书白天新同步进来的订单。
     滚动30天字段不动（每天05:30全量重建时校正）。"""
     raw = fetch_feishu_orders_since(days_back + 1)
-    parsed = parse_orders(raw)
     start = datetime.now(CN_TZ).date() - timedelta(days=days_back)
     conn = DBManager.get_connection()
     try:
+        parsed = parse_orders(raw, load_return_dates(conn))
         rates = compute_recovery_rates(conn)
         daily: Dict[Tuple[str, Any], List[float]] = defaultdict(lambda: [0.0, 0.0])
         for o in parsed:
@@ -298,7 +301,26 @@ def refresh_recent_trend(days_back: int = 2) -> Dict[str, Any]:
 # 订单解析（口径与 sku_panel_auto.py 对齐）
 # =====================================================================
 
-def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
+def parse_orders(raw_items: List[Dict],
+                 return_dates: Optional[Dict[str, datetime]] = None) -> List[Dict[str, Any]]:
+    """return_dates: mirakl真实退货日（Lowes扣款滞后判定要用）；
+    不传时Lowes滞后判定退化为按下单日起算。"""
+    now_cn = datetime.now(CN_TZ)
+    # Lowes净得率（还原not_charged单的干净利润用）：median(预估到账/售价)，
+    # 退货标记会把预估利润和预估到账都清零替换，只有 售价×净得率−成本 能还原
+    lowes_rates = []
+    for r in raw_items:
+        f = r.get("fields") or {}
+        if not _gt(f.get("店铺")).startswith(LOWES_STORE_PREFIX):
+            continue
+        if _gn(f.get("预估退货运费")) is not None:
+            continue   # 只取无退货标记的正常单
+        sale_, inc_e_ = _gn(f.get("售价")), _gn(f.get("预估到账"))
+        if sale_ and inc_e_ and sale_ > 0:
+            lowes_rates.append(inc_e_ / sale_)
+    lowes_rates.sort()
+    lowes_net_rate = lowes_rates[len(lowes_rates) // 2] if lowes_rates else 0.85
+
     parsed = []
     for r in raw_items:
         f = r.get("fields") or {}
@@ -335,11 +357,32 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
 
         est_rfee = _gn(f.get("预估退货运费"))
         reason = _gt(f.get("退货原因"))
+        order_id = _gt(f.get("订单号"))
         # 退货判定(用户规则 2026-07-13)：标记(预估退货运费+退货原因)只代表"申请过退货"，
         # 真退货必须账单坐实——实际到账≈0(买家货款被扣回)才算；
         # 账单未导入(实际到账为空)暂按退货预判；账单到了但没扣款(>1)的按正常单算利润。
         return_marked = (est_rfee is not None) and reason != ""
         is_return = return_marked and (inc_a is None or inc_a <= 1)
+
+        # Lowes例外(用户规则 2026-07-16)：Lowes账单节奏=先全额结款、退货扣款走后面的账单，
+        # 所以 退货申请+全款到账 ≠ 退货没成，是"扣款在路上"→按退货预判；
+        # 退货后超120天扣款一直没来才判"退货没成"转正常单。
+        if (return_marked and not is_return
+                and store.startswith(LOWES_STORE_PREFIX)
+                and inc_a is not None and inc_a > 1):
+            rd = return_dates.get(_bare(order_id)) if return_dates else None
+            ref = rd or datetime.fromtimestamp(t / 1000, tz=CN_TZ)
+            if (now_cn - (ref if ref.tzinfo else ref.replace(tzinfo=CN_TZ))).days \
+                    <= LOWES_CLAWBACK_WAIT_DAYS:
+                is_return = True
+
+        # not_charged(按正常单计)但实际数据残缺时，预估利润是被退货标记清零替换过的
+        # (=负的退货损失)，不能直接用——Lowes按 售价×净得率−成本 还原干净利润
+        if (return_marked and not is_return and not use_actual
+                and store.startswith(LOWES_STORE_PREFIX)):
+            sale_v = _gn(f.get("售价")) or 0.0
+            if sale_v > 0 and cost_e:
+                profit = round(sale_v * lowes_net_rate - cost_e, 2)
 
         rfee = 0.0
         if return_marked:
@@ -352,7 +395,7 @@ def parse_orders(raw_items: List[Dict]) -> List[Dict[str, Any]]:
                 rfee = est_rfee or 0.0
 
         parsed.append({
-            "order_id": _gt(f.get("订单号")),
+            "order_id": order_id,
             "order_line": _gt(f.get("订单行号")) or "1",
             "store": store,
             "supplier": supplier,
@@ -1039,7 +1082,13 @@ def run_daily_aggregation() -> Dict[str, Any]:
     started = time.time()
     now_cn = datetime.now(CN_TZ)
     raw = fetch_feishu_orders()
-    parsed = parse_orders(raw)
+
+    conn0 = DBManager.get_connection()
+    try:
+        return_dates = load_return_dates(conn0)
+    finally:
+        conn0.close()
+    parsed = parse_orders(raw, return_dates)
 
     # 退货登记表：追款标记 + Lowes海外仓退货识别（有跟踪号=货回来了，只亏运费）
     claimed = fetch_claim_filed_orders()
@@ -1053,7 +1102,6 @@ def run_daily_aggregation() -> Dict[str, Any]:
 
     conn = DBManager.get_connection()
     try:
-        return_dates = load_return_dates(conn)
         case_stats = rebuild_return_cases(conn, parsed, return_dates, now_cn)
         case_stats["claim_filed"] = sync_claim_filed(conn, claimed)
         case_stats["warehouse_returns"] = n_wh
