@@ -1,7 +1,7 @@
 {% extends "base_v2.html" %}
 {% block title %}仪表盘 - AutoWeb ERP{% endblock %}
 {% block page_title %}仪表盘{% endblock %}
-{% block page_sub %}每天05:30更新 · 数据截至 {{ kpi.snap_date or '—' }}{% endblock %}
+{% block page_sub %}销售/净赚每小时刷新 · 利润口径每天05:30重算{% endblock %}
 
 {% block content %}
 <style>
@@ -96,9 +96,9 @@ const HELP = {
   sale1d: {t:'昨日销售怎么算', b:
     '所有<b>下单时间=昨天</b>的订单的「售价」求和（售价=整单总价，不乘数量）。'+
     '全部店铺、三个运营都算；剔除取消单/BestBuy-Delphi/Walmart/供应商为空。<br>'+
-    '⚠️ 这是今早05:30时飞书里已记到的昨天订单——晚同步进飞书的单，明早重算自动补上，'+
-    '所以最近一两天的数字还会往上修。'+
-    '<span class="src"><b>数据源</b>：飞书「订单丨📦Mysql订单数据库」→ profit_trend_daily.sale_1d（每天05:30回溯重建120天）</span>'},
+    '<b>每小时和飞书同步一次</b>最近两天的订单——晚录进飞书的单最多1小时后就会补进来。'+
+    '<span class="src"><b>数据源</b>：飞书「订单丨📦Mysql订单数据库」→ profit_trend_daily.sale_1d'+
+    '（每小时刷新近2天 + 每天05:30全量重建120天）</span>'},
   net1d: {t:'昨日净赚怎么算', b:
     '昨天下单的订单里：非退货单的利润（实际优先，账单没到用预估）合计，'+
     '减去昨天下单且已申请退货的单的<b>期望损失</b>（按回收率/海外仓规则折算）。<br>'+

@@ -219,6 +219,81 @@ def sync_claim_filed(conn, claimed: Optional[Dict[str, Dict[str, str]]] = None) 
     return flagged
 
 
+def fetch_feishu_orders_since(days_back: int = 3) -> List[Dict[str, Any]]:
+    """按下单时间过滤只拉最近N天的订单（每小时刷新用，几百行、秒级）。"""
+    t0 = int((datetime.now(CN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+              - timedelta(days=days_back)).timestamp() * 1000)
+    token = _feishu_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{ORDER_APP_TOKEN}"
+           f"/tables/{ORDER_TABLE_ID}/records/search?page_size={PAGE_SIZE}")
+    items: List[Dict] = []
+    page_token = None
+    while True:
+        u = url + (f"&page_token={page_token}" if page_token else "")
+        body = {"filter": {"conjunction": "and", "conditions": [
+            {"field_name": "下单时间", "operator": "isGreater",
+             "value": ["ExactDate", str(t0 - 1)]}]},
+            "automatic_fields": False}
+        data = None
+        for attempt in range(5):
+            try:
+                resp = requests.post(u, headers=headers,
+                                     data=json.dumps(body).encode("utf-8"),
+                                     timeout=REQUEST_TIMEOUT)
+                data = resp.json()
+                if data.get("data") is not None:
+                    break
+            except Exception:
+                data = None
+            time.sleep(1.5 * (attempt + 1))
+        if not data or data.get("data") is None:
+            raise RuntimeError(f"feishu recent orders fetch failed: {data}")
+        items += data["data"].get("items") or []
+        page_token = data["data"].get("page_token")
+        if not page_token:
+            break
+        time.sleep(PAGE_DELAY_SECONDS)
+    return items
+
+
+def refresh_recent_trend(days_back: int = 2) -> Dict[str, Any]:
+    """每小时轻量刷新：只重算最近N天的 profit_trend_daily.sale_1d/net_1d，
+    让首页"昨日/今日销售"跟上飞书白天新同步进来的订单。
+    滚动30天字段不动（每天05:30全量重建时校正）。"""
+    raw = fetch_feishu_orders_since(days_back + 1)
+    parsed = parse_orders(raw)
+    start = datetime.now(CN_TZ).date() - timedelta(days=days_back)
+    conn = DBManager.get_connection()
+    try:
+        rates = compute_recovery_rates(conn)
+        daily: Dict[Tuple[str, Any], List[float]] = defaultdict(lambda: [0.0, 0.0])
+        for o in parsed:
+            d = datetime.fromtimestamp(o["order_ts"] / 1000, tz=CN_TZ).date()
+            if d < start:
+                continue
+            net = o["profit"] if not o["is_return"] else -_order_expected_loss(o, rates)
+            for scope in ("公司", o["operator"]):
+                agg = daily[(scope, d)]
+                agg[0] += o["sale"]
+                agg[1] += net
+        rows = [(scope, d, round(v[0], 2), round(v[1], 2))
+                for (scope, d), v in daily.items()]
+        with conn.cursor() as cur:
+            cur.executemany("""
+                INSERT INTO order_system.profit_trend_daily (scope, stat_date, sale_1d, net_1d)
+                VALUES (%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE sale_1d=VALUES(sale_1d), net_1d=VALUES(net_1d)
+            """, rows)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"orders": len(parsed), "rows": len(rows)}
+
+
 # =====================================================================
 # 订单解析（口径与 sku_panel_auto.py 对齐）
 # =====================================================================
