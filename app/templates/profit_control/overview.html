@@ -1,5 +1,6 @@
-{% extends "base.html" %}
+{% extends "base_v2.html" %}
 {% block title %}利润控制台{% endblock %}
+{% block page_title %}利润控制台{% endblock %}
 {% block content %}
 <style>
 .pc-root { --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --grid:#e1e0d9;
@@ -23,8 +24,7 @@
 
 <div class="pc-root">
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-  <h4 class="mb-0"><i class="bi bi-speedometer2"></i> 利润控制台
-    <small class="text-muted fs-6 ms-2">快照 {{ snap_date or '—' }} ｜ 基线 {{ (baseline*100)|int }}%</small></h4>
+  <span class="text-muted small">快照 {{ snap_date or '—' }} ｜ 考核基线 {{ (baseline*100)|int }}% ｜ 每天05:30重算</span>
   <div>
     <a href="{{ url_for('profit_control.actions') }}" class="btn btn-success btn-sm me-1">
       <i class="bi bi-list-check"></i> 行动清单</a>

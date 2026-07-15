@@ -14,9 +14,45 @@ STALE_THRESHOLD_HOURS = {
 DEFAULT_STALE_HOURS = 6
 
 
+def _q1(sql):
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
 @main_bp.route('/')
 def index():
-    return render_template('index.html')
+    kpi = {"sale_1d": 0.0, "net_1d": 0.0, "margin30": None, "returns_7d": 0,
+           "open_issues": 0, "unfiled_recover": 0, "snap_date": None, "trend_date": None}
+    try:
+        r = _q1("""SELECT stat_date, sale_1d, net_1d, rolling30_margin
+                   FROM order_system.profit_trend_daily
+                   WHERE scope='公司' AND stat_date < CURDATE()
+                   ORDER BY stat_date DESC LIMIT 1""")
+        if r:
+            kpi["sale_1d"] = float(r["sale_1d"] or 0)
+            kpi["net_1d"] = float(r["net_1d"] or 0)
+            kpi["margin30"] = float(r["rolling30_margin"]) if r["rolling30_margin"] is not None else None
+            kpi["trend_date"] = str(r["stat_date"])
+        r = _q1("""SELECT COUNT(*) AS n FROM order_system.return_case
+                   WHERE return_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                     AND state <> 'not_charged'""")
+        kpi["returns_7d"] = int(r["n"] or 0) if r else 0
+        r = _q1("SELECT COUNT(*) AS n FROM order_system.issue_log WHERE status='open'")
+        kpi["open_issues"] = int(r["n"] or 0) if r else 0
+        r = _q1("""SELECT COUNT(*) AS n FROM order_system.return_case
+                   WHERE state='pending' AND supplier='Costway' AND cost >= 20
+                     AND claim_filed=0 AND DATEDIFF(CURDATE(), order_date) <= 90""")
+        kpi["unfiled_recover"] = int(r["n"] or 0) if r else 0
+        r = _q1("SELECT MAX(snapshot_date) AS d FROM order_system.profit_cell_daily")
+        kpi["snap_date"] = str(r["d"]) if r and r["d"] else None
+    except Exception:
+        pass   # 首页永不因看板数据挂掉
+    return render_template('index.html', kpi=kpi)
 
 
 @main_bp.route('/health')

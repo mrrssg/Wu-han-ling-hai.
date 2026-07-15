@@ -1,5 +1,6 @@
-{% extends "base.html" %}
+{% extends "base_v2.html" %}
 {% block title %}利润控制台 - 问题清单{% endblock %}
+{% block page_title %}利润控制台 - 问题清单{% endblock %}
 {% block content %}
 <style>
 .pc-i { cursor:pointer; color:#898781; margin-left:6px; text-decoration:none; font-size:1rem; }
@@ -8,8 +9,8 @@
 .popover-body { font-size:.82rem; line-height:1.6; }
 </style>
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 问题清单
-    <a class="pc-i bi bi-info-circle" tabindex="0" data-help="rules"></a></h4>
+  <span class="text-muted small">规则引擎每天自动巡检生成
+    <a class="pc-i bi bi-info-circle" tabindex="0" data-help="rules"></a></span>
   <a href="{{ url_for('profit_control.overview') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left"></i> 返回总览
   </a>

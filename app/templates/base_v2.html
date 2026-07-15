@@ -105,18 +105,14 @@
     ('main.health',                'bi-heart-pulse',      '系统健康',      none),
   ]),
 ] %}
-{# 预览模式下，已迁移的页面在侧栏内互跳预览版；正式启用后此映射自动失效 #}
-{% set ALIAS = {'main.index': 'preview.home', 'orders.search_orders': 'preview.orders'}
-   if request.blueprint == 'preview' else {} %}
 <aside class="sb" id="sidebar">
     <div class="sb-brand"><i class="bi bi-box-seam"></i> AutoWeb ERP</div>
     <nav class="sb-nav">
         {% for cap, items in NAV %}
         <div class="sb-cap">{{ cap }}</div>
         {% for ep, icon, label, prefix in items %}
-        {% set real_ep = ALIAS.get(ep, ep) %}
-        {% set is_active = (request.endpoint in (ep, ALIAS.get(ep, ''))) or (prefix and request.path.startswith(prefix)) %}
-        <a class="sb-item {{ 'active' if is_active }}" href="{{ url_for(real_ep) }}">
+        {% set is_active = (request.endpoint == ep) or (prefix and request.path.startswith(prefix)) %}
+        <a class="sb-item {{ 'active' if is_active }}" href="{{ url_for(ep) }}">
             <i class="bi {{ icon }}"></i>{{ label }}</a>
         {% endfor %}
         {% endfor %}
