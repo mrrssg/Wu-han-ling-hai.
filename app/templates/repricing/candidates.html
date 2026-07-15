@@ -52,8 +52,9 @@
                     <th class="text-end">当前成本</th>
                     <th class="text-end">现售价</th>
                     <th class="text-end">建议新价</th>
-                    <th class="text-end">涨幅</th>
+                    <th class="text-end">变动</th>
                     <th class="text-end">当前利润</th>
+                    <th style="min-width:260px">为什么改</th>
                     <th class="text-center">操作</th>
                 </tr>
             </thead>
@@ -74,12 +75,15 @@
                     <td class="text-end">${{ r.old_origin_price }}</td>
                     <td class="text-end text-success fw-bold">${{ r.new_origin_price }}</td>
                     <td class="text-end small">
+                        {% if r.old_origin_price and r.old_origin_price|float > 0 %}
                         {% set delta_pct = (r.new_origin_price|float - r.old_origin_price|float) / r.old_origin_price|float * 100 %}
-                        +{{ '%.1f'|format(delta_pct) }}%
+                        <span class="{{ 'text-danger' if delta_pct > 0 else 'text-primary' }}">{{ '%+.1f'|format(delta_pct) }}%</span>
+                        {% else %}—{% endif %}
                     </td>
-                    <td class="text-end {% if r.profit_margin_before < 0 %}text-danger fw-bold{% else %}text-warning{% endif %}">
-                        {{ '%.2f'|format(r.profit_margin_before|float * 100) }}%
+                    <td class="text-end {% if r.profit_margin_before is not none and r.profit_margin_before < 0 %}text-danger fw-bold{% else %}text-warning{% endif %}">
+                        {{ '%.2f'|format(r.profit_margin_before|float * 100) if r.profit_margin_before is not none else '—' }}%
                     </td>
+                    <td class="small text-muted" style="max-width:340px">{{ r.decision_reason or '' }}</td>
                     <td class="text-center">
                         <button class="btn btn-sm btn-outline-danger push-btn" data-sku="{{ r.shop_sku }}">
                             <i class="bi bi-arrow-up-circle"></i> 单推
