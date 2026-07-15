@@ -248,7 +248,9 @@ ON DUPLICATE KEY UPDATE
     price = VALUES(price),
     quantity = VALUES(quantity),
     status = VALUES(status),
-    listed_at = VALUES(listed_at),
+    -- listed_at=上架时间：OF21基本不给，历史值靠上传记录回填——绝不能被NULL冲掉。
+    -- 已有值保留；只有还空着时才接受新值（新offer在同步侧补now）
+    listed_at = COALESCE(listed_at, VALUES(listed_at)),
     updated_at = VALUES(updated_at),
     cost_price = VALUES(cost_price),
     origin_price = VALUES(origin_price),
@@ -339,6 +341,13 @@ def _upsert_offers(offers: List[Dict], store_key: str, source_export_id: str) ->
                 existing_skus.update(str(r.get("shop_sku") or "").strip()
                                      for r in cursor.fetchall())
             new_skus = [s for s in incoming_skus if s not in existing_skus]
+
+            # 新offer=首次出现：OF21没给上架时间的，记录首次同步时间当上架时间
+            # （冷启动评档要靠它分"新品观察/该试探"）
+            new_set = set(new_skus)
+            rows = [(r[:9] + (now_str,) + r[10:])
+                    if (r[2] in new_set and r[9] is None) else r
+                    for r in rows]
 
             chunk = 500
             for i in range(0, len(rows), chunk):
