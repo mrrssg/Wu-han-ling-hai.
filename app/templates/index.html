@@ -42,7 +42,7 @@
       {% if todos %}
       <div>
         {% for t in todos %}
-        <a class="todo-row" href="{{ url_for(t.url) }}">
+        <a class="todo-row" href="{{ t.href }}">
           <span class="ic">{{ t.icon }}</span>
           <span class="lb {{ 'fw-bold text-danger' if t.danger }}">{{ t.label }}</span>
           <span class="badge badge-n {{ 'text-bg-danger' if t.danger else 'text-bg-secondary' }}">{{ t.count }}</span>

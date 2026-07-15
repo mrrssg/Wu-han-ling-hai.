@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, url_for
 from app.models.db_manager import DBManager
 
 # 定义一个名为 'main' 的蓝图
@@ -14,11 +14,11 @@ STALE_THRESHOLD_HOURS = {
 DEFAULT_STALE_HOURS = 6
 
 
-def _q1(sql):
+def _q1(sql, params=None):
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, params) if params else cur.execute(sql)
             return cur.fetchone()
     finally:
         conn.close()
@@ -66,7 +66,7 @@ def index():
         if r and int(r["n"] or 0):
             todos.append({"icon": "❗", "label": "追款漏网（退货了还没登记）",
                           "count": int(r["n"]), "money": float(r["v"] or 0),
-                          "url": "profit_control.actions", "danger": True})
+                          "href": url_for("profit_control.actions"), "danger": True})
 
     def _todo_near_writeoff():
         r = _q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
@@ -76,7 +76,7 @@ def index():
         if r and int(r["n"] or 0):
             todos.append({"icon": "⏰", "label": "追款临近180天核销线（等了≥150天）",
                           "count": int(r["n"]), "money": float(r["v"] or 0),
-                          "url": "profit_control.actions", "danger": True})
+                          "href": url_for("profit_control.actions"), "danger": True})
 
     def _todo_sentinel():
         r = _q1("""SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings
@@ -84,7 +84,7 @@ def index():
         if r and int(r["n"] or 0):
             todos.append({"icon": "🔴", "label": "Listing严重不符（哨兵发现，未修复）",
                           "count": int(r["n"]), "money": None,
-                          "url": "profit_control.sentinel", "danger": True})
+                          "href": url_for("profit_control.sentinel"), "danger": True})
 
     def _todo_issues():
         rows = _qall("""SELECT issue_type, COUNT(*) AS n, COALESCE(SUM(impact_usd),0) AS v
@@ -96,7 +96,34 @@ def index():
             todos.append({"icon": "🚨" if danger else "📋",
                           "label": ISSUE_TYPE_NAMES.get(t, t),
                           "count": int(r["n"] or 0), "money": float(r["v"] or 0),
-                          "url": "profit_control.issues", "danger": danger})
+                          "href": url_for("profit_control.issues"), "danger": danger})
+
+    def _todo_repricing():
+        # 待改价 = 每店最新监控run里 dry_run 且之后没有 success 推价记录的SKU
+        from app.services.repricing_stores import REPRICING_STORES
+        for key, cfg in REPRICING_STORES.items():
+            latest = _q1(
+                """SELECT run_id FROM order_system.offer_price_change_log
+                   WHERE run_id LIKE %s AND status='dry_run'
+                   ORDER BY triggered_at DESC LIMIT 1""", (f"mon-{key}-%",))
+            if not latest:
+                continue
+            r = _q1(
+                """SELECT COUNT(*) AS n FROM order_system.offer_price_change_log log
+                   WHERE log.run_id=%s AND log.status='dry_run'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM order_system.offer_price_change_log later
+                          WHERE later.shop_sku = log.shop_sku
+                            AND later.store_key = %s
+                            AND later.triggered_at > log.triggered_at
+                            AND later.status = 'success')""",
+                (latest["run_id"], key))
+            n = int(r["n"] or 0) if r else 0
+            if n:
+                todos.append({"icon": "💲", "label": f"待改价（{cfg['label']}）",
+                              "count": n, "money": None,
+                              "href": url_for("repricing.candidates_page", store=key),
+                              "danger": False})
 
     def _unshipped():
         # 权威口径（用户 2026-07-15 定）：Mirakl同步表 order_state，
@@ -123,7 +150,7 @@ def index():
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
     for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _unshipped):
+               _todo_repricing, _unshipped):
         _safe(fn)
 
     return render_template('index.html', todos=todos, unshipped=unshipped)
