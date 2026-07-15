@@ -182,6 +182,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
 MAX_STEP_UP = 0.15
 MAX_STEP_DOWN = 0.20
 MIN_DEVIATION = 0.01     # 目标价和现价差1%以内不折腾
+COLD_PROBE_BATCH = 500   # 冷启动试探每轮最多放500个候选（分批观察激活率，防一次全动）
 
 ACTION_TIERS = ("risk", "repair", "cold_probe")   # 有价格动作的档位
 
@@ -230,6 +231,10 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
     for ctx in offers:
         t = tiers.get(ctx.shop_sku)
         if not t:
+            continue
+        if (t["tier"] == "cold_probe"
+                and summary["by_tier"].get("cold_probe", 0) >= COLD_PROBE_BATCH):
+            summary["skip_cold_deferred"] = summary.get("skip_cold_deferred", 0) + 1
             continue
         if ctx.shop_sku in blacklist:
             summary["skip_blacklist"] += 1
