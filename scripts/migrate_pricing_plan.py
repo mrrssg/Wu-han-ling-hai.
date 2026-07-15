@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS order_system.pricing_tier (
 """
 
 
+ALTERS = [
+    "ALTER TABLE order_system.pricing_tier ADD COLUMN loss_rate DECIMAL(8,4) DEFAULT NULL "
+    "COMMENT '预期退货损失率(占销售额,已按可要回比例p折减)'",
+    "ALTER TABLE order_system.pricing_tier ADD COLUMN rate_source VARCHAR(16) DEFAULT NULL "
+    "COMMENT '损失率数据来源: SKU自己/类目/全店'",
+]
+
+
 def main() -> int:
     app = create_app(os.environ.get("FLASK_CONFIG", "production"))
     with app.app_context():
@@ -48,6 +56,12 @@ def main() -> int:
         try:
             with conn.cursor() as cur:
                 cur.execute(DDL)
+                for alter in ALTERS:
+                    try:
+                        cur.execute(alter)
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
             print("pricing_tier schema OK")
         finally:

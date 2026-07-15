@@ -293,12 +293,12 @@ def dashboard():
 
 
 TIER_META = {
-    "tier_12":    ("12%档·竞争", "#1baf7a", "卖得好退货低（预期退货税≤2个点），最低档保价格竞争力，12%−退货税仍≥10%基线"),
-    "tier_15":    ("15%档·标准", "#2a78d6", "默认档（新品也从这里起步）：15% = 10%基线 + 退货税 + 余量"),
-    "tier_18":    ("18%档·高退货", "#d03b3b", "预期退货率偏高，顶到18%才能盖住基线"),
-    "delist":     ("下架档", "#52514e", "退货税连18%都盖不住（预期退货率>11%）——提价救不了，建议下架止血"),
-    "cold_watch": ("零销量·观察", "#98a1ad", "上架不足60天零销量，新品观察期，不动价"),
-    "cold_12":    ("零销量·降档促活", "#eda100", "上架超60天零销量——降到最低档12%促活（最低就到12%），出单即转正常评档"),
+    "tier_12":    ("12%档·竞争", "#1baf7a", "退货损失率≤2个点：12%−损失≥10%基线，卖得好退货低的进最低档保价格竞争力"),
+    "tier_15":    ("15%档·标准", "#2a78d6", "退货损失率2~5个点，默认档（新品从这里起步）"),
+    "tier_18":    ("18%档·高退货", "#d03b3b", "退货损失率5~8个点，顶到18%才能盖住基线"),
+    "delist":     ("下架档", "#52514e", "退货损失率>8个点，18%都盖不住——提价救不了，建议下架止血"),
+    "cold_watch": ("零销量·观察", "#98a1ad", "上架不足30天零销量，新品观察期，不动价"),
+    "cold_12":    ("零销量·降档促活", "#eda100", "上架超30天零销量——降到最低档12%促活（最低只到12%），出单即转正常评档"),
 }
 
 
@@ -325,6 +325,17 @@ def pricing_plan():
         p = plan_prices.get(r["shop_sku"])
         r["plan_new_price"] = float(p["new_discount_price"]) if p and p["new_discount_price"] else None
     n_candidates = len(plan_prices)
+    # p = 可要回比例（页面顶部公式展示用）
+    p_row = _query(
+        """SELECT ROUND(SUM(cost),2) AS total_v,
+                  ROUND(SUM(CASE WHEN claim_tracking IS NOT NULL AND claim_tracking<>''
+                                 THEN cost ELSE 0 END),2) AS tracked_v
+           FROM order_system.return_case
+           WHERE store='Lowes-Autool' AND state<>'not_charged'
+             AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""")
+    p_recover = 0.0
+    if p_row and p_row[0]["total_v"] and float(p_row[0]["total_v"]) > 0:
+        p_recover = float(p_row[0]["tracked_v"] or 0) / float(p_row[0]["total_v"])
     tier_filter = request.args.get("tier", "")
     counts: Dict[str, int] = {}
     for r in rows:
@@ -337,8 +348,8 @@ def pricing_plan():
         import io as _io
         buf = _io.StringIO()
         cols = ["shop_sku", "tier", "target_margin", "reason_text", "orders_90d",
-                "returns_90d", "gross_margin", "margin_90d", "listed_days",
-                "cur_price", "cost_price", "data_suspect", "status"]
+                "returns_90d", "loss_rate", "rate_source", "listed_days",
+                "cur_price", "cost_price", "status"]
         w = _csv.writer(buf)
         w.writerow(cols)
         for r in rows:
@@ -351,7 +362,7 @@ def pricing_plan():
         store_key=store_key, stores=store_options(),
         rows=rows[:800], total=sum(counts.values()), counts=counts,
         tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at,
-        n_candidates=n_candidates)
+        n_candidates=n_candidates, p_recover=p_recover)
 
 
 @repricing_bp.route("/candidates")

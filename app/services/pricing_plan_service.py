@@ -26,20 +26,19 @@ from app.models.db_manager import DBManager
 CN_TZ = timezone(timedelta(hours=8))
 
 BASELINE = 0.10            # 考核基线（唯一不动的常数）
-LGD_DEFAULT = 0.72         # 退一单损失占售价比兜底（铺货模式按货值算，用户2026-07-16定案）
-K_SHRINK = 8               # 收缩权重：SKU退货率=(退货数+K×类目率)/(订单数+K)，防1单1退=100%
-COLD_WATCH_DAYS = 60       # 零销量<60天=新品观察（60天后才开张的历史占比仅7%）
+COLD_WATCH_DAYS = 30       # 零销量<30天=新品观察（用户2026-07-16定）
+MIN_ORDERS_OWN = 20        # >=20单用SKU自己的退货损失率；不足用类目；类目<30单用全店
+MIN_CAT_ORDERS = 30
 
-# 固定四档（用户2026-07-16定：不要每SKU一个利润率，就分几档；最低12%最高18%）
-# 上限逻辑：该档毛利−预期退货税≥10%基线 → r̂×LGD ≤ 档位−10%
+# 固定档位：目标毛利 = 10%基线 + 预期退货损失率(占销售额) → 向上取档
 TIERS = [
-    ("tier_12", 0.12),     # 卖得好退货低（预期退货税≤2%）
-    ("tier_15", 0.15),     # 默认/新品档
-    ("tier_18", 0.18),     # 高退货档
+    ("tier_12", 0.12),
+    ("tier_15", 0.15),
+    ("tier_18", 0.18),
 ]
 
-STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id)
-    "lowes_autool": ("Lowes", "autool", 10),
+STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id, return_case店名)
+    "lowes_autool": ("Lowes", "autool", 10, "Lowes-Autool"),
 }
 
 
@@ -50,12 +49,15 @@ def _qall(conn, sql, params=None):
 
 
 def evaluate_store(store_key: str) -> Dict[str, Any]:
-    """固定四档评档（订单/退货全部数据库直读，2026-07-16定案）：
-    m_need = 10%基线 + 预期退货率×LGD(货值/售价) → 向上取最近档(12/15/18)，
-    >18%盖不住 → 下架档；零销量：<60天观察，≥60天降到12%档促活（最低就是12%）。
-    预期退货率 = (SKU退货数 + K×类目退货率) ÷ (SKU订单数 + K) —— 群体收缩，
-    1单1退不会算成100%，"卖得好退货低"的SKU才收缩得出≤2%的低税率进12档。"""
-    platform, shop_name, shop_id = STORE_MAP[store_key]
+    """固定四档·退货损失率定价（用户2026-07-16定案）：
+
+      目标毛利 = 10%基线 + 预期退货损失率 → 12/15/18哪档盖得住进哪档，>18%下架
+      预期退货损失率 = (1-p) × 退货货值 ÷ 销售额
+        p = 有退货跟踪号的退货货值 ÷ 全部退货货值（能找供应商要回的比例，动态算）
+      数据三级（无混合计算）：SKU>=20单用自己 → 不足用类目 → 类目<30单用全店
+      零销量：<30天观察；>=30天降到12%档促活（最低只到12%）
+    """
+    platform, shop_name, shop_id, rc_store = STORE_MAP[store_key]
     now = datetime.now(CN_TZ)
     conn = DBManager.get_connection()
     try:
@@ -64,7 +66,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                    price, origin_price, discount_price, listed_at
             FROM order_system.offerprice_listing
             WHERE platform=%s AND shop_name=%s AND active=1""", (platform, shop_name))
-        # 订单（数据库直读，90天，剔除取消）
+        # 销售（数据库直读，90天，剔除取消）
         sku_orders = {r["offer_sku"]: r for r in _qall(conn, """
             SELECT offer_sku, COUNT(DISTINCT order_id) AS orders,
                    ROUND(SUM(line_total_price),2) AS sale
@@ -72,32 +74,44 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
             WHERE shop_id=%s AND order_state<>'CANCELED'
               AND created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
             GROUP BY offer_sku""", (shop_id,))}
-        # 退货（mirakl_returns直读，90天，按订单关联到SKU）
-        sku_returns = {r["offer_sku"]: int(r["rets"]) for r in _qall(conn, """
-            SELECT d.offer_sku, COUNT(DISTINCT r.order_id) AS rets
-            FROM order_system.mirakl_returns r
-            JOIN order_system.lowes_order_data d
-              ON d.order_id = r.order_id AND d.shop_id = %s
-            WHERE r.platform=%s AND r.shop_name=%s
-              AND r.date_created >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
-            GROUP BY d.offer_sku""", (shop_id, platform, shop_name))}
+        # 退货货值（台账每笔退货的货值=成本；退货口径与mirakl_returns已核对一致258=258）
+        sku_ret = {r["shop_sku"]: r for r in _qall(conn, """
+            SELECT shop_sku, COUNT(*) AS rets, ROUND(SUM(cost),2) AS rval
+            FROM order_system.return_case
+            WHERE store=%s AND state<>'not_charged'
+              AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+            GROUP BY shop_sku""", (rc_store,))}
+        # p = 有跟踪号退货货值 ÷ 全部退货货值（能找供应商要回的比例）
+        prow = _qall(conn, """
+            SELECT ROUND(SUM(cost),2) AS total_v,
+                   ROUND(SUM(CASE WHEN claim_tracking IS NOT NULL AND claim_tracking<>''
+                                  THEN cost ELSE 0 END),2) AS tracked_v
+            FROM order_system.return_case
+            WHERE store=%s AND state<>'not_charged'
+              AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""", (rc_store,))[0]
+        total_v = float(prow["total_v"] or 0)
+        p_recover = (float(prow["tracked_v"] or 0) / total_v) if total_v > 0 else 0.0
+        loss_factor = 1.0 - p_recover
 
-        # 类目退货率（收缩的群体先验）+ 全店率兜底
-        cat_orders: Dict[str, int] = {}
-        cat_rets: Dict[str, int] = {}
+        # 类目/全店 退货损失率（占销售额）
         offer_cat = {o["shop_sku"]: (o["category"] or "(无类目)") for o in offers}
+        cat_sale: Dict[str, float] = {}
+        cat_rval: Dict[str, float] = {}
+        cat_orders: Dict[str, int] = {}
         for sku, st in sku_orders.items():
             cat = offer_cat.get(sku, "(无类目)")
+            cat_sale[cat] = cat_sale.get(cat, 0.0) + float(st["sale"] or 0)
             cat_orders[cat] = cat_orders.get(cat, 0) + int(st["orders"] or 0)
-            cat_rets[cat] = cat_rets.get(cat, 0) + sku_returns.get(sku, 0)
-        store_orders = sum(cat_orders.values()) or 1
-        store_rate = sum(cat_rets.values()) / store_orders
+        for sku, rr in sku_ret.items():
+            cat = offer_cat.get(sku, "(无类目)")
+            cat_rval[cat] = cat_rval.get(cat, 0.0) + float(rr["rval"] or 0)
+        store_sale = sum(cat_sale.values()) or 1.0
+        store_rate = loss_factor * sum(cat_rval.values()) / store_sale
 
-        def cat_rate(cat: str) -> float:
-            n = cat_orders.get(cat, 0)
-            if n >= 30:
-                return cat_rets.get(cat, 0) / n
-            return store_rate
+        def cat_loss_rate(cat: str):
+            if cat_orders.get(cat, 0) >= MIN_CAT_ORDERS and cat_sale.get(cat, 0) > 0:
+                return loss_factor * cat_rval.get(cat, 0.0) / cat_sale[cat], "类目"
+            return store_rate, "全店"
 
         rows = []
         counts: Dict[str, int] = {}
@@ -107,69 +121,67 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
             st = sku_orders.get(sku)
             orders = int(st["orders"] or 0) if st else 0
             sale = float(st["sale"] or 0) if st else 0.0
-            returns = sku_returns.get(sku, 0)
+            rr = sku_ret.get(sku)
+            returns = int(rr["rets"]) if rr else 0
+            rval = float(rr["rval"] or 0) if rr else 0.0
             cost = float(o["cost_price"] or o["last_cost_snapshot"] or 0)
             cur_price = float(o["discount_price"] or o["price"] or o["origin_price"] or 0)
             listed_days = (now.date() - o["listed_at"].date()).days if o["listed_at"] else None
 
-            prior = cat_rate(cat)
-            r_hat = (returns + K_SHRINK * prior) / (orders + K_SHRINK)
-            lgd = (cost / cur_price) if (cost > 0 and cur_price > 0) else LGD_DEFAULT
-            lgd = min(lgd, 0.95)
-            tax = r_hat * lgd
-            m_need = BASELINE + tax
+            if orders >= MIN_ORDERS_OWN and sale > 0:
+                loss_rate, src = loss_factor * rval / sale, "SKU自己"
+            else:
+                loss_rate, src = cat_loss_rate(cat)
+            m_need = BASELINE + loss_rate
 
-            ev = {"orders_90d": orders, "returns_90d": returns, "sale_90d": round(sale, 2),
-                  "raw_return_rate": round(returns / orders, 4) if orders else None,
-                  "cat": cat, "cat_rate": round(prior, 4),
-                  "r_hat": round(r_hat, 4), "lgd": round(lgd, 4),
-                  "return_tax": round(tax, 4), "m_need": round(m_need, 4),
-                  "listed_days": listed_days, "cur_price": cur_price, "cost": cost}
+            ev = {"orders_90d": orders, "returns_90d": returns,
+                  "sale_90d": round(sale, 2), "return_value": round(rval, 2),
+                  "cat": cat, "p_recover": round(p_recover, 4),
+                  "loss_rate": round(loss_rate, 4), "source": src,
+                  "m_need": round(m_need, 4), "listed_days": listed_days,
+                  "cur_price": cur_price, "cost": cost}
 
             if orders == 0:
                 if listed_days is not None and listed_days < COLD_WATCH_DAYS:
                     tier, target = "cold_watch", None
-                    reason = (f"上架{listed_days}天还没出单——新品观察期（60天内），不动价")
+                    reason = f"上架{listed_days}天还没出单——新品观察期（{COLD_WATCH_DAYS}天内）不动价"
                 else:
                     tier, target = "cold_12", 0.12
-                    d = f"{listed_days}天" if listed_days is not None else "60天以上(老批次)"
-                    reason = (f"上架{d}零销量——降到最低档12%促活（最低就到12%不再往下）；"
-                              f"出了第一单转正常评档")
+                    d = f"{listed_days}天" if listed_days is not None else f"{COLD_WATCH_DAYS}天以上(老批次)"
+                    reason = f"上架{d}零销量——降到最低档12%促活（最低只到12%）；出单即转正常评档"
             elif m_need > TIERS[-1][1]:
                 tier, target = "delist", None
-                reason = (f"预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，类目率{prior*100:.1f}%）"
-                          f"×货值占比{lgd*100:.0f}% = 退货税{tax*100:.1f}个点，"
-                          f"18%毛利都盖不住10%基线——建议下架止血")
+                reason = (f"退货损失率{loss_rate*100:.1f}%（{src}口径）：毛利要{m_need*100:.1f}%才够本，"
+                          f"18%都盖不住——建议下架止血")
             else:
+                tier, target = TIERS[0]
                 for key, tm in TIERS:
                     if tm >= m_need:
                         tier, target = key, tm
                         break
-                if tier == "tier_12":
-                    reason = (f"卖得好退货低：{orders}单仅{returns}退，预期退货率{r_hat*100:.1f}%"
-                              f"（含类目先验修正），退货税{tax*100:.1f}个点——12%毛利即可稳过基线，"
-                              f"给最低档保价格竞争力")
-                elif tier == "tier_15":
-                    reason = (f"预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，类目率{prior*100:.1f}%），"
-                              f"退货税{tax*100:.1f}个点——15%档=10%基线+退货税+余量")
+                if src == "SKU自己":
+                    base_txt = f"90天{orders}单销售${sale:,.0f}、退货{returns}笔货值${rval:,.0f}"
                 else:
-                    reason = (f"退货偏高：预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，"
-                              f"类目率{prior*100:.1f}%），退货税{tax*100:.1f}个点——"
-                              f"顶到18%档才盖得住基线")
+                    base_txt = f"90天{orders}单（不足{MIN_ORDERS_OWN}单，按{src}算）"
+                reason = (f"{base_txt}——退货损失率{loss_rate*100:.1f}%"
+                          f"（已按可要回比例{p_recover*100:.1f}%折减）"
+                          f"→ 毛利需要{m_need*100:.1f}% → {int(target*100)}%档")
+                if tier == "tier_12":
+                    reason += "（卖得好退货低，最低档保价格竞争力）"
 
             counts[tier] = counts.get(tier, 0) + 1
             rows.append((store_key, sku, tier, target, reason,
                          json.dumps(ev, ensure_ascii=False), 0,
-                         orders, returns, None,
-                         round(returns / orders, 4) if orders else None,
-                         listed_days, cur_price or None, cost or None, now))
+                         orders, returns, None, None,
+                         listed_days, cur_price or None, cost or None,
+                         round(loss_rate, 4), src, now))
 
         sql = """
             INSERT INTO order_system.pricing_tier
                 (store_key, shop_sku, tier, target_margin, reason_text, evidence_json,
                  data_suspect, orders_90d, returns_90d, margin_90d, gross_margin,
-                 listed_days, cur_price, cost_price, assigned_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 listed_days, cur_price, cost_price, loss_rate, rate_source, assigned_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 tier=VALUES(tier), target_margin=VALUES(target_margin),
                 reason_text=VALUES(reason_text), evidence_json=VALUES(evidence_json),
@@ -177,6 +189,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 returns_90d=VALUES(returns_90d), margin_90d=VALUES(margin_90d),
                 gross_margin=VALUES(gross_margin), listed_days=VALUES(listed_days),
                 cur_price=VALUES(cur_price), cost_price=VALUES(cost_price),
+                loss_rate=VALUES(loss_rate), rate_source=VALUES(rate_source),
                 assigned_at=VALUES(assigned_at)
         """
         active_skus = {r[1] for r in rows}
