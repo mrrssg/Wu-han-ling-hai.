@@ -194,14 +194,13 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         raise ValueError("plan candidates 目前只支持 lowes 系店铺")
 
     from app.services.repricing_monitor_service import (
-        fetch_active_offers, fetch_pricing_configs, lookup_supplier_price,
-        is_blacklisted, _log)
+        fetch_active_offers, fetch_pricing_configs, _insert_log)
     from app.services.repricing_formula import calculate_breakdown, realised_margin
-    from app.services.repricing_stores import get_store
 
-    scfg = get_store(store_key)
     now = datetime.now(CN_TZ)
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     run_id = f"plan-{store_key}-{now.strftime('%Y%m%d%H%M%S')}"
+    log_rows: List[Any] = []
 
     conn = DBManager.get_connection()
     try:
@@ -209,6 +208,15 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             SELECT shop_sku, tier, target_margin FROM order_system.pricing_tier
             WHERE store_key=%s AND tier IN %s AND target_margin IS NOT NULL""",
             (store_key, ACTION_TIERS))}
+        blacklist = {r["shop_sku"] for r in _qall(conn, """
+            SELECT shop_sku FROM order_system.offer_alert_state WHERE blacklisted=1""")}
+        # 供应商价格一次性载入（逐SKU查会把3000个SKU拖成半小时）
+        price_map = {}
+        for sup, table in (("Costway", "autooperate.newestdropship"),
+                           ("Vevor", "autooperate.newestdropship_vevor")):
+            for r in _qall(conn, f"SELECT SKU, Price FROM {table}"):
+                if r["Price"] is not None:
+                    price_map[(sup, r["SKU"])] = float(r["Price"])
     finally:
         conn.close()
 
@@ -223,7 +231,7 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         t = tiers.get(ctx.shop_sku)
         if not t:
             continue
-        if is_blacklisted(ctx.shop_sku):
+        if ctx.shop_sku in blacklist:
             summary["skip_blacklist"] += 1
             continue
         cfg = configs.get(ctx.warehouse_sku)
@@ -233,7 +241,7 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             summary["skip_no_cfg"] += 1
             continue
         supplier = (cfg.get("supplier") or "Costway").strip() or "Costway"
-        supplier_price, _upd = lookup_supplier_price(ctx.warehouse_sku, supplier)
+        supplier_price = price_map.get((supplier, ctx.warehouse_sku))
         if not supplier_price:
             summary["skip_no_supplier_price"] += 1
             continue
@@ -283,14 +291,19 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             height_in=float(cfg.get("height_in") or 0),
             weight_lb=float(cfg.get("weight_lb") or 0))
 
-        _log(store_key, run_id, "plan", ctx, {
-            "status": "dry_run",
+        log_rows.append({
+            "run_id": run_id, "run_type": "plan", "store_key": store_key,
+            "shop_sku": ctx.shop_sku, "warehouse_sku": ctx.warehouse_sku,
+            "triggered_at": now_str, "status": "dry_run",
             "decision_reason": (
                 f"[定价方案·{t['tier']}] 目标毛利{target_margin:.0%}："
                 f"现折扣价${cur_discount:.2f}→${target_discount:.2f}"
                 f"（{dev:+.1%}）{clamp_note}"),
             "supplier": supplier,
             "supplier_price_db": float(supplier_price),
+            "old_origin_price": ctx.db_origin_price,
+            "old_discount_price": ctx.db_discount_price,
+            "old_cost": ctx.last_cost_snapshot,
             "new_cost": round(bd.cost, 4),
             "discount_factor": discount_factor,
             "commission_rate": commission,
@@ -303,4 +316,19 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         })
         summary["candidates"] += 1
         summary["by_tier"][t["tier"]] = summary["by_tier"].get(t["tier"], 0) + 1
+
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 上一轮plan候选（含中断残留）作废：只保留最新一轮；
+            # 已推价的成功记录在别的run_id（batch-/manual-）里，不受影响
+            cursor.execute(
+                """DELETE FROM order_system.offer_price_change_log
+                   WHERE store_key=%s AND status='dry_run' AND run_id LIKE %s""",
+                (store_key, f"plan-{store_key}-%"))
+            for row in log_rows:
+                _insert_log(cursor, row)
+        conn.commit()
+    finally:
+        conn.close()
     return summary
