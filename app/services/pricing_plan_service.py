@@ -146,7 +146,11 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
               AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
             GROUP BY shop_sku""", (rc_store,))}
 
-        offer_cat = {o["shop_sku"]: (o["category"] or "(无类目)") for o in offers}
+        # 类目映射用全部offer（含已下架）——历史销售/退货都该计入类目统计，
+        # 否则下架SKU的销售掉进"无类目"，类目分母被砍小、损失率虚高
+        offer_cat = {r["shop_sku"]: (r["category"] or "(无类目)") for r in _qall(conn, """
+            SELECT shop_sku, category FROM order_system.offerprice_listing
+            WHERE platform=%s AND shop_name=%s""", (platform, shop_name))}
 
         # ---- 类目/全店聚合：损失率 与 实际毛利 ----
         cat_sale_m: Dict[str, float] = {}
