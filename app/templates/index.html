@@ -80,6 +80,25 @@
       {% endif %}
     </div>
 
+    <div class="card">
+      <div class="card-header bg-white sec-title d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-arrow-return-left"></i> 昨日退货</span>
+        <span class="badge {{ 'text-bg-danger' if returns_y.total >= 20 else 'text-bg-secondary' }}">共 {{ returns_y.total }} 单</span>
+      </div>
+      {% if returns_y.rows %}
+      <div>
+        {% for r in returns_y.rows %}
+        <div class="todo-row" style="cursor:default">
+          <span class="lb">{{ r.label }}</span>
+          <span class="badge badge-n text-bg-secondary ms-auto">{{ r.n }} 单</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="text-muted px-3 pb-2" style="font-size:.72rem">按Mirakl退货创建时间，每小时同步；损失与追款去利润控制台看</div>
+      {% else %}
+      <div class="p-4 text-center text-muted">🎉 昨天没有退货</div>
+      {% endif %}
+    </div>
   </div>
 </div>
 

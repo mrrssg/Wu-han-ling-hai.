@@ -49,8 +49,9 @@ ISSUE_TYPE_NAMES = {
 def index():
     """待办工作台：销售看飞书看板、利润看利润控制台，首页只放
     ①今天要处理的报警 ②未发货 ③利润一眼 ④常用入口。每项查询独立容错。"""
-    todos = []      # {icon, label, count, money, url, danger}
+    todos = []      # {icon, label, count, money, href, danger}
     unshipped = []  # {label, shipping, waiting}
+    returns_y = {"total": 0, "rows": []}   # 昨日退货 per 店铺
 
     def _safe(fn):
         try:
@@ -149,11 +150,21 @@ def index():
                 a["waiting"] = int(r["n"] or 0)
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
+    def _returns_yesterday():
+        rows = _qall("""
+            SELECT CONCAT(platform, '-', shop_name) AS label, COUNT(*) AS n
+            FROM order_system.mirakl_returns
+            WHERE DATE(date_created) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+            GROUP BY platform, shop_name ORDER BY n DESC""")
+        returns_y["rows"] = [{"label": r["label"], "n": int(r["n"] or 0)} for r in rows]
+        returns_y["total"] = sum(r["n"] for r in returns_y["rows"])
+
     for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _todo_repricing, _unshipped):
+               _todo_repricing, _unshipped, _returns_yesterday):
         _safe(fn)
 
-    return render_template('index.html', todos=todos, unshipped=unshipped)
+    return render_template('index.html', todos=todos, unshipped=unshipped,
+                           returns_y=returns_y)
 
 
 @main_bp.route('/feishu-dashboard')
