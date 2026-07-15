@@ -23,24 +23,18 @@
 
 {# ---------- 方案说明（算法一句话+当前p值） ---------- #}
 <div class="card p-3 mb-3" style="font-size:.85rem">
-  <b>算法就一条公式：目标毛利 = 10%基线 + 预期退货损失率 → 落进 12% / 15% / 18% 哪档就是哪档，超18%下架。</b>
+  <b>算法：比两个数——"需要的毛利"和"现有实际毛利"，够就不动价，不够才升档补差。</b>
   <div class="mt-1 text-muted">
-    <b>预期退货损失率</b> = (1 − p) × 退货货值 ÷ 销售额，占销售额几个点就要几个点毛利来垫。<br>
-    <b>p = 可要回比例</b>：有退货跟踪号的退货货值 ÷ 全部退货货值（能找供应商要回的部分）——
-    当前 Lowes-Autool 近90天 <b>p = {{ '%.1f%%' % (p_recover * 100) }}</b>，跟踪号登记越多 p 越大、全店档位自动下移。<br>
-    <b>数据三级</b>（表里"数据来源"列）：SKU 90天≥20单用它自己的数 → 不足20单用类目 → 类目不足30单用全店。<br>
-    零销量：上架<30天观察不动；≥30天降到12%档促活（最低只到12%）。
-    全集=数据库 active offer；订单退货全数据库直读；评档每天重算，档位只是<b>建议</b>——推送必须人工确认。
+    <b>需要的毛利</b> = 10%基线 + 退货损失率。退货损失率 = (1−p) × 退货货值 ÷ 销售额，
+    只统计<b>下单满30天</b>的订单（退货基本到齐），再按5月订单经验乘尾部补偿系数；
+    p=可要回比例（有跟踪号退货货值占比，当前 <b>{{ '%.1f%%' % (p_recover * 100) }}</b>，登记越多档位越松）。<br>
+    <b>现有实际毛利</b> = 实测（公式名义12%实际约16%——公式里预留了退货运费又向上取整）。<br>
+    <b>数据三级</b>：SKU 90天≥15单用它自己 → 不足用类目 → 类目<30单用全店（"数据来源"列）。
+    判定：实际≥需要→<b>不动价</b>；缺≤3点→升15%档；缺3~6点→升18%档；再大→下架。
+    零销量：<30天观察；≥30天降12%档促活。按运营分池（MDLW=刘梦蝶/MRLW=明瑞瑞/YCLW=朱以超），
+    达标运营的池子少动。评档每天重算，推送必须人工确认。
   </div>
 </div>
-
-{% if n_candidates %}
-<div class="alert alert-primary py-2 d-flex justify-content-between align-items-center mb-3">
-  <span>💲 本方案已算出 <b>{{ n_candidates }}</b> 个改价候选（表格里"目标价"列），确认和推送去改价候选页</span>
-  <a class="btn btn-sm btn-primary" href="{{ url_for('repricing.candidates_page', store=store_key) }}">
-    去改价候选页确认推送 <i class="bi bi-arrow-right"></i></a>
-</div>
-{% endif %}
 
 {# ---------- 五档汇总（点击筛选） ---------- #}
 <div class="row g-2 mb-3">
@@ -72,9 +66,9 @@
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
       <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
-        <th>SKU</th><th>档位</th><th class="text-end">目标毛利</th>
+        <th>SKU</th><th>运营</th><th>档位</th><th class="text-end">目标毛利</th>
         <th class="text-end">90天单数</th><th class="text-end">退货</th>
-        <th class="text-end">退货损失率</th><th>数据来源</th><th class="text-end">现价$</th>
+        <th class="text-end">退货损失率</th><th class="text-end">实际毛利</th><th>数据来源</th><th class="text-end">现价$</th>
         <th class="text-end">目标价$</th>
         <th class="text-end">成本$</th><th class="text-end">上架天数</th>
         <th style="min-width:340px">为什么进这一档</th></tr></thead>
@@ -82,12 +76,14 @@
         {% for r in rows %}
         <tr class="{{ 'suspect' if r.data_suspect }}">
           <td class="font-monospace small">{{ r.shop_sku }}</td>
+          <td class="small">{{ r.operator or '—' }}</td>
           <td><span class="badge" style="background:{{ tier_meta[r.tier][1] }}">{{ tier_meta[r.tier][0] }}</span></td>
           <td class="text-end">{{ '%.0f%%' % (r.target_margin * 100) if r.target_margin else '—' }}</td>
           <td class="text-end">{{ r.orders_90d }}</td>
           <td class="text-end {{ 'text-danger fw-bold' if r.returns_90d >= 2 }}">{{ r.returns_90d }}</td>
           <td class="text-end {{ 'text-danger fw-bold' if r.loss_rate is not none and r.loss_rate > 0.05 }}">
             {{ '%.1f%%' % (r.loss_rate * 100) if r.loss_rate is not none else '—' }}</td>
+          <td class="text-end">{{ '%.1f%%' % (r.margin_90d * 100) if r.margin_90d is not none else '—' }}</td>
           <td><span class="badge {{ 'text-bg-success' if r.rate_source == 'SKU自己' else 'text-bg-light border text-dark' }}">{{ r.rate_source or '—' }}</span></td>
           <td class="text-end">{{ '%.2f' % r.cur_price if r.cur_price else '—' }}</td>
           <td class="text-end {{ 'fw-bold text-danger' if r.plan_new_price and r.cur_price and r.plan_new_price > r.cur_price else 'fw-bold text-primary' if r.plan_new_price }}">

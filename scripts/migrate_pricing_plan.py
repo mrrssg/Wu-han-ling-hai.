@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS order_system.pricing_tier (
 
 
 ALTERS = [
+    "ALTER TABLE order_system.pricing_tier ADD COLUMN operator VARCHAR(16) DEFAULT NULL "
+    "COMMENT '运营归属(SKU前缀: MDLW=刘梦蝶/MRLW=明瑞瑞/YCLW=朱以超)'",
     "ALTER TABLE order_system.pricing_tier ADD COLUMN loss_rate DECIMAL(8,4) DEFAULT NULL "
     "COMMENT '预期退货损失率(占销售额,已按可要回比例p折减)'",
     "ALTER TABLE order_system.pricing_tier ADD COLUMN rate_source VARCHAR(16) DEFAULT NULL "
