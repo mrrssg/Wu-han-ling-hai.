@@ -50,8 +50,7 @@ def index():
     """待办工作台：销售看飞书看板、利润看利润控制台，首页只放
     ①今天要处理的报警 ②未发货 ③利润一眼 ④常用入口。每项查询独立容错。"""
     todos = []      # {icon, label, count, money, url, danger}
-    profit = {"net_1d": None, "margin30": None, "mtd_net": None, "mtd_margin": None}
-    unshipped = []  # {label, n}
+    unshipped = []  # {label, shipping, waiting}
 
     def _safe(fn):
         try:
@@ -99,19 +98,6 @@ def index():
                           "count": int(r["n"] or 0), "money": float(r["v"] or 0),
                           "url": "profit_control.issues", "danger": danger})
 
-    def _profit():
-        r = _q1("""SELECT net_1d, rolling30_margin FROM order_system.profit_trend_daily
-                   WHERE scope='公司' AND stat_date < CURDATE()
-                   ORDER BY stat_date DESC LIMIT 1""")
-        if r:
-            profit["net_1d"] = float(r["net_1d"] or 0)
-            profit["margin30"] = float(r["rolling30_margin"]) if r["rolling30_margin"] is not None else None
-        r = _q1("""SELECT SUM(sale) AS s, SUM(net) AS n FROM order_system.profit_month_cohort
-                   WHERE order_month = DATE_FORMAT(CURDATE(), '%Y-%m')""")
-        if r and r["s"] and float(r["s"]) > 0:
-            profit["mtd_net"] = float(r["n"] or 0)
-            profit["mtd_margin"] = float(r["n"] or 0) / float(r["s"])
-
     def _unshipped():
         # 权威口径（用户 2026-07-15 定）：Mirakl同步表 order_state，
         # SHIPPING=已接单待发货，WAITING_ACCEPTANCE=还没接单（更急）。
@@ -137,10 +123,10 @@ def index():
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
     for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _profit, _unshipped):
+               _unshipped):
         _safe(fn)
 
-    return render_template('index.html', todos=todos, profit=profit, unshipped=unshipped)
+    return render_template('index.html', todos=todos, unshipped=unshipped)
 
 
 @main_bp.route('/feishu-dashboard')

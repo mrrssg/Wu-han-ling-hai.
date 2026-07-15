@@ -80,24 +80,6 @@
       {% endif %}
     </div>
 
-    <div class="row g-2">
-      <div class="col-12"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.margin30 is not none and profit.margin30 >= 0.10 else '#eda100' }}">
-        <div class="l">滚动30天净利率（公司）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="m30"></a></div>
-        <div class="v">{{ '%.1f%%' % (profit.margin30 * 100) if profit.margin30 is not none else '—' }}</div>
-        <div class="s">基线 10%，详情看利润控制台</div>
-      </div></div>
-      <div class="col-6"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.net_1d is not none and profit.net_1d >= 0 else '#d03b3b' }}">
-        <div class="l">昨日净赚<a class="pc-i bi bi-info-circle" tabindex="0" data-help="net1d"></a></div>
-        <div class="v {{ 'text-danger' if profit.net_1d is not none and profit.net_1d < 0 }}">
-          {{ '${:,.0f}'.format(profit.net_1d) if profit.net_1d is not none else '—' }}</div>
-        <div class="s">每小时刷新</div>
-      </div></div>
-      <div class="col-6"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.mtd_margin is not none and profit.mtd_margin >= 0.10 else '#eda100' }}">
-        <div class="l">本月预估净利<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mtd"></a></div>
-        <div class="v">{{ '${:,.0f}'.format(profit.mtd_net) if profit.mtd_net is not none else '—' }}</div>
-        <div class="s">{{ '净利率 %.1f%%' % (profit.mtd_margin * 100) if profit.mtd_margin is not none else '' }}</div>
-      </div></div>
-    </div>
   </div>
 </div>
 
@@ -130,31 +112,3 @@
 
 {% endblock %}
 
-{% block scripts %}
-<script>
-const HELP = {
-  net1d: {t:'昨日净赚怎么算', b:
-    '昨天下单的订单里：非退货单的利润（实际优先，账单没到用预估）合计，'+
-    '减去昨天下单且已申请退货的单的<b>期望损失</b>。按下单日归账。<br>'+
-    '每小时和飞书同步一次最近两天的订单。'+
-    '<span class="src"><b>数据源</b>：profit_trend_daily.net_1d</span>'},
-  m30: {t:'滚动30天净利率', b:
-    '最近30天全部订单：（非退货毛利 − 退货期望损失）÷ 销售额。'+
-    '和利润控制台首页第一张卡是同一个数。<br>'+
-    '考核达标看利润控制台的90天口径。'+
-    '<span class="src"><b>数据源</b>：profit_trend_daily.rolling30_margin（每天05:30重算）</span>'},
-  mtd: {t:'本月预估净利', b:
-    '本月下单的全部订单：非退货毛利 − 退货期望损失（待追退款按回收率先记）。'+
-    '月初退货还没成熟，这个数会随着月份推进往下修——和月度影响页的活账本同一个数。'+
-    '<span class="src"><b>数据源</b>：profit_month_cohort（每天05:30重算）</span>'},
-};
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('[data-help]').forEach(el => {
-    const h = HELP[el.dataset.help];
-    if (!h) return;
-    new bootstrap.Popover(el, {title:h.t, content:h.b, html:true,
-      trigger:'focus', placement:'bottom', container:'body'});
-  });
-});
-</script>
-{% endblock %}
