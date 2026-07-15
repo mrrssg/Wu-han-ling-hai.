@@ -57,25 +57,8 @@
     </div>
   </div>
 
-  {# ---------- 未发货 + 利润一眼 ---------- #}
+  {# ---------- 利润一眼 ---------- #}
   <div class="col-lg-4">
-    <div class="card mb-3">
-      <div class="card-header bg-white sec-title"><i class="bi bi-box-seam"></i> 未发货订单</div>
-      {% if unshipped %}
-      <div>
-        {% for u in unshipped %}
-        <a class="todo-row" href="{{ url_for('orders.manual_ship') }}">
-          <span class="lb">{{ u.label }}</span>
-          <span class="badge badge-n text-bg-warning">{{ u.n }} 笔</span>
-          <span class="go">去发货 →</span>
-        </a>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="p-4 text-center text-muted">✅ 没有待发货订单</div>
-      {% endif %}
-    </div>
-
     <div class="row g-2">
       <div class="col-12"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.margin30 is not none and profit.margin30 >= 0.10 else '#eda100' }}">
         <div class="l">滚动30天净利率（公司）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="m30"></a></div>

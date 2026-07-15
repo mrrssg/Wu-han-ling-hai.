@@ -112,16 +112,10 @@ def index():
             profit["mtd_net"] = float(r["n"] or 0)
             profit["mtd_margin"] = float(r["n"] or 0) / float(r["s"])
 
-    def _unshipped():
-        for tbl, label in (("macyorder", "Macy"), ("walmartorder", "Walmart"),
-                           ("bestbuyorder", "Bestbuy"), ("lowesorder", "Lowes")):
-            r = _q1(f"""SELECT COUNT(*) AS n FROM {tbl}
-                        WHERE Status IS NULL OR Status='' OR Status IN ('未发货','未發貨')""")
-            if r and int(r["n"] or 0):
-                unshipped.append({"label": label, "n": int(r["n"])})
-
+    # 未发货卡已下线：平台订单表的 Status 有大量历史遗留空值（走其它发货路径未回写），
+    # 数出来的不是真实待发货。等用户给出权威口径后再上。
     for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _profit, _unshipped):
+               _profit):
         _safe(fn)
 
     return render_template('index.html', todos=todos, profit=profit, unshipped=unshipped)
