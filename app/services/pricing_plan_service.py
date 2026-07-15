@@ -32,6 +32,7 @@ MIN_CAT_ORDERS = 30
 MATURE_MIN_AGE = 30        # 统计窗口：下单满30天的订单才进退货损失率统计（用户2026-07-16定）
 MATURE_MAX_AGE = 120
 UPLIFT_PER_TIER = 0.03     # 名义档每升3个点，实际毛利约升3个点
+KEEP_TOLERANCE = 0.01      # 缺口<=1个点先不动价（用户2026-07-16定：贴基线换销量稳）
 
 # 档位（keep=不动价；不足才升档补差；名义18实际约21还盖不住 → 下架）
 BUMP_TIERS = [
@@ -229,10 +230,15 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                     tier, target = "cold_12", 0.12
                     d = f"{listed_days}天" if listed_days is not None else f"{COLD_WATCH_DAYS}天以上(老批次)"
                     reason = f"上架{d}零销量——降到最低档12%促活（最低只到12%）；出单即转正常评档"
-            elif gap <= 0:
+            elif gap <= KEEP_TOLERANCE:
                 tier, target = "keep", None
-                reason = (f"需要毛利{need*100:.1f}%（10%基线+退货损失率{lr*100:.1f}%），"
-                          f"现有实际毛利{am*100:.1f}%（{src}实测）——够了，不动价")
+                if gap <= 0:
+                    reason = (f"需要毛利{need*100:.1f}%（10%基线+退货损失率{lr*100:.1f}%），"
+                              f"现有实际毛利{am*100:.1f}%（{src}实测）——够了，不动价")
+                else:
+                    reason = (f"需要毛利{need*100:.1f}%，实际毛利{am*100:.1f}%（{src}）——"
+                              f"缺口仅{gap*100:.1f}个点（≤1点容忍带），先不动价保销量，"
+                              f"净利贴着基线走，观察")
             else:
                 tier = None
                 for key, tm, cap in BUMP_TIERS:
