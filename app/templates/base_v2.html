@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AutoWeb ERP{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sb-w: 224px;
+            --brand: #2a78d6;
+            --ink: #3f4652;
+            --ink-muted: #98a1ad;
+            --bg: #f5f6f8;
+            --active-bg: #e8f1fc;
+        }
+        body { background: var(--bg); }
+
+        /* ---------- 左侧菜单 ---------- */
+        .sb {
+            position: fixed; top: 0; left: 0; bottom: 0; width: var(--sb-w);
+            background: #fff; border-right: 1px solid #e7e9ee; z-index: 1040;
+            display: flex; flex-direction: column;
+        }
+        .sb-brand {
+            height: 56px; display: flex; align-items: center; gap: 8px;
+            padding: 0 18px; border-bottom: 1px solid #f0f1f4;
+            font-weight: 700; font-size: 1.02rem; color: var(--brand); flex: 0 0 auto;
+        }
+        .sb-nav { overflow-y: auto; flex: 1; padding: 8px 10px 20px; }
+        .sb-cap {
+            font-size: .68rem; color: var(--ink-muted); letter-spacing: .08em;
+            padding: 14px 10px 4px; user-select: none;
+        }
+        .sb-item {
+            display: flex; align-items: center; gap: 9px;
+            padding: 7px 10px; margin: 1px 0; border-radius: 7px;
+            color: var(--ink); text-decoration: none; font-size: .88rem;
+        }
+        .sb-item i { font-size: .95rem; width: 18px; text-align: center; color: var(--ink-muted); }
+        .sb-item:hover { background: #f2f4f7; color: var(--ink); }
+        .sb-item.active { background: var(--active-bg); color: var(--brand); font-weight: 600; }
+        .sb-item.active i { color: var(--brand); }
+
+        /* ---------- 顶栏 ---------- */
+        .topbar {
+            position: sticky; top: 0; z-index: 1030;
+            height: 56px; background: #fff; border-bottom: 1px solid #e7e9ee;
+            display: flex; align-items: center; gap: 12px; padding: 0 20px;
+        }
+        .topbar .pg-title { font-weight: 600; font-size: 1.02rem; color: #23272f; }
+        .topbar .pg-sub { font-size: .78rem; color: var(--ink-muted); }
+
+        /* ---------- 内容区 ---------- */
+        .main-wrap { margin-left: var(--sb-w); min-height: 100vh; display: flex; flex-direction: column; }
+        .content { padding: 18px 20px 40px; flex: 1; }
+        .card { box-shadow: 0 1px 2px rgba(16,24,40,.05); border: 1px solid #eceef2; }
+
+        /* ---------- 小屏适配 ---------- */
+        #sbToggle { display: none; }
+        @media (max-width: 991px) {
+            .sb { transform: translateX(-100%); transition: transform .2s; }
+            .sb.open { transform: none; box-shadow: 0 0 30px rgba(0,0,0,.25); }
+            .main-wrap { margin-left: 0; }
+            #sbToggle { display: inline-block; }
+        }
+    </style>
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+{% if session.get('logged_in') %}
+{% set NAV = [
+  ('数据看板', [
+    ('main.index',                 'bi-house',            '仪表盘',        none),
+    ('profit_control.overview',    'bi-speedometer2',     '利润控制台',    '/profit-control'),
+  ]),
+  ('订单', [
+    ('orders.search_orders',       'bi-search',           '订单查询',      none),
+    ('orders.import_orders',       'bi-file-earmark-spreadsheet', '订单导入', none),
+    ('orders.transaction_logs_page','bi-journal-arrow-down','流水导入',    none),
+    ('orders.macy_sync_page',      'bi-arrow-repeat',     'Macy订单同步',  none),
+    ('orders.blacklist_page',      'bi-person-x',         '黑名单筛查',    none),
+  ]),
+  ('发货', [
+    ('orders.mirakl_shipping',     'bi-box-seam',         'Mirakl发货',    '/orders/shipping'),
+    ('orders.manual_ship',         'bi-hand-index',       '手工发货',      none),
+    ('orders.tracking',            'bi-truck',            '回传跟踪号',    none),
+    ('hd_shipping.index',          'bi-truck-front',      'HD Vevor发货',  '/hd-shipping'),
+  ]),
+  ('退货', [
+    ('orders.returns_sync_page',   'bi-arrow-return-left','退货同步',      none),
+    ('profit_control.actions',     'bi-list-check',       '追款/行动清单', none),
+    ('profit_control.sentinel',    'bi-broadcast',        'Listing哨兵',   none),
+  ]),
+  ('价格', [
+    ('repricing.dashboard',        'bi-currency-dollar',  '价格监控',      '/repricing'),
+  ]),
+  ('工具', [
+    ('stock.index',                'bi-clipboard-data',   '库存更新',      '/stock'),
+    ('ai_fill.index',              'bi-magic',            'AI填模板',      '/ai-fill'),
+    ('orders.mapping_upload',      'bi-diagram-3',        'SKU映射',       none),
+  ]),
+  ('系统', [
+    ('main.health',                'bi-heart-pulse',      '系统健康',      none),
+  ]),
+] %}
+{# 预览模式下，已迁移的页面在侧栏内互跳预览版；正式启用后此映射自动失效 #}
+{% set ALIAS = {'main.index': 'preview.home', 'orders.search_orders': 'preview.orders'}
+   if request.blueprint == 'preview' else {} %}
+<aside class="sb" id="sidebar">
+    <div class="sb-brand"><i class="bi bi-box-seam"></i> AutoWeb ERP</div>
+    <nav class="sb-nav">
+        {% for cap, items in NAV %}
+        <div class="sb-cap">{{ cap }}</div>
+        {% for ep, icon, label, prefix in items %}
+        {% set real_ep = ALIAS.get(ep, ep) %}
+        {% set is_active = (request.endpoint in (ep, ALIAS.get(ep, ''))) or (prefix and request.path.startswith(prefix)) %}
+        <a class="sb-item {{ 'active' if is_active }}" href="{{ url_for(real_ep) }}">
+            <i class="bi {{ icon }}"></i>{{ label }}</a>
+        {% endfor %}
+        {% endfor %}
+    </nav>
+</aside>
+{% endif %}
+
+<div class="main-wrap">
+    <div class="topbar">
+        <button class="btn btn-sm btn-outline-secondary" id="sbToggle"
+                onclick="document.getElementById('sidebar').classList.toggle('open')">
+            <i class="bi bi-list"></i></button>
+        <div>
+            <span class="pg-title">{% block page_title %}{% endblock %}</span>
+            <span class="pg-sub ms-2">{% block page_sub %}{% endblock %}</span>
+        </div>
+        <div class="ms-auto d-flex align-items-center gap-2">
+            {% block page_actions %}{% endblock %}
+            {% if session.get('logged_in') %}
+            <span class="pg-sub d-none d-md-inline"><i class="bi bi-person-circle"></i> {{ session.get('username','') }}</span>
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('auth.logout') }}">退出</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </div>
+
+    <footer class="text-center text-muted py-3 border-top" style="font-size:.75rem">
+        AutoWeb ERP · 武汉翎海
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function showLoading(btnId) {
+    const btn = document.getElementById(btnId);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 正在处理...';
+    }
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

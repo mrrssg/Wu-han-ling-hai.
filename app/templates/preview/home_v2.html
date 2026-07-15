@@ -1,0 +1,89 @@
+{% extends "base_v2.html" %}
+{% block title %}仪表盘 - AutoWeb ERP{% endblock %}
+{% block page_title %}仪表盘{% endblock %}
+{% block page_sub %}每天05:30更新 · 数据截至 {{ kpi.snap_date or '—' }}{% endblock %}
+
+{% block content %}
+<style>
+.kpi-card { border-left: 4px solid #2a78d6; }
+.kpi-card .v { font-size: 1.45rem; font-weight: 700; line-height: 1.25; }
+.kpi-card .l { font-size: .78rem; color: #6b7280; }
+.kpi-card .s { font-size: .72rem; color: #98a1ad; }
+.todo-pill { font-size: .82rem; }
+.quick { text-decoration: none; color: inherit; display: block; }
+.quick .card { transition: box-shadow .15s, transform .15s; }
+.quick:hover .card { box-shadow: 0 4px 14px rgba(16,24,40,.1); transform: translateY(-1px); }
+.quick i { font-size: 1.3rem; }
+.sec-title { font-weight: 600; font-size: .92rem; color: #23272f; }
+</style>
+
+{# ---------- KPI ---------- #}
+<div class="row g-2 mb-3">
+  <div class="col-6 col-lg-3"><div class="card kpi-card p-3">
+    <div class="l">昨日销售（全店铺）</div>
+    <div class="v">${{ '{:,.0f}'.format(kpi.sale_1d) }}</div>
+    <div class="s">{{ kpi.trend_date or '' }}</div>
+  </div></div>
+  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:{{ '#1baf7a' if kpi.net_1d >= 0 else '#d03b3b' }}">
+    <div class="l">昨日净赚（扣退货期望损失）</div>
+    <div class="v {{ 'text-danger' if kpi.net_1d < 0 }}">${{ '{:,.0f}'.format(kpi.net_1d) }}</div>
+    <div class="s">按下单日归账</div>
+  </div></div>
+  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:{{ '#1baf7a' if kpi.margin30 is not none and kpi.margin30 >= 0.10 else '#eda100' }}">
+    <div class="l">滚动30天净利率（公司）</div>
+    <div class="v">{{ '%.1f%%' % (kpi.margin30 * 100) if kpi.margin30 is not none else '—' }}</div>
+    <div class="s">基线 10%</div>
+  </div></div>
+  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:#eda100">
+    <div class="l">近7天退货</div>
+    <div class="v">{{ kpi.returns_7d }} 笔</div>
+    <div class="s">mirakl_returns 每小时同步</div>
+  </div></div>
+</div>
+
+{# ---------- 待办提醒 ---------- #}
+{% if kpi.open_issues or kpi.unfiled_recover %}
+<div class="card p-2 px-3 mb-3 d-flex flex-row align-items-center flex-wrap gap-3 todo-pill">
+  <b><i class="bi bi-bell"></i> 今日待办：</b>
+  {% if kpi.open_issues %}
+  <a href="{{ url_for('profit_control.issues') }}">🚨 问题清单 <b>{{ kpi.open_issues }}</b> 条待处理</a>
+  {% endif %}
+  {% if kpi.unfiled_recover %}
+  <a href="{{ url_for('profit_control.actions') }}">❗ 追款漏网 <b>{{ kpi.unfiled_recover }}</b> 笔未登记</a>
+  {% endif %}
+  <a class="ms-auto text-muted" href="{{ url_for('profit_control.overview') }}">去利润控制台 →</a>
+</div>
+{% endif %}
+
+{# ---------- 快捷入口 ---------- #}
+<div class="sec-title mb-2">常用功能</div>
+<div class="row g-2 mb-3">
+  {% for ep, icon, color, title, desc in [
+    ('orders.import_orders', 'bi-file-earmark-spreadsheet', '#2a78d6', '订单导入', '上传订单Excel，自动合并发货单'),
+    ('orders.search_orders', 'bi-search', '#1baf7a', '订单查询', '订单号/SKU/姓名/电话检索'),
+    ('orders.mirakl_shipping', 'bi-box-seam', '#eda100', 'Mirakl发货', '四店铺一键发货回传'),
+    ('orders.tracking', 'bi-truck', '#7c5cd6', '回传跟踪号', 'Excel或手动回传跟踪号'),
+    ('profit_control.overview', 'bi-speedometer2', '#d03b3b', '利润控制台', '利润率考核/诊断/行动清单'),
+    ('repricing.dashboard', 'bi-currency-dollar', '#0aa2c0', '价格监控', 'Macy改价与成交价对账'),
+    ('stock.index', 'bi-clipboard-data', '#e0731f', '库存更新', '四平台库存自动回填'),
+    ('ai_fill.index', 'bi-magic', '#6610f2', 'AI填模板', 'HD模板AI自动填充'),
+  ] %}
+  <div class="col-6 col-md-4 col-lg-3">
+    <a class="quick" href="{{ url_for(ep) }}">
+      <div class="card p-3 d-flex flex-row align-items-center gap-3">
+        <i class="bi {{ icon }}" style="color:{{ color }}"></i>
+        <div>
+          <div class="fw-semibold" style="font-size:.9rem">{{ title }}</div>
+          <div class="text-muted" style="font-size:.74rem">{{ desc }}</div>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="text-muted" style="font-size:.75rem">
+  ⓘ 这是新版界面预览：左侧菜单按业务分组（找功能不再翻顶栏），首页显示当天关键数字和待办。
+  仪表盘、订单查询已按新版式改造，其余页面待确认后分批迁移。
+</div>
+{% endblock %}
