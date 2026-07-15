@@ -24,35 +24,107 @@ def _q1(sql):
         conn.close()
 
 
+def _qall(sql):
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchall() or []
+    finally:
+        conn.close()
+
+
+ISSUE_TYPE_NAMES = {
+    "cell_below_baseline": "利润率破线",
+    "negative_ev_sku": "负期望SKU",
+    "recovery_overdue": "追款超期",
+    "data_stale": "数据回填滞后",
+    "return_spike": "退货异动",
+    "delisted_but_selling": "已下架仍出单",
+    "listing_mismatch": "Listing不符",
+}
+
+
 @main_bp.route('/')
 def index():
-    kpi = {"sale_1d": 0.0, "net_1d": 0.0, "margin30": None, "returns_7d": 0,
-           "open_issues": 0, "unfiled_recover": 0, "snap_date": None, "trend_date": None}
-    try:
-        r = _q1("""SELECT stat_date, sale_1d, net_1d, rolling30_margin
-                   FROM order_system.profit_trend_daily
+    """待办工作台：销售看飞书看板、利润看利润控制台，首页只放
+    ①今天要处理的报警 ②未发货 ③利润一眼 ④常用入口。每项查询独立容错。"""
+    todos = []      # {icon, label, count, money, url, danger}
+    profit = {"net_1d": None, "margin30": None, "mtd_net": None, "mtd_margin": None}
+    unshipped = []  # {label, n}
+
+    def _safe(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
+    def _todo_unfiled():
+        r = _q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
+                   FROM order_system.return_case
+                   WHERE state='pending' AND supplier='Costway' AND cost >= 20
+                     AND claim_filed=0 AND DATEDIFF(CURDATE(), order_date) <= 90""")
+        if r and int(r["n"] or 0):
+            todos.append({"icon": "❗", "label": "追款漏网（退货了还没登记）",
+                          "count": int(r["n"]), "money": float(r["v"] or 0),
+                          "url": "profit_control.actions", "danger": True})
+
+    def _todo_near_writeoff():
+        r = _q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
+                   FROM order_system.return_case
+                   WHERE state='pending' AND supplier='Costway'
+                     AND DATEDIFF(CURDATE(), return_date) >= 150""")
+        if r and int(r["n"] or 0):
+            todos.append({"icon": "⏰", "label": "追款临近180天核销线（等了≥150天）",
+                          "count": int(r["n"]), "money": float(r["v"] or 0),
+                          "url": "profit_control.actions", "danger": True})
+
+    def _todo_sentinel():
+        r = _q1("""SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings
+                   WHERE verdict='severe' AND status='open'""")
+        if r and int(r["n"] or 0):
+            todos.append({"icon": "🔴", "label": "Listing严重不符（哨兵发现，未修复）",
+                          "count": int(r["n"]), "money": None,
+                          "url": "profit_control.sentinel", "danger": True})
+
+    def _todo_issues():
+        rows = _qall("""SELECT issue_type, COUNT(*) AS n, COALESCE(SUM(impact_usd),0) AS v
+                        FROM order_system.issue_log WHERE status='open'
+                        GROUP BY issue_type ORDER BY v DESC""")
+        for r in rows:
+            t = r["issue_type"]
+            danger = t == "delisted_but_selling"
+            todos.append({"icon": "🚨" if danger else "📋",
+                          "label": ISSUE_TYPE_NAMES.get(t, t),
+                          "count": int(r["n"] or 0), "money": float(r["v"] or 0),
+                          "url": "profit_control.issues", "danger": danger})
+
+    def _profit():
+        r = _q1("""SELECT net_1d, rolling30_margin FROM order_system.profit_trend_daily
                    WHERE scope='公司' AND stat_date < CURDATE()
                    ORDER BY stat_date DESC LIMIT 1""")
         if r:
-            kpi["sale_1d"] = float(r["sale_1d"] or 0)
-            kpi["net_1d"] = float(r["net_1d"] or 0)
-            kpi["margin30"] = float(r["rolling30_margin"]) if r["rolling30_margin"] is not None else None
-            kpi["trend_date"] = str(r["stat_date"])
-        r = _q1("""SELECT COUNT(*) AS n FROM order_system.return_case
-                   WHERE return_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-                     AND state <> 'not_charged'""")
-        kpi["returns_7d"] = int(r["n"] or 0) if r else 0
-        r = _q1("SELECT COUNT(*) AS n FROM order_system.issue_log WHERE status='open'")
-        kpi["open_issues"] = int(r["n"] or 0) if r else 0
-        r = _q1("""SELECT COUNT(*) AS n FROM order_system.return_case
-                   WHERE state='pending' AND supplier='Costway' AND cost >= 20
-                     AND claim_filed=0 AND DATEDIFF(CURDATE(), order_date) <= 90""")
-        kpi["unfiled_recover"] = int(r["n"] or 0) if r else 0
-        r = _q1("SELECT MAX(snapshot_date) AS d FROM order_system.profit_cell_daily")
-        kpi["snap_date"] = str(r["d"]) if r and r["d"] else None
-    except Exception:
-        pass   # 首页永不因看板数据挂掉
-    return render_template('index.html', kpi=kpi)
+            profit["net_1d"] = float(r["net_1d"] or 0)
+            profit["margin30"] = float(r["rolling30_margin"]) if r["rolling30_margin"] is not None else None
+        r = _q1("""SELECT SUM(sale) AS s, SUM(net) AS n FROM order_system.profit_month_cohort
+                   WHERE order_month = DATE_FORMAT(CURDATE(), '%Y-%m')""")
+        if r and r["s"] and float(r["s"]) > 0:
+            profit["mtd_net"] = float(r["n"] or 0)
+            profit["mtd_margin"] = float(r["n"] or 0) / float(r["s"])
+
+    def _unshipped():
+        for tbl, label in (("macyorder", "Macy"), ("walmartorder", "Walmart"),
+                           ("bestbuyorder", "Bestbuy"), ("lowesorder", "Lowes")):
+            r = _q1(f"""SELECT COUNT(*) AS n FROM {tbl}
+                        WHERE Status IS NULL OR Status='' OR Status IN ('未发货','未發貨')""")
+            if r and int(r["n"] or 0):
+                unshipped.append({"label": label, "n": int(r["n"])})
+
+    for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
+               _profit, _unshipped):
+        _safe(fn)
+
+    return render_template('index.html', todos=todos, profit=profit, unshipped=unshipped)
 
 
 @main_bp.route('/feishu-dashboard')

@@ -1,76 +1,112 @@
 {% extends "base_v2.html" %}
-{% block title %}仪表盘 - AutoWeb ERP{% endblock %}
-{% block page_title %}仪表盘{% endblock %}
-{% block page_sub %}销售/净赚每小时刷新 · 利润口径每天05:30重算{% endblock %}
+{% block title %}工作台 - AutoWeb ERP{% endblock %}
+{% block page_title %}工作台{% endblock %}
+{% block page_sub %}今天该处理什么 · 报警自动刷新（销售看「销售看板」，利润分析看「利润控制台」）{% endblock %}
 
 {% block content %}
 <style>
-.kpi-card { border-left: 4px solid #2a78d6; }
-.kpi-card .v { font-size: 1.45rem; font-weight: 700; line-height: 1.25; }
-.kpi-card .l { font-size: .78rem; color: #6b7280; }
-.kpi-card .s { font-size: .72rem; color: #98a1ad; }
-.todo-pill { font-size: .82rem; }
-.quick { text-decoration: none; color: inherit; display: block; }
-.quick .card { transition: box-shadow .15s, transform .15s; }
-.quick:hover .card { box-shadow: 0 4px 14px rgba(16,24,40,.1); transform: translateY(-1px); }
-.quick i { font-size: 1.3rem; }
-.sec-title { font-weight: 600; font-size: .92rem; color: #23272f; }
+.todo-row { display:flex; align-items:center; gap:10px; padding:.6rem .9rem;
+  border-bottom:1px solid #f0f1f4; text-decoration:none; color:inherit; }
+.todo-row:last-child { border-bottom:0; }
+.todo-row:hover { background:#f8f9fb; }
+.todo-row .ic { font-size:1.05rem; width:26px; text-align:center; }
+.todo-row .lb { font-size:.88rem; }
+.todo-row .money { font-size:.82rem; color:#8a4b08; }
+.todo-row .go { margin-left:auto; color:#98a1ad; font-size:.78rem; white-space:nowrap; }
+.badge-n { font-size:.78rem; }
+.p-card { border-left:4px solid #2a78d6; }
+.p-card .v { font-size:1.3rem; font-weight:700; line-height:1.25; }
+.p-card .l { font-size:.78rem; color:#6b7280; }
+.p-card .s { font-size:.72rem; color:#98a1ad; }
+.quick { text-decoration:none; color:inherit; display:block; }
+.quick .card { transition:box-shadow .15s, transform .15s; }
+.quick:hover .card { box-shadow:0 4px 14px rgba(16,24,40,.1); transform:translateY(-1px); }
+.quick i { font-size:1.3rem; }
+.sec-title { font-weight:600; font-size:.92rem; color:#23272f; }
 .pc-i { cursor:pointer; color:#98a1ad; margin-left:4px; text-decoration:none; }
 .pc-i:hover { color:#2a78d6; }
-.popover { max-width: 360px; }
+.popover { max-width:360px; }
 .popover-body { font-size:.82rem; line-height:1.5; }
 .popover-body .src { color:#52514e; background:#f6f6f4; border-radius:4px;
   padding:4px 8px; margin-top:6px; display:block; }
 </style>
 
-{# ---------- KPI ---------- #}
-<div class="row g-2 mb-3">
-  <div class="col-6 col-lg-3"><div class="card kpi-card p-3">
-    <div class="l">昨日销售（全店铺）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="sale1d"></a></div>
-    <div class="v">${{ '{:,.0f}'.format(kpi.sale_1d) }}</div>
-    <div class="s">{{ kpi.trend_date or '' }}</div>
-  </div></div>
-  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:{{ '#1baf7a' if kpi.net_1d >= 0 else '#d03b3b' }}">
-    <div class="l">昨日净赚（扣退货期望损失）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="net1d"></a></div>
-    <div class="v {{ 'text-danger' if kpi.net_1d < 0 }}">${{ '{:,.0f}'.format(kpi.net_1d) }}</div>
-    <div class="s">按下单日归账</div>
-  </div></div>
-  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:{{ '#1baf7a' if kpi.margin30 is not none and kpi.margin30 >= 0.10 else '#eda100' }}">
-    <div class="l">滚动30天净利率（公司）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="m30"></a></div>
-    <div class="v">{{ '%.1f%%' % (kpi.margin30 * 100) if kpi.margin30 is not none else '—' }}</div>
-    <div class="s">基线 10%</div>
-  </div></div>
-  <div class="col-6 col-lg-3"><div class="card kpi-card p-3" style="border-left-color:#eda100">
-    <div class="l">近7天退货<a class="pc-i bi bi-info-circle" tabindex="0" data-help="ret7"></a></div>
-    <div class="v">{{ kpi.returns_7d }} 笔</div>
-    <div class="s">按真实退货日，不含账单未扣款的</div>
-  </div></div>
-</div>
+<div class="row g-3">
+  {# ---------- 今日待办 ---------- #}
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header bg-white sec-title d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bell"></i> 今日待办</span>
+        <span class="text-muted fw-normal" style="font-size:.75rem">点击每行直达处理页面</span>
+      </div>
+      {% if todos %}
+      <div>
+        {% for t in todos %}
+        <a class="todo-row" href="{{ url_for(t.url) }}">
+          <span class="ic">{{ t.icon }}</span>
+          <span class="lb {{ 'fw-bold text-danger' if t.danger }}">{{ t.label }}</span>
+          <span class="badge badge-n {{ 'text-bg-danger' if t.danger else 'text-bg-secondary' }}">{{ t.count }}</span>
+          {% if t.money and t.money > 1 %}<span class="money">${{ '{:,.0f}'.format(t.money) }}</span>{% endif %}
+          <span class="go">去处理 →</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="p-5 text-center text-muted">🎉 今天没有待办报警</div>
+      {% endif %}
+    </div>
+  </div>
 
-{# ---------- 待办提醒 ---------- #}
-{% if kpi.open_issues or kpi.unfiled_recover %}
-<div class="card p-2 px-3 mb-3 d-flex flex-row align-items-center flex-wrap gap-3 todo-pill">
-  <b><i class="bi bi-bell"></i> 今日待办：</b>
-  {% if kpi.open_issues %}
-  <a href="{{ url_for('profit_control.issues') }}">🚨 问题清单 <b>{{ kpi.open_issues }}</b> 条待处理</a>
-  {% endif %}
-  {% if kpi.unfiled_recover %}
-  <a href="{{ url_for('profit_control.actions') }}">❗ 追款漏网 <b>{{ kpi.unfiled_recover }}</b> 笔未登记</a>
-  {% endif %}
-  <a class="ms-auto text-muted" href="{{ url_for('profit_control.overview') }}">去利润控制台 →</a>
+  {# ---------- 未发货 + 利润一眼 ---------- #}
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-header bg-white sec-title"><i class="bi bi-box-seam"></i> 未发货订单</div>
+      {% if unshipped %}
+      <div>
+        {% for u in unshipped %}
+        <a class="todo-row" href="{{ url_for('orders.manual_ship') }}">
+          <span class="lb">{{ u.label }}</span>
+          <span class="badge badge-n text-bg-warning">{{ u.n }} 笔</span>
+          <span class="go">去发货 →</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="p-4 text-center text-muted">✅ 没有待发货订单</div>
+      {% endif %}
+    </div>
+
+    <div class="row g-2">
+      <div class="col-12"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.margin30 is not none and profit.margin30 >= 0.10 else '#eda100' }}">
+        <div class="l">滚动30天净利率（公司）<a class="pc-i bi bi-info-circle" tabindex="0" data-help="m30"></a></div>
+        <div class="v">{{ '%.1f%%' % (profit.margin30 * 100) if profit.margin30 is not none else '—' }}</div>
+        <div class="s">基线 10%，详情看利润控制台</div>
+      </div></div>
+      <div class="col-6"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.net_1d is not none and profit.net_1d >= 0 else '#d03b3b' }}">
+        <div class="l">昨日净赚<a class="pc-i bi bi-info-circle" tabindex="0" data-help="net1d"></a></div>
+        <div class="v {{ 'text-danger' if profit.net_1d is not none and profit.net_1d < 0 }}">
+          {{ '${:,.0f}'.format(profit.net_1d) if profit.net_1d is not none else '—' }}</div>
+        <div class="s">每小时刷新</div>
+      </div></div>
+      <div class="col-6"><div class="card p-card p-3" style="border-left-color:{{ '#1baf7a' if profit.mtd_margin is not none and profit.mtd_margin >= 0.10 else '#eda100' }}">
+        <div class="l">本月预估净利<a class="pc-i bi bi-info-circle" tabindex="0" data-help="mtd"></a></div>
+        <div class="v">{{ '${:,.0f}'.format(profit.mtd_net) if profit.mtd_net is not none else '—' }}</div>
+        <div class="s">{{ '净利率 %.1f%%' % (profit.mtd_margin * 100) if profit.mtd_margin is not none else '' }}</div>
+      </div></div>
+    </div>
+  </div>
 </div>
-{% endif %}
 
 {# ---------- 快捷入口 ---------- #}
-<div class="sec-title mb-2">常用功能</div>
+<div class="sec-title mb-2 mt-3">常用功能</div>
 <div class="row g-2 mb-3">
   {% for ep, icon, color, title, desc in [
     ('orders.import_orders', 'bi-file-earmark-spreadsheet', '#2a78d6', '订单导入', '上传订单Excel，自动合并发货单'),
     ('orders.search_orders', 'bi-search', '#1baf7a', '订单查询', '订单号/SKU/姓名/电话检索'),
     ('orders.mirakl_shipping', 'bi-box-seam', '#eda100', 'Mirakl发货', '四店铺一键发货回传'),
     ('orders.tracking', 'bi-truck', '#7c5cd6', '回传跟踪号', 'Excel或手动回传跟踪号'),
+    ('main.feishu_dashboard', 'bi-bar-chart-line', '#0aa2c0', '销售看板', '飞书仪表盘，实时销售'),
     ('profit_control.overview', 'bi-speedometer2', '#d03b3b', '利润控制台', '利润率考核/诊断/行动清单'),
-    ('repricing.dashboard', 'bi-currency-dollar', '#0aa2c0', '价格监控', 'Macy改价与成交价对账'),
     ('stock.index', 'bi-clipboard-data', '#e0731f', '库存更新', '四平台库存自动回填'),
     ('ai_fill.index', 'bi-magic', '#6610f2', 'AI填模板', 'HD模板AI自动填充'),
   ] %}
@@ -93,26 +129,20 @@
 {% block scripts %}
 <script>
 const HELP = {
-  sale1d: {t:'昨日销售怎么算', b:
-    '所有<b>下单时间=昨天</b>的订单的「售价」求和（售价=整单总价，不乘数量）。'+
-    '全部店铺、三个运营都算；剔除取消单/BestBuy-Delphi/Walmart/供应商为空。<br>'+
-    '<b>每小时和飞书同步一次</b>最近两天的订单——晚录进飞书的单最多1小时后就会补进来。'+
-    '<span class="src"><b>数据源</b>：飞书「订单丨📦Mysql订单数据库」→ profit_trend_daily.sale_1d'+
-    '（每小时刷新近2天 + 每天05:30全量重建120天）</span>'},
   net1d: {t:'昨日净赚怎么算', b:
     '昨天下单的订单里：非退货单的利润（实际优先，账单没到用预估）合计，'+
-    '减去昨天下单且已申请退货的单的<b>期望损失</b>（按回收率/海外仓规则折算）。<br>'+
-    '按下单日归账，不是按到账日。'+
-    '<span class="src"><b>数据源</b>：profit_trend_daily.net_1d，口径同利润控制台趋势图</span>'},
+    '减去昨天下单且已申请退货的单的<b>期望损失</b>。按下单日归账。<br>'+
+    '每小时和飞书同步一次最近两天的订单。'+
+    '<span class="src"><b>数据源</b>：profit_trend_daily.net_1d</span>'},
   m30: {t:'滚动30天净利率', b:
     '最近30天全部订单：（非退货毛利 − 退货期望损失）÷ 销售额。'+
     '和利润控制台首页第一张卡是同一个数。<br>'+
-    '注意：不含链梯未成熟预扣，考核达标看利润控制台的90天口径。'+
-    '<span class="src"><b>数据源</b>：profit_trend_daily.rolling30_margin</span>'},
-  ret7: {t:'近7天退货口径', b:
-    '按<b>真实退货日</b>（mirakl_returns 的创建时间）统计最近7天的退货申请，'+
-    '不含「账单显示没扣款」的（那些按正常单算）。'+
-    '<span class="src"><b>数据源</b>：return_case 台账（每天05:30重建）× mirakl_returns（每小时同步）</span>'},
+    '考核达标看利润控制台的90天口径。'+
+    '<span class="src"><b>数据源</b>：profit_trend_daily.rolling30_margin（每天05:30重算）</span>'},
+  mtd: {t:'本月预估净利', b:
+    '本月下单的全部订单：非退货毛利 − 退货期望损失（待追退款按回收率先记）。'+
+    '月初退货还没成熟，这个数会随着月份推进往下修——和月度影响页的活账本同一个数。'+
+    '<span class="src"><b>数据源</b>：profit_month_cohort（每天05:30重算）</span>'},
 };
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-help]').forEach(el => {
