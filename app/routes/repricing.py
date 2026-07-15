@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from flask import Blueprint, jsonify, render_template, request, redirect, url_for, flash, current_app
+from flask import Blueprint, jsonify, render_template, request, redirect, url_for, flash, current_app, Response
 
 from app.models.db_manager import DBManager
 from app.services.repricing_monitor_service import (
@@ -307,6 +307,52 @@ def dashboard():
         alert_breakdown=_alert_breakdown_latest_run(store_key),
         recent=_recent_changes(store_key, 20),
     )
+
+
+TIER_META = {
+    "standard":   ("标准档 12%", "#1baf7a", "退货风险正常。已达标的一律不动——对卖得好的SKU公平"),
+    "risk":       ("风险档 15%", "#d03b3b", "退一单亏的钱超过5倍单件利润，12%兜不住退货，多3个点是保险"),
+    "repair":     ("修复档", "#eda100", "按12%定的价、实际卖出毛利掉下去了（成本涨/折扣打穿），核实后修回12%"),
+    "delist":     ("下架档", "#52514e", "退货≥2次且净亏——提价救不了，建议下架止血"),
+    "cold_watch": ("冷启动·观察", "#98a1ad", "上架不足60天零销量，新品爬坡期，先不动"),
+    "cold_probe": ("冷启动·试探", "#2a78d6", "上架超60天零销量——降到10%毛利试探出第一单，出单即转正常评档"),
+}
+
+
+@repricing_bp.route("/pricing-plan")
+def pricing_plan():
+    store_key = _current_store()
+    rows = _query(
+        """SELECT * FROM order_system.pricing_tier
+           WHERE store_key=%s ORDER BY FIELD(tier,'delist','risk','repair',
+                 'cold_probe','cold_watch','standard'), orders_90d DESC""",
+        (store_key,))
+    tier_filter = request.args.get("tier", "")
+    counts: Dict[str, int] = {}
+    for r in rows:
+        counts[r["tier"]] = counts.get(r["tier"], 0) + 1
+    if tier_filter:
+        rows = [r for r in rows if r["tier"] == tier_filter]
+    eval_at = rows[0]["assigned_at"] if rows else None
+    if request.args.get("format") == "csv":
+        import csv as _csv
+        import io as _io
+        buf = _io.StringIO()
+        cols = ["shop_sku", "tier", "target_margin", "reason_text", "orders_90d",
+                "returns_90d", "gross_margin", "margin_90d", "listed_days",
+                "cur_price", "cost_price", "data_suspect", "status"]
+        w = _csv.writer(buf)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([r.get(c) for c in cols])
+        return Response(("﻿" + buf.getvalue()).encode("utf-8"), mimetype="text/csv",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=pricing_plan_{store_key}.csv"})
+    return render_template(
+        "repricing/pricing_plan.html",
+        store_key=store_key, stores=store_options(),
+        rows=rows[:800], total=sum(counts.values()), counts=counts,
+        tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at)
 
 
 @repricing_bp.route("/candidates")

@@ -1,0 +1,95 @@
+{% extends "base_v2.html" %}
+{% block title %}定价方案 - {{ store_key }}{% endblock %}
+{% block page_title %}定价方案（分档定价）{% endblock %}
+{% block page_sub %}每个SKU一档，每档带原因——评档只出建议，改价必须人工确认{% endblock %}
+{% block page_actions %}
+<a class="btn btn-sm btn-outline-success"
+   href="{{ url_for('repricing.pricing_plan', store=store_key, tier=tier_filter, format='csv') }}">
+  <i class="bi bi-download"></i> 导出CSV</a>
+{% endblock %}
+
+{% block content %}
+<style>
+.tier-card { border:1px solid #e7e9ee; border-left-width:5px; border-radius:8px;
+  background:#fff; padding:.7rem .9rem; height:100%; cursor:pointer; text-decoration:none;
+  color:inherit; display:block; }
+.tier-card.active { box-shadow:0 0 0 2px #2a78d6; }
+.tier-card .n { font-size:1.3rem; font-weight:700; }
+.tier-card .t { font-size:.82rem; font-weight:600; }
+.tier-card .d { font-size:.7rem; color:#6b7280; line-height:1.35; }
+.reason { font-size:.8rem; color:#374151; max-width:520px; }
+.suspect { background:#fff8ec; }
+</style>
+
+{# ---------- 方案说明（这样定价的原因） ---------- #}
+<div class="card p-3 mb-3" style="font-size:.85rem">
+  <b>这套方案怎么定价、为什么：</b>
+  <div class="mt-1 text-muted">
+    全集 = 数据库里 <b>active 的 offer</b>（在卖的才评，飞书资料不算）。每个SKU按90天真实数据分进一档，
+    每档目标不同：<b>卖得好的一律不动</b>（公平）；<b>退一单亏得大的提到15%</b>（12%兜不住退货风险）；
+    <b>实际毛利掉下去的修回12%</b>（成本涨了/折扣打穿，是漏洞不是策略）；<b>反复退货净亏的下架</b>（提价救不了）；
+    <b>零销量的降价试探</b>（没有利润可保，用价格买"卖不卖得动"的信息）。
+    评档每周自动重跑，档位只是<b>建议</b>——改价要你在待改价清单里逐个确认后才推送。
+  </div>
+</div>
+
+{# ---------- 五档汇总（点击筛选） ---------- #}
+<div class="row g-2 mb-3">
+  <div class="col-6 col-lg-2">
+    <a class="tier-card {{ 'active' if not tier_filter }}" style="border-left-color:#0b0b0b"
+       href="{{ url_for('repricing.pricing_plan', store=store_key) }}">
+      <div class="t">全部在卖</div><div class="n">{{ total }}</div>
+      <div class="d">active offer 总数</div></a>
+  </div>
+  {% for key, meta in tier_meta.items() %}
+  <div class="col-6 col-lg-2">
+    <a class="tier-card {{ 'active' if tier_filter == key }}" style="border-left-color:{{ meta[1] }}"
+       href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key) }}">
+      <div class="t">{{ meta[0] }}</div>
+      <div class="n">{{ counts.get(key, 0) }}</div>
+      <div class="d">{{ meta[2] }}</div></a>
+  </div>
+  {% endfor %}
+</div>
+
+{# ---------- 明细 ---------- #}
+<div class="card">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <span class="fw-semibold" style="font-size:.9rem">
+      {{ tier_meta[tier_filter][0] if tier_filter else '全部档位' }} 明细
+      <span class="text-muted fw-normal" style="font-size:.75rem">评档时间 {{ eval_at or '—' }}；🟡底色=评档输入数据存疑（账本口径待定案）</span></span>
+    <span class="badge text-bg-light border">显示 {{ rows|length }} 条{{ '（前800，全量导CSV）' if rows|length == 800 }}</span>
+  </div>
+  <div class="table-responsive" style="max-height:640px;overflow-y:auto">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th>SKU</th><th>档位</th><th class="text-end">目标毛利</th>
+        <th class="text-end">90天单数</th><th class="text-end">退货</th>
+        <th class="text-end">实际毛利</th><th class="text-end">现价$</th>
+        <th class="text-end">成本$</th><th class="text-end">上架天数</th>
+        <th style="min-width:340px">为什么进这一档</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="{{ 'suspect' if r.data_suspect }}">
+          <td class="font-monospace small">{{ r.shop_sku }}</td>
+          <td><span class="badge" style="background:{{ tier_meta[r.tier][1] }}">{{ tier_meta[r.tier][0] }}</span></td>
+          <td class="text-end">{{ '%.0f%%' % (r.target_margin * 100) if r.target_margin else '—' }}</td>
+          <td class="text-end">{{ r.orders_90d }}</td>
+          <td class="text-end {{ 'text-danger fw-bold' if r.returns_90d >= 2 }}">{{ r.returns_90d }}</td>
+          <td class="text-end">{{ '%.1f%%' % (r.gross_margin * 100) if r.gross_margin is not none else '—' }}</td>
+          <td class="text-end">{{ '%.2f' % r.cur_price if r.cur_price else '—' }}</td>
+          <td class="text-end">{{ '%.2f' % r.cost_price if r.cost_price else '—' }}</td>
+          <td class="text-end">{{ r.listed_days if r.listed_days is not none else '—' }}</td>
+          <td><div class="reason">{{ r.reason_text }}</div></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-center text-muted py-4">还没有评档数据——先跑 scripts/pricing_tier_eval.py</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-muted mt-2" style="font-size:.75rem">
+  流程：每周自动评档（只写建议+原因）→ 你在本页审查各档 → 确认后价格监控按新目标算价 → 待改价清单（首页待办可见）→ 人工确认推送 → 效果回看本页与利润控制台。
+</p>
+{% endblock %}
