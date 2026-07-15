@@ -112,10 +112,32 @@ def index():
             profit["mtd_net"] = float(r["n"] or 0)
             profit["mtd_margin"] = float(r["n"] or 0) / float(r["s"])
 
-    # 未发货卡已下线：平台订单表的 Status 有大量历史遗留空值（走其它发货路径未回写），
-    # 数出来的不是真实待发货。等用户给出权威口径后再上。
+    def _unshipped():
+        # 权威口径（用户 2026-07-15 定）：Mirakl同步表 order_state，
+        # SHIPPING=已接单待发货，WAITING_ACCEPTANCE=还没接单（更急）。
+        rows = _qall("""
+            SELECT sc.platform AS label, d.order_state, COUNT(*) AS n FROM (
+                SELECT shop_id, order_state FROM order_system.macy_order_data
+                 WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+                UNION ALL
+                SELECT shop_id, order_state FROM order_system.lowes_order_data
+                 WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+                UNION ALL
+                SELECT shop_id, order_state FROM order_system.bestbuy_order_data
+                 WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+            ) d JOIN order_system.shop_configs sc ON sc.id = d.shop_id
+            GROUP BY sc.platform, d.order_state""")
+        agg = {}
+        for r in rows:
+            a = agg.setdefault(r["label"], {"label": r["label"], "shipping": 0, "waiting": 0})
+            if r["order_state"] == "SHIPPING":
+                a["shipping"] = int(r["n"] or 0)
+            else:
+                a["waiting"] = int(r["n"] or 0)
+        unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
+
     for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _profit):
+               _profit, _unshipped):
         _safe(fn)
 
     return render_template('index.html', todos=todos, profit=profit, unshipped=unshipped)
