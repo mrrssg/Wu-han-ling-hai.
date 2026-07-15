@@ -33,6 +33,14 @@
   </div>
 </div>
 
+{% if n_candidates %}
+<div class="alert alert-primary py-2 d-flex justify-content-between align-items-center mb-3">
+  <span>💲 本方案已算出 <b>{{ n_candidates }}</b> 个改价候选（表格里"目标价"列），确认和推送去改价候选页</span>
+  <a class="btn btn-sm btn-primary" href="{{ url_for('repricing.candidates_page', store=store_key) }}">
+    去改价候选页确认推送 <i class="bi bi-arrow-right"></i></a>
+</div>
+{% endif %}
+
 {# ---------- 五档汇总（点击筛选） ---------- #}
 <div class="row g-2 mb-3">
   <div class="col-6 col-lg-2">
@@ -66,6 +74,7 @@
         <th>SKU</th><th>档位</th><th class="text-end">目标毛利</th>
         <th class="text-end">90天单数</th><th class="text-end">退货</th>
         <th class="text-end">实际毛利</th><th class="text-end">现价$</th>
+        <th class="text-end">目标价$</th>
         <th class="text-end">成本$</th><th class="text-end">上架天数</th>
         <th style="min-width:340px">为什么进这一档</th></tr></thead>
       <tbody>
@@ -78,6 +87,8 @@
           <td class="text-end {{ 'text-danger fw-bold' if r.returns_90d >= 2 }}">{{ r.returns_90d }}</td>
           <td class="text-end">{{ '%.1f%%' % (r.gross_margin * 100) if r.gross_margin is not none else '—' }}</td>
           <td class="text-end">{{ '%.2f' % r.cur_price if r.cur_price else '—' }}</td>
+          <td class="text-end {{ 'fw-bold text-danger' if r.plan_new_price and r.cur_price and r.plan_new_price > r.cur_price else 'fw-bold text-primary' if r.plan_new_price }}">
+            {{ '%.2f' % r.plan_new_price if r.plan_new_price else '—' }}</td>
           <td class="text-end">{{ '%.2f' % r.cost_price if r.cost_price else '—' }}</td>
           <td class="text-end">{{ r.listed_days if r.listed_days is not none else '—' }}</td>
           <td><div class="reason">{{ r.reason_text }}</div></td>

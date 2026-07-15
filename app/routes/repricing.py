@@ -310,6 +310,21 @@ def pricing_plan():
            WHERE store_key=%s ORDER BY FIELD(tier,'delist','risk','repair',
                  'cold_probe','cold_watch','standard'), orders_90d DESC""",
         (store_key,))
+    # 最新plan候选的目标价（折扣后）贴到方案行上，方案页直接看得到"要改成多少钱"
+    plan_prices: Dict[str, Dict] = {}
+    latest_plan = _query(
+        """SELECT run_id FROM order_system.offer_price_change_log
+           WHERE run_id LIKE %s AND status='dry_run'
+           ORDER BY triggered_at DESC LIMIT 1""", (f"plan-{store_key}-%",))
+    if latest_plan:
+        plan_prices = {r["shop_sku"]: r for r in _query(
+            """SELECT shop_sku, new_discount_price, new_origin_price
+               FROM order_system.offer_price_change_log
+               WHERE run_id=%s AND status='dry_run'""", (latest_plan[0]["run_id"],))}
+    for r in rows:
+        p = plan_prices.get(r["shop_sku"])
+        r["plan_new_price"] = float(p["new_discount_price"]) if p and p["new_discount_price"] else None
+    n_candidates = len(plan_prices)
     tier_filter = request.args.get("tier", "")
     counts: Dict[str, int] = {}
     for r in rows:
@@ -335,7 +350,8 @@ def pricing_plan():
         "repricing/pricing_plan.html",
         store_key=store_key, stores=store_options(),
         rows=rows[:800], total=sum(counts.values()), counts=counts,
-        tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at)
+        tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at,
+        n_candidates=n_candidates)
 
 
 @repricing_bp.route("/candidates")
