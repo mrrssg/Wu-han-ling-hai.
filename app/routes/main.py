@@ -55,6 +55,30 @@ def index():
     return render_template('index.html', kpi=kpi)
 
 
+@main_bp.route('/feishu-dashboard')
+def feishu_dashboard():
+    """嵌入飞书多维表格仪表盘（实时数据）。链接存 instance/feishu_dashboard_url.txt，
+    一行一个：标签|分享链接，改文件即生效不用重启。"""
+    import os
+    from flask import current_app
+    boards = []
+    path = os.path.join(current_app.instance_path, "feishu_dashboard_url.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "|" in line:
+                    label, url = line.split("|", 1)
+                else:
+                    label, url = "飞书仪表盘", line
+                boards.append({"label": label.strip(), "url": url.strip()})
+    except FileNotFoundError:
+        pass
+    return render_template('feishu_dashboard.html', boards=boards)
+
+
 @main_bp.route('/health')
 def health():
     conn = DBManager.get_connection()

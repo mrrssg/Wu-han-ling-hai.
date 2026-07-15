@@ -1,0 +1,40 @@
+{% extends "base_v2.html" %}
+{% block title %}销售看板（飞书实时） - AutoWeb ERP{% endblock %}
+{% block page_title %}销售看板{% endblock %}
+{% block page_sub %}飞书仪表盘直连，数据实时{% endblock %}
+
+{% block content %}
+{% if boards %}
+{% if boards|length > 1 %}
+<ul class="nav nav-tabs mb-2">
+  {% for b in boards %}
+  <li class="nav-item"><button class="nav-link {{ 'active' if loop.first }}" data-bs-toggle="tab"
+    data-bs-target="#fb-{{ loop.index }}" type="button">{{ b.label }}</button></li>
+  {% endfor %}
+</ul>
+{% endif %}
+<div class="tab-content">
+  {% for b in boards %}
+  <div class="tab-pane fade {{ 'show active' if loop.first }}" id="fb-{{ loop.index }}">
+    <div class="card" style="overflow:hidden">
+      <iframe src="{{ b.url }}" style="width:100%;height:calc(100vh - 150px);border:0"
+              allow="fullscreen"></iframe>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card p-5 text-center">
+  <div style="font-size:2.2rem">📊</div>
+  <h5 class="mt-2">还没配置飞书仪表盘链接</h5>
+  <div class="text-muted mt-2" style="max-width:560px;margin:0 auto;text-align:left">
+    <b>配置步骤：</b>
+    <ol class="mt-2">
+      <li>在飞书打开多维表格 → 左侧「仪表盘」→ 打开你要展示的仪表盘</li>
+      <li>点右上角「分享」→ 开启链接分享（选"组织内获得链接的人可阅读"即可，浏览器里登录过飞书就能看）</li>
+      <li>复制链接，发给 Claude 或写入服务器 <code>instance/feishu_dashboard_url.txt</code>（格式：<code>标签|链接</code>，一行一个，保存即生效）</li>
+    </ol>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
