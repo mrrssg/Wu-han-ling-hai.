@@ -22,19 +22,21 @@ from app.models.db_manager import DBManager
 
 CN_TZ = timezone(timedelta(hours=8))
 
-BASELINE = 0.10            # 考核基线
-STD_MARGIN = 0.12          # 标准档目标毛利
-RISK_MARGIN = 0.15         # 风险档目标毛利
-RISK_RATIO = 5.0           # 单退损失/单件利润 超过此倍数进风险档
-REPAIR_TOL = 0.01          # 实际毛利低于目标超过1个百分点才算漏
-MIN_ORDERS_SIGNAL = 3      # 判修复/风险至少要的单数（样本太小不动）
-DELIST_RETURNS = 2         # 下架档：退货≥2
-DELIST_NET = -50           # 且净贡献 < -50
-COLD_WATCH_DAYS = 60       # 上架不足60天零销量=观察
-COLD_PROBE_MARGIN = 0.10   # 冷启动首轮试探毛利
+BASELINE = 0.10            # 考核基线（唯一不动的常数）
+LGD_DEFAULT = 0.72         # 退一单损失占售价比兜底（铺货模式按货值算，用户2026-07-16定案）
+K_SHRINK = 8               # 收缩权重：SKU退货率=(退货数+K×类目率)/(订单数+K)，防1单1退=100%
+COLD_WATCH_DAYS = 60       # 零销量<60天=新品观察（60天后才开张的历史占比仅7%）
 
-STORE_MAP = {  # store_key -> (platform, shop_name, profit_sku_90d.store)
-    "lowes_autool": ("Lowes", "autool", "Lowes-Autool"),
+# 固定四档（用户2026-07-16定：不要每SKU一个利润率，就分几档；最低12%最高18%）
+# 上限逻辑：该档毛利−预期退货税≥10%基线 → r̂×LGD ≤ 档位−10%
+TIERS = [
+    ("tier_12", 0.12),     # 卖得好退货低（预期退货税≤2%）
+    ("tier_15", 0.15),     # 默认/新品档
+    ("tier_18", 0.18),     # 高退货档
+]
+
+STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id)
+    "lowes_autool": ("Lowes", "autool", 10),
 }
 
 
@@ -45,99 +47,119 @@ def _qall(conn, sql, params=None):
 
 
 def evaluate_store(store_key: str) -> Dict[str, Any]:
-    platform, shop_name, profit_store = STORE_MAP[store_key]
+    """固定四档评档（订单/退货全部数据库直读，2026-07-16定案）：
+    m_need = 10%基线 + 预期退货率×LGD(货值/售价) → 向上取最近档(12/15/18)，
+    >18%盖不住 → 下架档；零销量：<60天观察，≥60天降到12%档促活（最低就是12%）。
+    预期退货率 = (SKU退货数 + K×类目退货率) ÷ (SKU订单数 + K) —— 群体收缩，
+    1单1退不会算成100%，"卖得好退货低"的SKU才收缩得出≤2%的低税率进12档。"""
+    platform, shop_name, shop_id = STORE_MAP[store_key]
     now = datetime.now(CN_TZ)
     conn = DBManager.get_connection()
     try:
         offers = _qall(conn, """
-            SELECT shop_sku, title, category, cost_price, last_cost_snapshot,
+            SELECT shop_sku, category, cost_price, last_cost_snapshot,
                    price, origin_price, discount_price, listed_at
             FROM order_system.offerprice_listing
             WHERE platform=%s AND shop_name=%s AND active=1""", (platform, shop_name))
-        sku_stats = {r["shop_sku"]: r for r in _qall(conn, """
-            SELECT shop_sku, orders, sale, profit_gross, returns_cnt, loss_expected,
-                   net, margin
-            FROM order_system.profit_sku_90d WHERE store=%s""", (profit_store,))}
-        # 海外仓退回记录（有跟踪号=货回来只亏运费，降低该SKU的单退损失）
-        wh_skus = {r["shop_sku"]: int(r["n"]) for r in _qall(conn, """
-            SELECT shop_sku, COUNT(*) AS n FROM order_system.return_case
-            WHERE store=%s AND state='warehouse' GROUP BY shop_sku""", (profit_store,))}
-        # 账本口径未定案的订单涉及的SKU（not_charged退货申请单，实际毛利可能被污染）
-        suspect_skus = {r["shop_sku"] for r in _qall(conn, """
-            SELECT DISTINCT shop_sku FROM order_system.return_case
-            WHERE store=%s AND state='not_charged'""", (profit_store,))}
+        # 订单（数据库直读，90天，剔除取消）
+        sku_orders = {r["offer_sku"]: r for r in _qall(conn, """
+            SELECT offer_sku, COUNT(DISTINCT order_id) AS orders,
+                   ROUND(SUM(line_total_price),2) AS sale
+            FROM order_system.lowes_order_data
+            WHERE shop_id=%s AND order_state<>'CANCELED'
+              AND created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+            GROUP BY offer_sku""", (shop_id,))}
+        # 退货（mirakl_returns直读，90天，按订单关联到SKU）
+        sku_returns = {r["offer_sku"]: int(r["rets"]) for r in _qall(conn, """
+            SELECT d.offer_sku, COUNT(DISTINCT r.order_id) AS rets
+            FROM order_system.mirakl_returns r
+            JOIN order_system.lowes_order_data d
+              ON d.order_id = r.order_id AND d.shop_id = %s
+            WHERE r.platform=%s AND r.shop_name=%s
+              AND r.date_created >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+            GROUP BY d.offer_sku""", (shop_id, platform, shop_name))}
+
+        # 类目退货率（收缩的群体先验）+ 全店率兜底
+        cat_orders: Dict[str, int] = {}
+        cat_rets: Dict[str, int] = {}
+        offer_cat = {o["shop_sku"]: (o["category"] or "(无类目)") for o in offers}
+        for sku, st in sku_orders.items():
+            cat = offer_cat.get(sku, "(无类目)")
+            cat_orders[cat] = cat_orders.get(cat, 0) + int(st["orders"] or 0)
+            cat_rets[cat] = cat_rets.get(cat, 0) + sku_returns.get(sku, 0)
+        store_orders = sum(cat_orders.values()) or 1
+        store_rate = sum(cat_rets.values()) / store_orders
+
+        def cat_rate(cat: str) -> float:
+            n = cat_orders.get(cat, 0)
+            if n >= 30:
+                return cat_rets.get(cat, 0) / n
+            return store_rate
 
         rows = []
         counts: Dict[str, int] = {}
         for o in offers:
             sku = o["shop_sku"]
-            s = sku_stats.get(sku)
+            cat = offer_cat[sku]
+            st = sku_orders.get(sku)
+            orders = int(st["orders"] or 0) if st else 0
+            sale = float(st["sale"] or 0) if st else 0.0
+            returns = sku_returns.get(sku, 0)
             cost = float(o["cost_price"] or o["last_cost_snapshot"] or 0)
             cur_price = float(o["discount_price"] or o["price"] or o["origin_price"] or 0)
             listed_days = (now.date() - o["listed_at"].date()).days if o["listed_at"] else None
 
-            orders = int(s["orders"] or 0) if s else 0
-            returns = int(s["returns_cnt"] or 0) if s else 0
-            margin = float(s["margin"]) if s and s["margin"] is not None else None
-            sale = float(s["sale"] or 0) if s else 0.0
-            gross = float(s["profit_gross"] or 0) if s else 0.0
-            net = float(s["net"] or 0) if s else 0.0
-            nonret = max(orders - returns, 0)
-            gm = (gross / sale) if sale > 0 else None
-            unit_profit = (gross / nonret) if nonret > 0 else None
-            wh_n = wh_skus.get(sku, 0)
-            # 单退损失：没跟踪号亏货值；该SKU有海外仓退回记录则按只亏运费(售价10%)估
-            loss_single = (0.10 * cur_price) if (wh_n > 0 and cur_price > 0) else cost
-            ratio = (loss_single / unit_profit) if (unit_profit and unit_profit > 0) else None
+            prior = cat_rate(cat)
+            r_hat = (returns + K_SHRINK * prior) / (orders + K_SHRINK)
+            lgd = (cost / cur_price) if (cost > 0 and cur_price > 0) else LGD_DEFAULT
+            lgd = min(lgd, 0.95)
+            tax = r_hat * lgd
+            m_need = BASELINE + tax
 
-            ev = {"orders_90d": orders, "returns_90d": returns,
-                  "sale_90d": round(sale, 2), "net_90d": round(net, 2),
-                  "gross_margin": round(gm, 4) if gm is not None else None,
-                  "unit_profit": round(unit_profit, 2) if unit_profit else None,
-                  "single_return_loss": round(loss_single, 2),
-                  "loss_ratio": round(ratio, 1) if ratio else None,
-                  "warehouse_returns": wh_n, "listed_days": listed_days,
-                  "cur_price": cur_price, "cost": cost}
+            ev = {"orders_90d": orders, "returns_90d": returns, "sale_90d": round(sale, 2),
+                  "raw_return_rate": round(returns / orders, 4) if orders else None,
+                  "cat": cat, "cat_rate": round(prior, 4),
+                  "r_hat": round(r_hat, 4), "lgd": round(lgd, 4),
+                  "return_tax": round(tax, 4), "m_need": round(m_need, 4),
+                  "listed_days": listed_days, "cur_price": cur_price, "cost": cost}
 
             if orders == 0:
                 if listed_days is not None and listed_days < COLD_WATCH_DAYS:
                     tier, target = "cold_watch", None
-                    reason = (f"上架{listed_days}天还没出单——新品有流量爬坡期，"
-                              f"先观察到{COLD_WATCH_DAYS}天，不动价")
+                    reason = (f"上架{listed_days}天还没出单——新品观察期（60天内），不动价")
                 else:
-                    tier, target = "cold_probe", COLD_PROBE_MARGIN
-                    d = f"{listed_days}天" if listed_days is not None else "很久(无上架时间)"
-                    reason = (f"上架{d}零销量——没有利润可保，降价买信息：目标毛利降到10%试探，"
-                              f"出了第一单就转正常评档；试探价也不能亏本卖")
-            elif returns >= DELIST_RETURNS and net < DELIST_NET:
+                    tier, target = "cold_12", 0.12
+                    d = f"{listed_days}天" if listed_days is not None else "60天以上(老批次)"
+                    reason = (f"上架{d}零销量——降到最低档12%促活（最低就到12%不再往下）；"
+                              f"出了第一单转正常评档")
+            elif m_need > TIERS[-1][1]:
                 tier, target = "delist", None
-                reason = (f"90天退货{returns}次、净贡献−${-net:,.0f}——继续卖一单多亏一单，"
-                          f"提价救不了，建议下架止血")
-            elif (ratio is not None and ratio > RISK_RATIO and orders >= MIN_ORDERS_SIGNAL):
-                tier, target = "risk", RISK_MARGIN
-                how = "货回海外仓只亏运费" if wh_n else "货值(退货回不来时)"
-                reason = (f"退一单亏${loss_single:,.0f}（{how}），一单只赚${unit_profit:,.0f}"
-                          f"——{ratio:.0f}倍，12%的毛利兜不住退货风险，目标提到15%，"
-                          f"多的3个点是退货保险")
-            elif (gm is not None and gm < STD_MARGIN - REPAIR_TOL
-                  and orders >= MIN_ORDERS_SIGNAL):
-                tier, target = "repair", STD_MARGIN
-                reason = (f"按12%定的价，实际卖出毛利只有{gm*100:.1f}%（{orders}单证据）"
-                          f"——成本涨了价没跟/折扣打穿/定价错误，逐单核实后修回12%")
+                reason = (f"预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，类目率{prior*100:.1f}%）"
+                          f"×货值占比{lgd*100:.0f}% = 退货税{tax*100:.1f}个点，"
+                          f"18%毛利都盖不住10%基线——建议下架止血")
             else:
-                tier, target = "standard", STD_MARGIN
-                if gm is not None:
-                    reason = (f"实际毛利{gm*100:.1f}%达标、退货风险正常（{orders}单）"
-                              f"——卖得好的不动，保持12%")
+                for key, tm in TIERS:
+                    if tm >= m_need:
+                        tier, target = key, tm
+                        break
+                if tier == "tier_12":
+                    reason = (f"卖得好退货低：{orders}单仅{returns}退，预期退货率{r_hat*100:.1f}%"
+                              f"（含类目先验修正），退货税{tax*100:.1f}个点——12%毛利即可稳过基线，"
+                              f"给最低档保价格竞争力")
+                elif tier == "tier_15":
+                    reason = (f"预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，类目率{prior*100:.1f}%），"
+                              f"退货税{tax*100:.1f}个点——15%档=10%基线+退货税+余量")
                 else:
-                    reason = f"有{orders}单但样本太小，按标准档12%持有，攒数据再评"
+                    reason = (f"退货偏高：预期退货率{r_hat*100:.1f}%（{orders}单{returns}退，"
+                              f"类目率{prior*100:.1f}%），退货税{tax*100:.1f}个点——"
+                              f"顶到18%档才盖得住基线")
 
             counts[tier] = counts.get(tier, 0) + 1
             rows.append((store_key, sku, tier, target, reason,
-                         json.dumps(ev, ensure_ascii=False),
-                         1 if sku in suspect_skus else 0,
-                         orders, returns, margin, gm, listed_days,
-                         cur_price or None, cost or None, now))
+                         json.dumps(ev, ensure_ascii=False), 0,
+                         orders, returns, None,
+                         round(returns / orders, 4) if orders else None,
+                         listed_days, cur_price or None, cost or None, now))
 
         sql = """
             INSERT INTO order_system.pricing_tier
@@ -184,7 +206,7 @@ MAX_STEP_DOWN = 0.20
 MIN_DEVIATION = 0.01     # 目标价和现价差1%以内不折腾
 COLD_PROBE_BATCH = 500   # 冷启动试探每轮最多放500个候选（分批观察激活率，防一次全动）
 
-ACTION_TIERS = ("risk", "repair", "cold_probe")   # 有价格动作的档位
+ACTION_TIERS = ("tier_12", "tier_15", "tier_18", "cold_12")   # 有价格动作的档位
 
 
 def generate_plan_candidates(store_key: str) -> Dict[str, Any]:

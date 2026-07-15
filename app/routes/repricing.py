@@ -293,12 +293,12 @@ def dashboard():
 
 
 TIER_META = {
-    "standard":   ("标准档 12%", "#1baf7a", "退货风险正常。已达标的一律不动——对卖得好的SKU公平"),
-    "risk":       ("风险档 15%", "#d03b3b", "退一单亏的钱超过5倍单件利润，12%兜不住退货，多3个点是保险"),
-    "repair":     ("修复档", "#eda100", "按12%定的价、实际卖出毛利掉下去了（成本涨/折扣打穿），核实后修回12%"),
-    "delist":     ("下架档", "#52514e", "退货≥2次且净亏——提价救不了，建议下架止血"),
-    "cold_watch": ("冷启动·观察", "#98a1ad", "上架不足60天零销量，新品爬坡期，先不动"),
-    "cold_probe": ("冷启动·试探", "#2a78d6", "上架超60天零销量——降到10%毛利试探出第一单，出单即转正常评档"),
+    "tier_12":    ("12%档·竞争", "#1baf7a", "卖得好退货低（预期退货税≤2个点），最低档保价格竞争力，12%−退货税仍≥10%基线"),
+    "tier_15":    ("15%档·标准", "#2a78d6", "默认档（新品也从这里起步）：15% = 10%基线 + 退货税 + 余量"),
+    "tier_18":    ("18%档·高退货", "#d03b3b", "预期退货率偏高，顶到18%才能盖住基线"),
+    "delist":     ("下架档", "#52514e", "退货税连18%都盖不住（预期退货率>11%）——提价救不了，建议下架止血"),
+    "cold_watch": ("零销量·观察", "#98a1ad", "上架不足60天零销量，新品观察期，不动价"),
+    "cold_12":    ("零销量·降档促活", "#eda100", "上架超60天零销量——降到最低档12%促活（最低就到12%），出单即转正常评档"),
 }
 
 
@@ -307,8 +307,8 @@ def pricing_plan():
     store_key = _current_store()
     rows = _query(
         """SELECT * FROM order_system.pricing_tier
-           WHERE store_key=%s ORDER BY FIELD(tier,'delist','risk','repair',
-                 'cold_probe','cold_watch','standard'), orders_90d DESC""",
+           WHERE store_key=%s ORDER BY FIELD(tier,'delist','tier_18','tier_15',
+                 'cold_12','cold_watch','tier_12'), orders_90d DESC""",
         (store_key,))
     # 最新plan候选的目标价（折扣后）贴到方案行上，方案页直接看得到"要改成多少钱"
     plan_prices: Dict[str, Dict] = {}
@@ -534,7 +534,7 @@ def push_one(shop_sku):
             trow = _query(
                 """SELECT target_margin FROM order_system.pricing_tier
                    WHERE store_key=%s AND shop_sku=%s AND target_margin IS NOT NULL
-                     AND tier IN ('risk','repair','cold_probe')""", (store_key, shop_sku))
+                     AND tier IN ('tier_12','tier_15','tier_18','cold_12')""", (store_key, shop_sku))
             if trow:
                 tier_margin = float(trow[0]["target_margin"])
         bd = calculate_breakdown(
@@ -791,7 +791,7 @@ def push_batch():
         tier_targets = {r["shop_sku"]: float(r["target_margin"]) for r in _query(
             """SELECT shop_sku, target_margin FROM order_system.pricing_tier
                WHERE store_key=%s AND target_margin IS NOT NULL
-                 AND tier IN ('risk','repair','cold_probe')""", (store_key,))}
+                 AND tier IN ('tier_12','tier_15','tier_18','cold_12')""", (store_key,))}
     from app.services.pricing_plan_service import MAX_STEP_UP, MAX_STEP_DOWN
 
     payloads = []
