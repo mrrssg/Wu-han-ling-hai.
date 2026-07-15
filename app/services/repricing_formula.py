@@ -160,6 +160,7 @@ def calculate_breakdown(
     height_in: float,
     weight_lb: float,
     formula_variant: str = DEFAULT_FORMULA_VARIANT,
+    divisor_override: Optional[float] = None,
 ) -> PriceBreakdown:
     """Compute every intermediate value used by the Feishu formula chain.
     Returns a structured breakdown so callers can log every number to
@@ -191,9 +192,11 @@ def calculate_breakdown(
     return_cost_est = rs_total * RETURN_COST_RATIO
     total_cost = cost + return_cost_est
 
+    # divisor_override: 分档定价用——divisor = 1 − 佣金 − 目标毛利（lowes语义），
+    # 让同一公式按每个SKU自己的档位目标算价（12%→0.73, 15%→0.70, 10%→0.75）
     formula_price = (
         cost * variant["cost_factor"] + return_cost_est
-    ) / variant["divisor"]
+    ) / (divisor_override if divisor_override else variant["divisor"])
     discount_price = round(formula_price, 0) - ROUNDED_OFFSET
     origin_price = discount_price / discount_factor
 

@@ -34,6 +34,16 @@ def _qall(sql):
         conn.close()
 
 
+def _qall_p(sql, params):
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall() or []
+    finally:
+        conn.close()
+
+
 ISSUE_TYPE_NAMES = {
     "cell_below_baseline": "利润率破线",
     "negative_ev_sku": "负期望SKU",
@@ -100,29 +110,32 @@ def index():
                           "href": url_for("profit_control.issues"), "danger": danger})
 
     def _todo_repricing():
-        # 待改价 = 每店最新监控run里 dry_run 且之后没有 success 推价记录的SKU
+        # 待改价 = 每店最新 监控run(mon-)+分档定价run(plan-) 的 dry_run 去重合并，
+        # 减去之后已 success 推价的（口径同候选页 _all_candidates）
         from app.services.repricing_stores import REPRICING_STORES
         for key, cfg in REPRICING_STORES.items():
-            latest = _q1(
-                """SELECT run_id FROM order_system.offer_price_change_log
-                   WHERE run_id LIKE %s AND status='dry_run'
-                   ORDER BY triggered_at DESC LIMIT 1""", (f"mon-{key}-%",))
-            if not latest:
-                continue
-            r = _q1(
-                """SELECT COUNT(*) AS n FROM order_system.offer_price_change_log log
-                   WHERE log.run_id=%s AND log.status='dry_run'
-                     AND NOT EXISTS (
-                         SELECT 1 FROM order_system.offer_price_change_log later
-                          WHERE later.shop_sku = log.shop_sku
-                            AND later.store_key = %s
-                            AND later.triggered_at > log.triggered_at
-                            AND later.status = 'success')""",
-                (latest["run_id"], key))
-            n = int(r["n"] or 0) if r else 0
-            if n:
+            skus = set()
+            for prefix in ("mon", "plan"):
+                latest = _q1(
+                    """SELECT run_id FROM order_system.offer_price_change_log
+                       WHERE run_id LIKE %s AND status='dry_run'
+                       ORDER BY triggered_at DESC LIMIT 1""", (f"{prefix}-{key}-%",))
+                if not latest:
+                    continue
+                rows = _qall_p(
+                    """SELECT log.shop_sku FROM order_system.offer_price_change_log log
+                       WHERE log.run_id=%s AND log.status='dry_run'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM order_system.offer_price_change_log later
+                              WHERE later.shop_sku = log.shop_sku
+                                AND later.store_key = %s
+                                AND later.triggered_at > log.triggered_at
+                                AND later.status = 'success')""",
+                    (latest["run_id"], key))
+                skus.update(r["shop_sku"] for r in rows)
+            if skus:
                 todos.append({"icon": "💲", "label": f"待改价（{cfg['label']}）",
-                              "count": n, "money": None,
+                              "count": len(skus), "money": None,
                               "href": url_for("repricing.candidates_page", store=key),
                               "danger": False})
 

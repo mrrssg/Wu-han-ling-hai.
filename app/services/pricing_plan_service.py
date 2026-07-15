@@ -172,3 +172,135 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
     finally:
         conn.close()
     return {"store_key": store_key, "offers": len(rows), "tiers": counts}
+
+
+# =====================================================================
+# 执行层：按档位目标毛利生成待改价候选（dry_run，人工确认后经OF24推送）
+# =====================================================================
+
+# 单步改价安全阀：一次最多提15%、最多降20%，防一步跳太猛（被夹住的下轮再走一步）
+MAX_STEP_UP = 0.15
+MAX_STEP_DOWN = 0.20
+MIN_DEVIATION = 0.01     # 目标价和现价差1%以内不折腾
+
+ACTION_TIERS = ("risk", "repair", "cold_probe")   # 有价格动作的档位
+
+
+def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
+    """把 pricing_tier 的档位目标翻译成待改价候选（status=dry_run, run_id=plan-*）。
+    只生成候选，绝不直接改价——推送仍走 candidates 页人工确认 + OF24 管道。
+    目前只支持 lowes 系店铺（divisor = 1 − 佣金 − 目标毛利 的语义是lowes公式的）。"""
+    if not store_key.startswith("lowes"):
+        raise ValueError("plan candidates 目前只支持 lowes 系店铺")
+
+    from app.services.repricing_monitor_service import (
+        fetch_active_offers, fetch_pricing_configs, lookup_supplier_price,
+        is_blacklisted, _log)
+    from app.services.repricing_formula import calculate_breakdown, realised_margin
+    from app.services.repricing_stores import get_store
+
+    scfg = get_store(store_key)
+    now = datetime.now(CN_TZ)
+    run_id = f"plan-{store_key}-{now.strftime('%Y%m%d%H%M%S')}"
+
+    conn = DBManager.get_connection()
+    try:
+        tiers = {r["shop_sku"]: r for r in _qall(conn, """
+            SELECT shop_sku, tier, target_margin FROM order_system.pricing_tier
+            WHERE store_key=%s AND tier IN %s AND target_margin IS NOT NULL""",
+            (store_key, ACTION_TIERS))}
+    finally:
+        conn.close()
+
+    offers = fetch_active_offers(store_key)
+    configs = fetch_pricing_configs(store_key)
+    summary = {"run_id": run_id, "tier_skus": len(tiers), "candidates": 0,
+               "skip_no_cfg": 0, "skip_no_supplier_price": 0, "skip_small_dev": 0,
+               "skip_blacklist": 0, "skip_no_price": 0, "clamped": 0,
+               "by_tier": {}}
+
+    for ctx in offers:
+        t = tiers.get(ctx.shop_sku)
+        if not t:
+            continue
+        if is_blacklisted(ctx.shop_sku):
+            summary["skip_blacklist"] += 1
+            continue
+        cfg = configs.get(ctx.warehouse_sku)
+        if not cfg or cfg.get("discount_factor") is None \
+                or cfg.get("commission_rate") is None \
+                or cfg.get("return_shipping_base") is None:
+            summary["skip_no_cfg"] += 1
+            continue
+        supplier = (cfg.get("supplier") or "Costway").strip() or "Costway"
+        supplier_price, _upd = lookup_supplier_price(ctx.warehouse_sku, supplier)
+        if not supplier_price:
+            summary["skip_no_supplier_price"] += 1
+            continue
+        discount_factor = float(cfg["discount_factor"])
+        commission = float(cfg["commission_rate"])
+        target_margin = float(t["target_margin"])
+        cur_discount = ctx.db_discount_price or (
+            ctx.db_origin_price * discount_factor if ctx.db_origin_price else None)
+        if not cur_discount or cur_discount <= 0:
+            summary["skip_no_price"] += 1
+            continue
+
+        divisor = 1.0 - commission - target_margin
+        bd = calculate_breakdown(
+            supplier=supplier, supplier_price=float(supplier_price),
+            return_shipping_base=float(cfg["return_shipping_base"]),
+            discount_factor=discount_factor,
+            length_in=float(cfg.get("length_in") or 0),
+            width_in=float(cfg.get("width_in") or 0),
+            height_in=float(cfg.get("height_in") or 0),
+            weight_lb=float(cfg.get("weight_lb") or 0),
+            formula_variant="lowes", divisor_override=divisor)
+        target_discount = round(bd.discount_price, 2)
+        dev = (target_discount - cur_discount) / cur_discount
+        clamp_note = ""
+        if dev > MAX_STEP_UP:
+            target_discount = round(cur_discount * (1 + MAX_STEP_UP), 2)
+            clamp_note = f"（单步限+{MAX_STEP_UP:.0%}，剩余下轮再走）"
+            summary["clamped"] += 1
+        elif dev < -MAX_STEP_DOWN:
+            target_discount = round(cur_discount * (1 - MAX_STEP_DOWN), 2)
+            clamp_note = f"（单步限−{MAX_STEP_DOWN:.0%}）"
+            summary["clamped"] += 1
+        dev = (target_discount - cur_discount) / cur_discount
+        if abs(dev) < MIN_DEVIATION:
+            summary["skip_small_dev"] += 1
+            continue
+        target_origin = round(target_discount / discount_factor, 2)
+
+        margin_before = realised_margin(
+            current_origin_price=ctx.db_origin_price or target_origin,
+            supplier=supplier, supplier_price=float(supplier_price),
+            return_shipping_base=float(cfg["return_shipping_base"]),
+            discount_factor=discount_factor, commission_rate=commission,
+            length_in=float(cfg.get("length_in") or 0),
+            width_in=float(cfg.get("width_in") or 0),
+            height_in=float(cfg.get("height_in") or 0),
+            weight_lb=float(cfg.get("weight_lb") or 0))
+
+        _log(store_key, run_id, "plan", ctx, {
+            "status": "dry_run",
+            "decision_reason": (
+                f"[定价方案·{t['tier']}] 目标毛利{target_margin:.0%}："
+                f"现折扣价${cur_discount:.2f}→${target_discount:.2f}"
+                f"（{dev:+.1%}）{clamp_note}"),
+            "supplier": supplier,
+            "supplier_price_db": float(supplier_price),
+            "new_cost": round(bd.cost, 4),
+            "discount_factor": discount_factor,
+            "commission_rate": commission,
+            "return_shipping_base": float(cfg["return_shipping_base"]),
+            "profit_margin_before": round(margin_before, 4),
+            "profit_margin_after": round(target_margin, 4),
+            "new_origin_price": target_origin,
+            "new_discount_price": target_discount,
+            "target_origin_price": target_origin,
+        })
+        summary["candidates"] += 1
+        summary["by_tier"][t["tier"]] = summary["by_tier"].get(t["tier"], 0) + 1
+    return summary

@@ -165,60 +165,43 @@ def _summary_counts(store_key: str) -> Dict[str, int]:
 
 
 def _top_candidates(store_key: str, limit: int = 10) -> List[Dict]:
-    """dry_run SKUs from the latest monitor run, minus already-pushed."""
-    run_like = f"mon-{store_key}-%"
-    latest = _query(
-        """SELECT run_id FROM order_system.offer_price_change_log
-            WHERE run_id LIKE %s AND status='dry_run'
-            ORDER BY triggered_at DESC LIMIT 1""",
-        (run_like,),
-    )
-    if not latest:
-        return []
-    return _query(
-        """SELECT log.shop_sku, log.warehouse_sku, log.supplier,
-                  log.old_origin_price, log.new_origin_price, log.new_cost,
-                  log.profit_margin_before, log.return_shipping_base,
-                  log.supplier_price_db
-             FROM order_system.offer_price_change_log log
-            WHERE log.run_id=%s AND log.status='dry_run'
-              AND NOT EXISTS (
-                  SELECT 1 FROM order_system.offer_price_change_log later
-                   WHERE later.shop_sku = log.shop_sku
-                     AND later.store_key = %s
-                     AND later.triggered_at > log.triggered_at
-                     AND later.status = 'success'
-              )
-            ORDER BY log.profit_margin_before ASC
-            LIMIT %s""",
-        (latest[0]["run_id"], store_key, limit),
-    )
+    """dry_run SKUs from the latest monitor+plan runs, minus already-pushed."""
+    return _all_candidates(store_key)[:limit]
 
 
 def _all_candidates(store_key: str) -> List[Dict]:
-    """Every dry_run row from the latest run not yet pushed."""
-    run_like = f"mon-{store_key}-%"
-    latest = _query(
-        """SELECT run_id FROM order_system.offer_price_change_log
-            WHERE run_id LIKE %s AND status='dry_run'
-            ORDER BY triggered_at DESC LIMIT 1""",
-        (run_like,),
-    )
-    if not latest:
-        return []
-    return _query(
-        """SELECT log.* FROM order_system.offer_price_change_log log
-            WHERE log.run_id=%s AND log.status='dry_run'
-              AND NOT EXISTS (
-                  SELECT 1 FROM order_system.offer_price_change_log later
-                   WHERE later.shop_sku = log.shop_sku
-                     AND later.store_key = %s
-                     AND later.triggered_at > log.triggered_at
-                     AND later.status = 'success'
-              )
-            ORDER BY log.profit_margin_before ASC""",
-        (latest[0]["run_id"], store_key),
-    )
+    """最新 mon-run（成本监控）+ 最新 plan-run（分档定价）的 dry_run 候选合并，
+    去掉已推价的；同SKU两边都有时保留 plan 行（档位目标优先）。"""
+    rows: List[Dict] = []
+    seen: set = set()
+    for prefix in ("plan", "mon"):
+        latest = _query(
+            """SELECT run_id FROM order_system.offer_price_change_log
+                WHERE run_id LIKE %s AND status='dry_run'
+                ORDER BY triggered_at DESC LIMIT 1""",
+            (f"{prefix}-{store_key}-%",),
+        )
+        if not latest:
+            continue
+        for r in _query(
+            """SELECT log.* FROM order_system.offer_price_change_log log
+                WHERE log.run_id=%s AND log.status='dry_run'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM order_system.offer_price_change_log later
+                       WHERE later.shop_sku = log.shop_sku
+                         AND later.store_key = %s
+                         AND later.triggered_at > log.triggered_at
+                         AND later.status = 'success'
+                  )""",
+            (latest[0]["run_id"], store_key),
+        ):
+            if r["shop_sku"] in seen:
+                continue
+            seen.add(r["shop_sku"])
+            rows.append(r)
+    rows.sort(key=lambda r: (r["profit_margin_before"] is None,
+                             r["profit_margin_before"] or 0))
+    return rows
 
 
 def _alerts(store_key: str) -> List[Dict]:
@@ -529,14 +512,35 @@ def push_one(shop_sku):
             return_shipping_base=rb, discount_factor=df, commission_rate=cr,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
         )
+        # 分档定价：SKU在方案里有目标毛利的按档位算（lowes语义）+单步限幅
+        tier_margin = None
+        if formula_variant == "lowes":
+            trow = _query(
+                """SELECT target_margin FROM order_system.pricing_tier
+                   WHERE store_key=%s AND shop_sku=%s AND target_margin IS NOT NULL
+                     AND tier IN ('risk','repair','cold_probe')""", (store_key, shop_sku))
+            if trow:
+                tier_margin = float(trow[0]["target_margin"])
         bd = calculate_breakdown(
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
             formula_variant=formula_variant,
+            divisor_override=(1.0 - cr - tier_margin) if tier_margin else None,
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
+        if tier_margin:
+            from app.services.pricing_plan_service import MAX_STEP_UP, MAX_STEP_DOWN
+            cur_disc = ctx.db_discount_price or (
+                ctx.db_origin_price * df if ctx.db_origin_price else None)
+            if cur_disc and cur_disc > 0:
+                if target_discount > cur_disc * (1 + MAX_STEP_UP):
+                    target_discount = round(cur_disc * (1 + MAX_STEP_UP), 2)
+                    target = round(target_discount / df, 2)
+                elif target_discount < cur_disc * (1 - MAX_STEP_DOWN):
+                    target_discount = round(cur_disc * (1 - MAX_STEP_DOWN), 2)
+                    target = round(target_discount / df, 2)
 
         # Both stores are non_dropship: always OF21 full-fetch + rebuild so
         # every field is preserved (OF24 resets anything not sent).
@@ -764,6 +768,16 @@ def push_batch():
     by_sku = {o.shop_sku: o for o in offers}
     configs = fetch_pricing_configs(store_key)
 
+    # 分档定价：SKU在方案里有目标毛利的，按它的档位算价（divisor=1−佣金−目标毛利，
+    # lowes公式语义），并套单步限幅；没有档位的走店铺默认公式
+    tier_targets = {}
+    if formula_variant == "lowes":
+        tier_targets = {r["shop_sku"]: float(r["target_margin"]) for r in _query(
+            """SELECT shop_sku, target_margin FROM order_system.pricing_tier
+               WHERE store_key=%s AND target_margin IS NOT NULL
+                 AND tier IN ('risk','repair','cold_probe')""", (store_key,))}
+    from app.services.pricing_plan_service import MAX_STEP_UP, MAX_STEP_DOWN
+
     payloads = []
     rejections = []         # (sku, reason)
     targets_by_sku = {}     # sku -> {target, margin, cfg, supplier, sp, cost, bd}
@@ -816,14 +830,26 @@ def push_batch():
             return_shipping_base=rb, discount_factor=df, commission_rate=cr,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
         )
+        tier_margin = tier_targets.get(sku)
         bd = calculate_breakdown(
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
             formula_variant=formula_variant,
+            divisor_override=(1.0 - cr - tier_margin) if tier_margin else None,
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
+        # 档位改价套单步限幅（和plan候选生成同一把安全阀）
+        cur_disc = ctx.db_discount_price or (
+            ctx.db_origin_price * df if ctx.db_origin_price else None)
+        if tier_margin and cur_disc and cur_disc > 0:
+            if target_discount > cur_disc * (1 + MAX_STEP_UP):
+                target_discount = round(cur_disc * (1 + MAX_STEP_UP), 2)
+                target = round(target_discount / df, 2)
+            elif target_discount < cur_disc * (1 - MAX_STEP_DOWN):
+                target_discount = round(cur_disc * (1 - MAX_STEP_DOWN), 2)
+                target = round(target_discount / df, 2)
         targets_by_sku[sku] = {
             "ctx": ctx, "target": target, "target_discount": target_discount,
             "margin": margin,
