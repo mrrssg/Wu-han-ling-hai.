@@ -174,9 +174,11 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         store_am = sum(cat_gross.values()) / store_netsale
 
         def level_pick(sku, orders90, cat):
-            """返回 (损失率, 实际毛利, 数据来源)"""
-            if orders90 >= MIN_ORDERS_OWN:
-                stm = sku_sale_m.get(sku)
+            """返回 (损失率, 实际毛利, 数据来源)。
+            门槛用"满30天窗口内的单数"——损失率是在窗口里算的，样本就得数窗口的"""
+            stm = sku_sale_m.get(sku)
+            orders_m = int(stm["orders"] or 0) if stm else 0
+            if orders_m >= MIN_ORDERS_OWN:
                 sale_m = float(stm["sale"] or 0) if stm else 0.0
                 pr = sku_profit.get(sku)
                 ns = (float(pr["sale"] or 0) - sku_ret_sale.get(sku, 0.0)) if pr else 0.0
