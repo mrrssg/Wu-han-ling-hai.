@@ -63,6 +63,19 @@ def index():
     unshipped = []  # {label, shipping, waiting}
     returns_y = {"total": 0, "rows": []}   # 昨日退货 per 店铺
 
+    # 首页十几条统计共享一条连接（逐条开连接≈5秒且容易在2个worker下堆积）
+    conn = DBManager.get_connection()
+
+    def q1(sql, params=None):
+        with conn.cursor() as cur:
+            cur.execute(sql, params) if params else cur.execute(sql)
+            return cur.fetchone()
+
+    def qall(sql, params=None):
+        with conn.cursor() as cur:
+            cur.execute(sql, params) if params else cur.execute(sql)
+            return cur.fetchall() or []
+
     def _safe(fn):
         try:
             fn()
@@ -70,7 +83,7 @@ def index():
             pass
 
     def _todo_unfiled():
-        r = _q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
+        r = q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
                    FROM order_system.return_case
                    WHERE state='pending' AND supplier='Costway' AND cost >= 20
                      AND claim_filed=0 AND DATEDIFF(CURDATE(), order_date) <= 90""")
@@ -80,7 +93,7 @@ def index():
                           "href": url_for("profit_control.actions"), "danger": True})
 
     def _todo_near_writeoff():
-        r = _q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
+        r = q1("""SELECT COUNT(*) AS n, COALESCE(SUM(exposure),0) AS v
                    FROM order_system.return_case
                    WHERE state='pending' AND supplier='Costway'
                      AND DATEDIFF(CURDATE(), return_date) >= 150""")
@@ -90,7 +103,7 @@ def index():
                           "href": url_for("profit_control.actions"), "danger": True})
 
     def _todo_sentinel():
-        r = _q1("""SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings
+        r = q1("""SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings
                    WHERE verdict='severe' AND status='open'""")
         if r and int(r["n"] or 0):
             todos.append({"icon": "🔴", "label": "Listing严重不符（哨兵发现，未修复）",
@@ -98,7 +111,7 @@ def index():
                           "href": url_for("profit_control.sentinel"), "danger": True})
 
     def _todo_issues():
-        rows = _qall("""SELECT issue_type, COUNT(*) AS n, COALESCE(SUM(impact_usd),0) AS v
+        rows = qall("""SELECT issue_type, COUNT(*) AS n, COALESCE(SUM(impact_usd),0) AS v
                         FROM order_system.issue_log WHERE status='open'
                         GROUP BY issue_type ORDER BY v DESC""")
         for r in rows:
@@ -116,13 +129,13 @@ def index():
         for key, cfg in REPRICING_STORES.items():
             skus = set()
             for prefix in ("mon", "plan"):
-                latest = _q1(
+                latest = q1(
                     """SELECT run_id FROM order_system.offer_price_change_log
                        WHERE run_id LIKE %s AND status='dry_run'
                        ORDER BY triggered_at DESC LIMIT 1""", (f"{prefix}-{key}-%",))
                 if not latest:
                     continue
-                rows = _qall_p(
+                rows = qall(
                     """SELECT log.shop_sku FROM order_system.offer_price_change_log log
                        WHERE log.run_id=%s AND log.status='dry_run'
                          AND NOT EXISTS (
@@ -142,7 +155,7 @@ def index():
     def _unshipped():
         # 权威口径（用户 2026-07-15 定）：Mirakl同步表 order_state，
         # SHIPPING=已接单待发货，WAITING_ACCEPTANCE=还没接单（更急）。
-        rows = _qall("""
+        rows = qall("""
             SELECT sc.platform AS label, d.order_state, COUNT(*) AS n FROM (
                 SELECT shop_id, order_state FROM order_system.macy_order_data
                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
@@ -164,7 +177,7 @@ def index():
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
     def _returns_yesterday():
-        rows = _qall("""
+        rows = qall("""
             SELECT CONCAT(platform, '-', shop_name) AS label, COUNT(*) AS n
             FROM order_system.mirakl_returns
             WHERE DATE(date_created) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
@@ -172,9 +185,12 @@ def index():
         returns_y["rows"] = [{"label": r["label"], "n": int(r["n"] or 0)} for r in rows]
         returns_y["total"] = sum(r["n"] for r in returns_y["rows"])
 
-    for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-               _todo_repricing, _unshipped, _returns_yesterday):
-        _safe(fn)
+    try:
+        for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
+                   _todo_repricing, _unshipped, _returns_yesterday):
+            _safe(fn)
+    finally:
+        conn.close()
 
     return render_template('index.html', todos=todos, unshipped=unshipped,
                            returns_y=returns_y)
