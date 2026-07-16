@@ -548,6 +548,8 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
         "alert_unsupported_supplier": 0,
     }
 
+    from app.services.pricing_plan_service import COLD_BATCH
+
     by_tier: Dict[str, int] = {}
     for offer in active_offers:
         wh = offer.get("warehouse_sku")
@@ -557,6 +559,12 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
                            formula_variant=formula_variant,
                            discount_factor_override=discount_factor_override,
                            tier_row=tier_row)
+        # 零销量促活与API管道共用分批阀：每轮最多COLD_BATCH个（用户2026-07-17定：导出也压批）
+        # 这批传完夜间同步后价格变成"已一致"，下一轮自动放下一批
+        if decision["status"] == "would_update" \
+                and (tier_row or {}).get("tier") == "cold_12" \
+                and by_tier.get("cold_12", 0) >= COLD_BATCH:
+            decision = {"status": "skipped_cold_deferred"}
         decisions.append((offer, decision))
         summary[decision["status"]] = summary.get(decision["status"], 0) + 1
 
