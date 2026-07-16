@@ -881,9 +881,22 @@ def _claim_filed_list() -> List[Dict]:
         ORDER BY days_waiting DESC, exposure DESC LIMIT 1000""")
 
 
-def _delist_list() -> List[Dict]:
-    """下架候选：排除已被人工标记"已下架"的（action_log delist/executed）。"""
-    return _query("""
+# 接了分档定价的店铺：利润台账店名 -> (pricing_tier店key, 平台, 店名, mirakl shop_id)
+PLAN_TIER_STORES = {"Lowes-Autool": ("lowes_autool", "Lowes", "autool", 10)}
+REPAIR_WATCH_DAYS = 30      # 修价后观察期：满30天 或 修后出10单 仍负期望 → 回下架候选
+REPAIR_WATCH_ORDERS = 10
+
+
+def _delist_list():
+    """下架候选双队列（用户2026-07-17定案）。
+    有定价档位的店铺（Lowes-Autool）：
+      下架候选 = 档位判下架 / 价格已在档位公式价却仍负期望（修价救不了的实证）
+      待修价验证 = 负期望但价格还没修（挂着待改价候选）或 修价后在观察期内——
+        不消失，观察期（满30天或修后出10单）过完仍负期望自动回到下架候选
+      已不在卖的剔除（过期条目）
+    其它店铺维持原口径：近90天退货≥2且净贡献<−$50。
+    返回 (下架候选, 待修价验证, 剔除数)"""
+    rows = _query("""
         SELECT s.shop_sku, s.store, s.operator, s.supplier, s.orders, s.sale, s.profit_gross,
                s.returns_cnt, s.loss_expected, s.net, s.margin
         FROM order_system.profit_sku_90d s
@@ -893,6 +906,96 @@ def _delist_list() -> List[Dict]:
             WHERE a.action_type='delist' AND a.status='executed'
               AND a.target=CONCAT(s.shop_sku,'@',s.store))
         ORDER BY s.net ASC LIMIT 300""")
+
+    lw = [r for r in rows if r["store"] in PLAN_TIER_STORES]
+    tmap: Dict[str, str] = {}
+    active: set = set()
+    pending: Dict[str, float] = {}
+    pushed: Dict[str, object] = {}
+    orders_after: Dict[str, set] = {}
+    if lw:
+        store_key, platform, shop_name, shop_id = PLAN_TIER_STORES[lw[0]["store"]]
+        skus = [r["shop_sku"] for r in lw]
+        ph = ",".join(["%s"] * len(skus))
+        tmap = {r["shop_sku"]: r["tier"] for r in _query(
+            f"""SELECT shop_sku, tier FROM order_system.pricing_tier
+                WHERE store_key=%s AND shop_sku IN ({ph})""", [store_key] + skus)}
+        active = {r["shop_sku"] for r in _query(
+            f"""SELECT shop_sku FROM order_system.offerprice_listing
+                WHERE platform=%s AND shop_name=%s AND active=1 AND shop_sku IN ({ph})""",
+            [platform, shop_name] + skus)}
+        # 是否挂着待改价候选（最新 plan/mon run 的 dry_run，未被之后的 success 压制）
+        for prefix in ("plan", "mon"):
+            latest = _query(
+                """SELECT run_id FROM order_system.offer_price_change_log
+                   WHERE run_id LIKE %s AND status='dry_run'
+                   ORDER BY triggered_at DESC LIMIT 1""", (f"{prefix}-{store_key}-%",))
+            if not latest:
+                continue
+            for r in _query(
+                    f"""SELECT log.shop_sku, log.new_discount_price
+                        FROM order_system.offer_price_change_log log
+                        WHERE log.run_id=%s AND log.status='dry_run' AND log.shop_sku IN ({ph})
+                          AND NOT EXISTS (
+                            SELECT 1 FROM order_system.offer_price_change_log later
+                            WHERE later.shop_sku=log.shop_sku AND later.store_key=%s
+                              AND later.triggered_at > log.triggered_at
+                              AND later.status='success')""",
+                    [latest[0]["run_id"]] + skus + [store_key]):
+                pending.setdefault(r["shop_sku"], _f(r["new_discount_price"]))
+        pushed = {r["shop_sku"]: r["t"] for r in _query(
+            f"""SELECT shop_sku, MAX(triggered_at) AS t
+                FROM order_system.offer_price_change_log
+                WHERE store_key=%s AND status='success' AND shop_sku IN ({ph})
+                GROUP BY shop_sku""", [store_key] + skus)}
+        if pushed:
+            pskus = list(pushed)
+            pph = ",".join(["%s"] * len(pskus))
+            for r in _query(
+                    f"""SELECT offer_sku, order_id, created_date
+                        FROM order_system.lowes_order_data
+                        WHERE shop_id=%s AND order_state<>'CANCELED' AND offer_sku IN ({pph})
+                          AND created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""",
+                    [shop_id] + pskus):
+                if r["created_date"] and r["created_date"] > pushed[r["offer_sku"]]:
+                    orders_after.setdefault(r["offer_sku"], set()).add(r["order_id"])
+
+    from datetime import datetime as _dt
+    keep: List[Dict] = []
+    repair: List[Dict] = []
+    stale = 0
+    for r in rows:
+        if r["store"] not in PLAN_TIER_STORES:
+            r["note"] = ""
+            keep.append(r)
+            continue
+        sku = r["shop_sku"]
+        if sku not in active:
+            stale += 1
+            continue
+        tier = tmap.get(sku)
+        if tier == "delist":
+            r["note"] = "定价方案判下架（18%档也盖不住+窗口≥25单坐实）"
+            keep.append(r)
+        elif tier is None:
+            r["note"] = "无档位记录"
+            keep.append(r)
+        elif sku in pending:
+            r["note"] = f"待修价：目标折扣价${pending[sku]:.2f}（去待改价清单确认推送）"
+            repair.append(r)
+        else:
+            t0 = pushed.get(sku)
+            days = (_dt.now() - t0).days if t0 else None
+            n_after = len(orders_after.get(sku, ()))
+            if t0 and days < REPAIR_WATCH_DAYS and n_after < REPAIR_WATCH_ORDERS:
+                r["note"] = (f"修价生效{days}天/修后出{n_after}单——观察期"
+                             f"（满{REPAIR_WATCH_DAYS}天或{REPAIR_WATCH_ORDERS}单仍亏自动回下架候选）")
+                repair.append(r)
+            else:
+                r["note"] = ("修价满观察期仍负期望——救不回来" if t0 else
+                             f"现价已≈{tier}档公式价仍负期望（运营池均值盖不住它自己的退货）")
+                keep.append(r)
+    return keep, repair, stale
 
 
 def _delist_marked() -> List[Dict]:
@@ -930,7 +1033,7 @@ CLAIM_AGE_BUCKETS = [
 @profit_control_bp.route("/actions")
 def actions():
     recover = _recover_list()
-    delist = _delist_list()
+    delist, delist_repair, delist_stale = _delist_list()
     raise_rows = _raise_list()
     totals = {
         "recover_expo": sum(_f(r["exposure"]) for r in recover),
@@ -996,6 +1099,7 @@ def actions():
                            lowes_track=lowes_track,
                            claim_stores=sorted(stores_count.items(), key=lambda x: -x[1]),
                            marked=_delist_marked(), delist_warns=delist_warns,
+                           delist_repair=delist_repair, delist_stale=delist_stale,
                            counts={"recover": len(recover), "delist": len(delist),
                                    "raise": len(raise_rows)})
 
@@ -1064,7 +1168,7 @@ def actions_export():
     elif which == "recover_claimed":
         rows, name = _claim_filed_list(), "已登记未退款"
     elif which == "delist":
-        rows, name = _delist_list(), "下架候选"
+        rows, name = _delist_list()[0], "下架候选"
     else:
         rows, name = _raise_list(), "提价候选"
     buf = io.StringIO()

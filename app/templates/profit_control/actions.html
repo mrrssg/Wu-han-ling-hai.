@@ -237,8 +237,11 @@
     </div>
     {% endif %}
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU。你在店铺后台下架后点「已下架」，该行从清单消失；
-        <b>之后若再出现该SKU的销量，系统会自动报警</b>。<a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_delist"></a></span>
+      <span class="text-muted small">90天内退货≥2次且净贡献&lt;−$50的SKU。有定价档位的店铺（Lowes-Autool）按"说明"列分流：
+        价格没修的先去修价（下方"待修价验证"），修不了/修了还亏的才留在这里。你在店铺后台下架后点「已下架」，该行从清单消失；
+        <b>之后若再出现该SKU的销量，系统会自动报警</b>。
+        {% if delist_stale %}<span class="text-secondary">已剔除{{ delist_stale }}个不在卖的过期条目。</span>{% endif %}
+        <a class="pc-i bi bi-info-circle" tabindex="0" data-help="act_delist"></a></span>
       <a class="btn btn-sm btn-outline-success" href="{{ url_for('profit_control.actions_export', list='delist') }}">
         <i class="bi bi-download"></i> 导出CSV</a>
     </div>
@@ -248,6 +251,7 @@
           <th>SKU</th><th>店铺</th><th>运营</th>
           <th class="text-end">90D单数</th><th class="text-end">退货</th>
           <th class="text-end">销售$</th><th class="text-end">净贡献$</th>
+          <th>说明</th>
           <th class="text-center">操作</th></tr></thead>
         <tbody>
           {% for r in delist %}
@@ -256,15 +260,40 @@
             <td class="text-end">{{ r.orders }}</td><td class="text-end">{{ r.returns_cnt }}</td>
             <td class="text-end">{{ '{:,.0f}'.format(r.sale|float) }}</td>
             <td class="text-end fw-bold text-danger">{{ '{:,.0f}'.format(r.net|float) }}</td>
+            <td class="small" style="max-width:280px">{{ r.note or '—' }}</td>
             <td class="text-center">
               <button class="btn btn-sm btn-outline-dark"
                       onclick="markDelist('{{ r.shop_sku }}','{{ r.store }}','dl-{{ loop.index }}',this)">
                 ✅ 已下架</button></td>
           </tr>
-          {% else %}<tr><td colspan="8" class="text-center text-muted py-4">没有负期望SKU 🎉</td></tr>{% endfor %}
+          {% else %}<tr><td colspan="9" class="text-center text-muted py-4">没有负期望SKU 🎉</td></tr>{% endfor %}
         </tbody>
       </table>
     </div></div>
+    {% if delist_repair %}
+    <div class="card mt-2">
+      <div class="card-header bg-white small">
+        <b>🔧 待修价验证（{{ delist_repair|length }}个）</b>——同样是负期望SKU，但定价方案判"价格没修/刚修完"，
+        先修价再判死：<b>不会消失</b>，修价满30天或修后出10单仍亏，自动回到上面的下架候选。</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light"><tr>
+            <th>SKU</th><th>运营</th><th class="text-end">90D单数</th><th class="text-end">退货</th>
+            <th class="text-end">净贡献$</th><th>状态</th></tr></thead>
+          <tbody>
+            {% for r in delist_repair %}
+            <tr>
+              <td class="small">{{ r.shop_sku }}</td><td>{{ r.operator }}</td>
+              <td class="text-end">{{ r.orders }}</td><td class="text-end">{{ r.returns_cnt }}</td>
+              <td class="text-end text-danger">{{ '{:,.0f}'.format(r.net|float) }}</td>
+              <td class="small" style="max-width:340px">{{ r.note }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
     {% if marked %}
     <details class="mt-2">
       <summary class="small text-muted">已标记下架（{{ marked|length }}个，点开可撤销）</summary>
@@ -356,9 +385,11 @@ const HELP = {
     '<span class="src"><b>数据源</b>：return_case 台账 = '+SRC_ORDER+' × mirakl_returns × 退货登记表(tblCqER404qe57vV)</span>'},
   act_delist: {t:'下架候选口径', b:
     '<b>入选</b>：近90天退货≥2笔 且 净贡献&lt;−$50，且未被标记"已下架"。<br>'+
+    '<b>与定价方案分流（Lowes-Autool）</b>：档位判下架 或 价格已在档位公式价仍亏 → 留在下架候选；'+
+    '价格还没修/修价观察期内(&lt;30天且修后&lt;10单) → 待修价验证，仍亏自动回下架候选；已不在卖的剔除。<br>'+
     '<b>已下架监控</b>：标记后每天检查该SKU是否仍有新订单，有则生成高级别警告'+
     '（问题清单+本页顶部红条），防止"点了下架店铺却没下"。'+
-    '<span class="src"><b>数据源</b>：profit_sku_90d + action_log(标记) + issue_log(警告)</span>'},
+    '<span class="src"><b>数据源</b>：profit_sku_90d + pricing_tier(档位) + offer_price_change_log(修价) + action_log + issue_log</span>'},
   act_raise: {t:'提价候选口径', b:
     '<b>入选</b>：近90天销售≥$1,000、≥5单、净利率&lt;基线10%、且净贡献&gt;−$50。<br>'+
     '<b>建议提价%</b> = (10% − 当前净利率) ÷ 0.7（摊回佣金），1%~8%封顶。'+

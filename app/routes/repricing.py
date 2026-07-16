@@ -391,7 +391,7 @@ def pricing_plan():
         import csv as _csv
         import io as _io
         buf = _io.StringIO()
-        cols = ["shop_sku", "operator", "tier", "target_margin", "reason_text",
+        cols = ["shop_sku", "operator", "category", "tier", "target_margin", "reason_text",
                 "orders_90d", "returns_90d", "loss_rate", "margin_90d", "rate_source",
                 "listed_days", "cur_price", "cost_price", "status"]
         w = _csv.writer(buf)

@@ -331,7 +331,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                      json.dumps(ev, ensure_ascii=False), 0,
                      orders90, returns90, round(am, 4), None,
                      listed_days, cur_price or None, cost or None,
-                     round(lr, 4), src, op, now))
+                     round(lr, 4), src, op, cat, now))
 
     conn = DBManager.get_connection()
     try:
@@ -339,8 +339,9 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
             INSERT INTO order_system.pricing_tier
                 (store_key, shop_sku, tier, target_margin, reason_text, evidence_json,
                  data_suspect, orders_90d, returns_90d, margin_90d, gross_margin,
-                 listed_days, cur_price, cost_price, loss_rate, rate_source, operator, assigned_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 listed_days, cur_price, cost_price, loss_rate, rate_source, operator,
+                 category, assigned_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 tier=VALUES(tier), target_margin=VALUES(target_margin),
                 reason_text=VALUES(reason_text), evidence_json=VALUES(evidence_json),
@@ -349,7 +350,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 gross_margin=VALUES(gross_margin), listed_days=VALUES(listed_days),
                 cur_price=VALUES(cur_price), cost_price=VALUES(cost_price),
                 loss_rate=VALUES(loss_rate), rate_source=VALUES(rate_source),
-                operator=VALUES(operator), margin_90d=VALUES(margin_90d),
+                operator=VALUES(operator), category=VALUES(category),
                 assigned_at=VALUES(assigned_at)
         """
         active_skus = {r[1] for r in rows}

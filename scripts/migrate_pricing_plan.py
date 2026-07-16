@@ -47,7 +47,9 @@ ALTERS = [
     "ALTER TABLE order_system.pricing_tier ADD COLUMN loss_rate DECIMAL(8,4) DEFAULT NULL "
     "COMMENT '预期退货损失率(占销售额,已按可要回比例p折减)'",
     "ALTER TABLE order_system.pricing_tier ADD COLUMN rate_source VARCHAR(16) DEFAULT NULL "
-    "COMMENT '损失率数据来源: SKU自己/类目/全店'",
+    "COMMENT '损失率数据来源: SKU自己/运营×类目/运营全池/全店'",
+    "ALTER TABLE order_system.pricing_tier ADD COLUMN category VARCHAR(128) DEFAULT NULL "
+    "COMMENT '店铺类目(评档时从offerprice_listing带过来)'",
 ]
 
 
