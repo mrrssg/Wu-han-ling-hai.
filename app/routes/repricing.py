@@ -870,10 +870,13 @@ def push_batch():
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
-        # 档位改价套单步限幅（和plan候选生成同一把安全阀）
+        # 档位改价套单步限幅（和plan候选生成同一把安全阀）；
+        # 现价亏本(扣佣后不够成本)的=止损修价，不限幅直接到公式价
         cur_disc = ctx.db_discount_price or (
             ctx.db_origin_price * df if ctx.db_origin_price else None)
-        if tier_margin and cur_disc and cur_disc > 0:
+        breakeven = cost / (1 - cr) if cr < 1 else 0
+        loss_making = bool(cur_disc and cur_disc < breakeven)
+        if tier_margin and cur_disc and cur_disc > 0 and not loss_making:
             if target_discount > cur_disc * (1 + MAX_STEP_UP):
                 target_discount = round(cur_disc * (1 + MAX_STEP_UP), 2)
                 target = round(target_discount / df, 2)

@@ -185,6 +185,14 @@ def _extract_pricing(offer: Dict) -> Dict[str, Any]:
         out["discount_start"] = _parse_date_only(r0.get("discount_start_date")) or out["discount_start"]
         out["discount_end"] = _parse_date_only(r0.get("discount_end_date")) or out["discount_end"]
 
+    # Lowes offer 的折扣挂在顶层 discount 对象（OF21），漏掉它=数据库看不到真实卖价，
+    # 改价限幅/现售价展示都会拿"原价×折扣系数"瞎估——2026-07-16错价事故根因之一
+    d = offer.get("discount")
+    if isinstance(d, dict):
+        out["discount_price"] = _to_float(d.get("price")) or out["discount_price"]
+        out["discount_start"] = _parse_date_only(d.get("start_date")) or out["discount_start"]
+        out["discount_end"] = _parse_date_only(d.get("end_date")) or out["discount_end"]
+
     return out
 
 

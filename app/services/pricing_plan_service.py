@@ -396,7 +396,12 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         target_discount = round(bd.discount_price, 2)
         dev = (target_discount - cur_discount) / cur_discount
         clamp_note = ""
-        if dev > MAX_STEP_UP:
+        # 现价亏本(扣佣后不够成本)的SKU=止损修价，直接放行到公式价，不套限幅
+        breakeven = (bd.cost / (1 - commission)) if commission < 1 else 0
+        loss_making = cur_discount < breakeven
+        if loss_making:
+            clamp_note = "（现价亏本，止损修价不限幅）"
+        elif dev > MAX_STEP_UP:
             target_discount = round(cur_discount * (1 + MAX_STEP_UP), 2)
             clamp_note = f"（单步限+{MAX_STEP_UP:.0%}，剩余下轮再走）"
             summary["clamped"] += 1
