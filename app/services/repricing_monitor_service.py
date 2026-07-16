@@ -43,7 +43,8 @@ from app.services.repricing_formula import (
 
 
 # ---------- config (will be moved to instance/repricing_config.json later) ----------
-PROFIT_THRESHOLD = 0.05                # margin < this triggers repricing
+PROFIT_THRESHOLD = 0.05                # 无档位记录SKU的兜底触发线（灾难水位）
+TIER_MARGIN_SLACK = 0.02               # 分档联动：现毛利 < 档位目标−2点 → 修回档位公式价（2026-07-16定案）
 COST_VOLATILITY_THRESHOLD = 0.30       # |new-old|/old above this -> alert, skip
 MAX_SUPPLIER_STALE_HOURS = 36
 MAX_FAILURES_BEFORE_BLACKLIST = 3
@@ -516,6 +517,22 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     offers = fetch_active_offers(store_key)
     configs = fetch_pricing_configs(store_key)
 
+    # 分档定价联动（用户2026-07-16定案）：有档位的SKU触发线=档位目标−2点，
+    # 修价目标=该档公式价；没有档位记录的店铺/SKU沿用固定5%兜底线（macy不受影响）。
+    tier_map: Dict[str, Dict[str, Any]] = {}
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT shop_sku, tier, target_margin
+                     FROM order_system.pricing_tier WHERE store_key=%s""",
+                (store_key,))
+            tier_map = {r["shop_sku"]: r for r in cursor.fetchall() or []}
+    except Exception:
+        tier_map = {}
+    finally:
+        conn.close()
+
     print(f"[{run_id}] active offers: {len(offers)}, configs: {len(configs)}, "
           f"costway_max={freshness['costway_max']}, vevor_max={freshness['vevor_max']}")
 
@@ -704,19 +721,45 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             "profit_margin_before": round(margin, 4),
         }
 
-        if margin >= PROFIT_THRESHOLD:
+        # 分档联动：有档位 → 触发线=档位目标−2点、目标价=档位公式价；无档位 → 固定5%兜底
+        trow = tier_map.get(ctx.shop_sku)
+        tier_name = trow["tier"] if trow else None
+        tier_target = _to_float(trow.get("target_margin")) if trow else None
+
+        if tier_name == "delist":
+            _update_cost_snapshot(ctx.shop_sku, new_cost)
+            _log(store_key, run_id, "auto_monitor", ctx, {
+                **common_log,
+                "status": "skipped",
+                "decision_reason": "定价方案判为下架档——监控不修价，等人工处理",
+            })
+            summary["skipped_margin_ok"] += 1
+            continue
+
+        if tier_target is not None and commission_rate is not None:
+            threshold = tier_target - TIER_MARGIN_SLACK
+            thr_desc = f"{tier_name}档目标{tier_target:.0%}−{TIER_MARGIN_SLACK:.0%}"
+            divisor_override = 1.0 - commission_rate - tier_target
+            margin_after = tier_target
+        else:
+            threshold = PROFIT_THRESHOLD
+            thr_desc = f"固定兜底线{PROFIT_THRESHOLD:.0%}"
+            divisor_override = None
+            margin_after = 0.12
+
+        if margin >= threshold:
             _update_cost_snapshot(ctx.shop_sku, new_cost)
             _log(store_key, run_id, "auto_monitor", ctx, {
                 **common_log,
                 "status": "skipped",
                 "decision_reason": (
-                    f"margin {margin:.4%} >= threshold {PROFIT_THRESHOLD:.0%}"
+                    f"margin {margin:.4%} >= {threshold:.2%}（{thr_desc}）"
                 ),
             })
             summary["skipped_margin_ok"] += 1
             continue
 
-        # margin < threshold -> calculate target price
+        # margin < threshold -> calculate target price（有档位=该档公式价）
         bd = calculate_breakdown(
             supplier=supplier,
             supplier_price=supplier_price,
@@ -724,6 +767,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             discount_factor=discount_factor,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
             formula_variant=formula_variant,
+            divisor_override=divisor_override,
         )
         target_origin = round(bd.origin_price, 2)
         target_discount = round(bd.discount_price, 2)
@@ -741,7 +785,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 **common_log,
                 "status": "dry_run",
                 "decision_reason": (
-                    f"margin {margin:.4%} < threshold {PROFIT_THRESHOLD:.0%}, dry_run=true"
+                    f"margin {margin:.4%} < {threshold:.2%}（{thr_desc}），dry_run=true"
                 ),
                 "new_origin_price": target_origin,
                 "new_discount_price": target_discount,
@@ -750,7 +794,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 "total_cost": round(bd.total_cost, 4),
                 "formula_calc_price": round(bd.formula_calc_price, 4),
                 "target_origin_price": target_origin,
-                "profit_margin_after": 0.12,    # target the formula bakes in
+                "profit_margin_after": margin_after,    # 档位名义毛利（无档位=0.12）
                 "mirakl_called": 0,
                 "mirakl_payload_hash": payload_hash,
                 "api_call_seq": api_call_seq,
@@ -821,7 +865,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             **common_log,
             "status": "success",
             "decision_reason": (
-                f"margin {margin:.4%} < {PROFIT_THRESHOLD:.0%}; pushed OF24 HTTP 2xx"
+                f"margin {margin:.4%} < {threshold:.2%}（{thr_desc}）; pushed OF24 HTTP 2xx"
             ),
             "new_origin_price": target_origin,
             "new_discount_price": target_discount,
@@ -830,7 +874,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             "total_cost": round(bd.total_cost, 4),
             "formula_calc_price": round(bd.formula_calc_price, 4),
             "target_origin_price": target_origin,
-            "profit_margin_after": 0.12,
+            "profit_margin_after": margin_after,
             "mirakl_called": 1,
             "mirakl_import_id": resp.get("import_id"),
             "mirakl_http_status": http_status,
