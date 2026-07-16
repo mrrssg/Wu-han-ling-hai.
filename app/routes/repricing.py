@@ -308,11 +308,89 @@ def pricing_plan():
     store_key = (request.args.get("store") or "").strip()
     if not is_supported(store_key):
         store_key = "lowes_autool"
+
+    # ---- 筛选/搜索/分页（服务端——全量可翻页，筛选进SQL）----
+    tier_filter = (request.args.get("tier") or "").strip()
+    f_operator = (request.args.get("operator") or "").strip()
+    f_category = (request.args.get("category") or "").strip()
+    f_source = (request.args.get("source") or "").strip()
+    f_q = (request.args.get("q") or "").strip()
+    try:
+        page = max(1, int(request.args.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    per_page = 100
+
+    common_where = ["store_key=%s"]
+    common_params = [store_key]
+    if f_operator:
+        common_where.append("operator=%s")
+        common_params.append(f_operator)
+    if f_category:
+        common_where.append("category=%s")
+        common_params.append(f_category)
+    if f_source:
+        common_where.append("rate_source=%s")
+        common_params.append(f_source)
+    if f_q:
+        common_where.append("shop_sku LIKE %s")
+        common_params.append(f"%{f_q}%")
+    where = list(common_where)
+    params = list(common_params)
+    if tier_filter:
+        where.append("tier=%s")
+        params.append(tier_filter)
+    wsql = " AND ".join(where)
+    order_sql = ("ORDER BY FIELD(tier,'delist','tier_18','tier_15',"
+                 "'cold_12','cold_watch','tier_12'), orders_90d DESC")
+
+    if request.args.get("format") == "csv":
+        # 导出=当前筛选的全量（不分页）
+        rows = _query(
+            f"SELECT * FROM order_system.pricing_tier WHERE {wsql} {order_sql}",
+            tuple(params))
+        import csv as _csv
+        import io as _io
+        buf = _io.StringIO()
+        cols = ["shop_sku", "operator", "category", "tier", "target_margin", "reason_text",
+                "orders_90d", "returns_90d", "loss_rate", "margin_90d", "rate_source",
+                "listed_days", "cur_price", "cost_price", "status"]
+        w = _csv.writer(buf)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([r.get(c) for c in cols])
+        return Response(("﻿" + buf.getvalue()).encode("utf-8"), mimetype="text/csv",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=pricing_plan_{store_key}.csv"})
+
+    # 档位卡计数：跟随运营/类目/来源/搜索筛选（不含档位本身），点卡=在当前筛选里切档位
+    counts: Dict[str, int] = {r["tier"]: int(r["n"]) for r in _query(
+        f"SELECT tier, COUNT(*) AS n FROM order_system.pricing_tier "
+        f"WHERE {' AND '.join(common_where)} GROUP BY tier", tuple(common_params))}
+    total_filtered = int(_query(
+        f"SELECT COUNT(*) AS n FROM order_system.pricing_tier WHERE {wsql}",
+        tuple(params))[0]["n"])
+    pages = max(1, (total_filtered + per_page - 1) // per_page)
+    page = min(page, pages)
     rows = _query(
-        """SELECT * FROM order_system.pricing_tier
-           WHERE store_key=%s ORDER BY FIELD(tier,'delist','tier_18','tier_15',
-                 'cold_12','cold_watch','tier_12'), orders_90d DESC""",
-        (store_key,))
+        f"SELECT * FROM order_system.pricing_tier WHERE {wsql} {order_sql} "
+        f"LIMIT %s OFFSET %s", tuple(params) + (per_page, (page - 1) * per_page))
+
+    # 筛选下拉的选项（当前店铺的真实取值）
+    operators = [r["operator"] for r in _query(
+        """SELECT DISTINCT operator FROM order_system.pricing_tier
+           WHERE store_key=%s AND operator IS NOT NULL ORDER BY operator""", (store_key,))]
+    categories = [r["category"] for r in _query(
+        """SELECT DISTINCT category FROM order_system.pricing_tier
+           WHERE store_key=%s AND category IS NOT NULL ORDER BY category""", (store_key,))]
+    sources = [r["rate_source"] for r in _query(
+        """SELECT DISTINCT rate_source FROM order_system.pricing_tier
+           WHERE store_key=%s AND rate_source IS NOT NULL ORDER BY rate_source""", (store_key,))]
+
+    eval_row = _query("SELECT MAX(assigned_at) AS t FROM order_system.pricing_tier "
+                      "WHERE store_key=%s", (store_key,))
+    eval_at = eval_row[0]["t"] if eval_row else None
+
     # 最新plan候选的目标价（折扣后）贴到方案行上，方案页直接看得到"要改成多少钱"
     plan_prices: Dict[str, Dict] = {}
     latest_plan = _query(
@@ -380,33 +458,15 @@ def pricing_plan():
                 }
     except Exception:
         tier_stats = {}
-    tier_filter = request.args.get("tier", "")
-    counts: Dict[str, int] = {}
-    for r in rows:
-        counts[r["tier"]] = counts.get(r["tier"], 0) + 1
-    if tier_filter:
-        rows = [r for r in rows if r["tier"] == tier_filter]
-    eval_at = rows[0]["assigned_at"] if rows else None
-    if request.args.get("format") == "csv":
-        import csv as _csv
-        import io as _io
-        buf = _io.StringIO()
-        cols = ["shop_sku", "operator", "category", "tier", "target_margin", "reason_text",
-                "orders_90d", "returns_90d", "loss_rate", "margin_90d", "rate_source",
-                "listed_days", "cur_price", "cost_price", "status"]
-        w = _csv.writer(buf)
-        w.writerow(cols)
-        for r in rows:
-            w.writerow([r.get(c) for c in cols])
-        return Response(("﻿" + buf.getvalue()).encode("utf-8"), mimetype="text/csv",
-                        headers={"Content-Disposition":
-                                 f"attachment; filename=pricing_plan_{store_key}.csv"})
     return render_template(
         "repricing/pricing_plan.html",
         store_key=store_key, stores=store_options(),
-        rows=rows[:800], total=sum(counts.values()), counts=counts,
+        rows=rows, total=sum(counts.values()), counts=counts,
         tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at,
-        n_candidates=n_candidates, p_recover=p_recover, tier_stats=tier_stats)
+        n_candidates=n_candidates, p_recover=p_recover, tier_stats=tier_stats,
+        f_operator=f_operator, f_category=f_category, f_source=f_source, f_q=f_q,
+        operators=operators, categories=categories, sources=sources,
+        page=page, pages=pages, total_filtered=total_filtered, per_page=per_page)
 
 
 @repricing_bp.route("/candidates")

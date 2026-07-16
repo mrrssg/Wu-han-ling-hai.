@@ -11,8 +11,10 @@
     {% endfor %}
   </select>
   <a class="btn btn-sm btn-outline-success"
-     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=tier_filter, format='csv') }}">
-    <i class="bi bi-download"></i> 导出CSV</a>
+     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=tier_filter or None,
+                      operator=f_operator or None, category=f_category or None,
+                      source=f_source or None, q=f_q or None, format='csv') }}">
+    <i class="bi bi-download"></i> 导出CSV（当前筛选全量）</a>
 </div>
 {% endblock %}
 
@@ -56,15 +58,17 @@
   </div>
 </div>
 
-{# ---------- 档位汇总（一行7卡，点击筛选） ---------- #}
-<div class="tier-grid mb-3">
+{# ---------- 档位汇总（一行7卡，点击筛选；计数跟随下方筛选条件） ---------- #}
+{% set fkeep = {'operator': f_operator or None, 'category': f_category or None,
+                'source': f_source or None, 'q': f_q or None} %}
+<div class="tier-grid mb-2">
   <a class="tier-card {{ 'active' if not tier_filter }}" style="border-left-color:#0b0b0b"
-     href="{{ url_for('repricing.pricing_plan', store=store_key) }}">
-    <div class="t">全部在卖</div><div class="n">{{ total }}</div>
-    <div class="d">active offer 总数</div></a>
+     href="{{ url_for('repricing.pricing_plan', store=store_key, **fkeep) }}">
+    <div class="t">全部档位</div><div class="n">{{ total }}</div>
+    <div class="d">{{ '当前筛选合计' if (f_operator or f_category or f_source or f_q) else 'active offer 总数' }}</div></a>
   {% for key, meta in tier_meta.items() %}
   <a class="tier-card {{ 'active' if tier_filter == key }}" style="border-left-color:{{ meta[1] }}"
-     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key) }}">
+     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key, **fkeep) }}">
     <div class="t">{{ meta[0] }}</div>
     <div class="n">{{ counts.get(key, 0) }}</div>
     {% set st = tier_stats.get(key) %}
@@ -76,13 +80,45 @@
   {% endfor %}
 </div>
 
+{# ---------- 筛选 / 搜索 ---------- #}
+<form class="card p-2 mb-3" method="get" action="{{ url_for('repricing.pricing_plan') }}"
+      style="flex-direction:row;flex-wrap:wrap;gap:.5rem;align-items:center">
+  <input type="hidden" name="store" value="{{ store_key }}">
+  {% if tier_filter %}<input type="hidden" name="tier" value="{{ tier_filter }}">{% endif %}
+  <select name="operator" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+    <option value="">全部运营</option>
+    {% for o in operators %}
+    <option value="{{ o }}" {{ 'selected' if o == f_operator }}>{{ o }}</option>
+    {% endfor %}
+  </select>
+  <select name="category" class="form-select form-select-sm" style="width:auto;max-width:230px" onchange="this.form.submit()">
+    <option value="">全部类目</option>
+    {% for c in categories %}
+    <option value="{{ c }}" {{ 'selected' if c == f_category }}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <select name="source" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+    <option value="">全部数据来源</option>
+    {% for s in sources %}
+    <option value="{{ s }}" {{ 'selected' if s == f_source }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:210px"
+         placeholder="搜SKU（模糊匹配，回车即搜）">
+  <button class="btn btn-sm btn-primary">搜索</button>
+  {% if f_operator or f_category or f_source or f_q or tier_filter %}
+  <a class="btn btn-sm btn-outline-secondary"
+     href="{{ url_for('repricing.pricing_plan', store=store_key) }}">✕ 清除全部筛选</a>
+  {% endif %}
+</form>
+
 {# ---------- 明细 ---------- #}
 <div class="card">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <span class="fw-semibold" style="font-size:.9rem">
       {{ tier_meta[tier_filter][0] if tier_filter else '全部档位' }} 明细
       <span class="text-muted fw-normal" style="font-size:.75rem">评档时间 {{ eval_at or '—' }}；🟡底色=评档输入数据存疑（账本口径待定案）</span></span>
-    <span class="badge text-bg-light border">显示 {{ rows|length }} 条{{ '（前800，全量导CSV）' if rows|length == 800 }}</span>
+    <span class="badge text-bg-light border">共 {{ total_filtered }} 条 · 第 {{ page }}/{{ pages }} 页</span>
   </div>
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
@@ -120,6 +156,25 @@
       </tbody>
     </table>
   </div>
+  {% if pages > 1 %}
+  <div class="card-footer bg-white d-flex justify-content-between align-items-center flex-wrap gap-2"
+       style="font-size:.8rem">
+    <span class="text-muted">共 {{ total_filtered }} 条 · 每页 {{ per_page }} 条</span>
+    {% set pkeep = {'store': store_key, 'tier': tier_filter or None, 'operator': f_operator or None,
+                    'category': f_category or None, 'source': f_source or None, 'q': f_q or None} %}
+    <div class="btn-group">
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page <= 1 }}"
+         href="{{ url_for('repricing.pricing_plan', page=1, **pkeep) }}">« 首页</a>
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page <= 1 }}"
+         href="{{ url_for('repricing.pricing_plan', page=page-1, **pkeep) }}">‹ 上一页</a>
+      <span class="btn btn-sm btn-light disabled">{{ page }} / {{ pages }}</span>
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page >= pages }}"
+         href="{{ url_for('repricing.pricing_plan', page=page+1, **pkeep) }}">下一页 ›</a>
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page >= pages }}"
+         href="{{ url_for('repricing.pricing_plan', page=pages, **pkeep) }}">末页 »</a>
+    </div>
+  </div>
+  {% endif %}
 </div>
 <p class="text-muted mt-2" style="font-size:.75rem">
   流程：评档（只写档位+原因，不动价）→ 你在本页审查各档 → 价格监控/候选管道发现现价毛利低于档位目标−2点或偏离档位公式价 → 待改价清单（首页待办可见）→ 人工确认推送 → 效果回看本页与利润控制台。
