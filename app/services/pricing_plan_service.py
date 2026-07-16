@@ -139,7 +139,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
 
         # ---- 实际毛利（展示列用：飞书利润实测，非退货毛利÷非退货销售额）----
         sku_profit = {r["shop_sku"]: r for r in _qall(conn, """
-            SELECT shop_sku, orders, sale, profit_gross, returns_cnt
+            SELECT shop_sku, orders, sale, profit_gross, returns_cnt, net
             FROM order_system.profit_sku_90d WHERE store=%s""", (rc_store,))}
         sku_ret_sale = {r["shop_sku"]: float(r["rsale"] or 0) for r in _qall(conn, """
             SELECT shop_sku, ROUND(SUM(sale),2) AS rsale
@@ -161,6 +161,31 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         offer_cat = {r["shop_sku"]: (r["category"] or "(无类目)") for r in _qall(conn, """
             SELECT shop_sku, category FROM order_system.offerprice_listing
             WHERE platform=%s AND shop_name=%s""", (platform, shop_name))}
+
+        # 修价历史（"负期望+已在公式价→下架"要放过刚修完价还在观察期的）
+        pushed = {r["shop_sku"]: r["t"] for r in _qall(conn, """
+            SELECT shop_sku, MAX(triggered_at) AS t
+            FROM order_system.offer_price_change_log
+            WHERE store_key=%s AND status='success' GROUP BY shop_sku""", (store_key,))}
+        orders_after: Dict[str, int] = {}
+        if pushed:
+            pskus = list(pushed)
+            for i in range(0, len(pskus), 500):
+                chunk = pskus[i:i + 500]
+                ph = ",".join(["%s"] * len(chunk))
+                seen = set()
+                for r in _qall(conn, f"""
+                    SELECT offer_sku, order_id, created_date
+                    FROM order_system.lowes_order_data
+                    WHERE shop_id=%s AND order_state<>'CANCELED' AND offer_sku IN ({ph})
+                      AND created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""",
+                    [shop_id] + chunk):
+                    key = (r["offer_sku"], r["order_id"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if r["created_date"] and r["created_date"] > pushed[r["offer_sku"]]:
+                        orders_after[r["offer_sku"]] = orders_after.get(r["offer_sku"], 0) + 1
     finally:
         conn.close()
 
@@ -255,6 +280,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
 
         # ---- 各档公式价的精确毛利：毛利 = (P×(1−佣金) − 成本) ÷ P ----
         tier_margin_map: Dict[str, float] = {}
+        tier_price_map: Dict[str, float] = {}
         cfg = configs.get(o["warehouse_sku"]) if o["warehouse_sku"] else None
         supplier = ((cfg.get("supplier") or "Costway").strip() or "Costway") if cfg else None
         sp = price_map.get((supplier, o["warehouse_sku"])) if cfg else None
@@ -277,6 +303,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                     P = float(bd.discount_price)
                     if P > 0:
                         tier_margin_map[key] = (P * (1 - cr) - float(bd.cost)) / P
+                        tier_price_map[key] = P
                 except Exception:
                     pass
 
@@ -325,6 +352,23 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 reason = (f"退货损失率{lr*100:.1f}%（{src}）需要毛利{need*100:.1f}%，"
                           f"各档公式价毛利 {m_txt} 都不够——但窗口仅{orders_m}单"
                           f"（<{DELIST_MIN_WINDOW_ORDERS}单不判死），先按18%档卖着攒数据再定")
+
+        # ---- 负期望实证 → 下架档（用户2026-07-17定案：利润控制台的下架候选直接进下架档）----
+        # 判据与行动清单一致：90天退货≥2且净亏>$50，且现价已=自己档位的公式价（修价救不了）；
+        # 刚修完价的观察期（修价<30天且修后<10单）先放过，观察期满仍亏下一轮自动进来
+        if tier in ("tier_12", "tier_15", "tier_18") and pr \
+                and int(pr["returns_cnt"] or 0) >= 2 and float(pr["net"] or 0) < -50:
+            p_t = tier_price_map.get(tier)
+            if p_t and cur_price > 0 and abs(cur_price - p_t) / p_t <= 0.01:
+                t0 = pushed.get(sku)
+                days_since = (datetime.now() - t0).days if t0 else None
+                if not (t0 and days_since < 30 and orders_after.get(sku, 0) < 10):
+                    ev["neg_ev"] = {"net_90d": round(float(pr["net"] or 0), 2),
+                                    "returns_cnt": int(pr["returns_cnt"] or 0)}
+                    tier, target = "delist", None
+                    reason = (f"负期望实证：现价${cur_price:.2f}已=自己档位的公式价，"
+                              f"90天仍净亏${-float(pr['net'] or 0):,.0f}（退货{int(pr['returns_cnt'] or 0)}次）"
+                              f"——修价救不了，建议下架止血")
 
         counts[tier] = counts.get(tier, 0) + 1
         rows.append((store_key, sku, tier, target, reason,

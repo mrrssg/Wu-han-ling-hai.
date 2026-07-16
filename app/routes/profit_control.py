@@ -975,7 +975,7 @@ def _delist_list():
             continue
         tier = tmap.get(sku)
         if tier == "delist":
-            r["note"] = "定价方案判下架（18%档也盖不住+窗口≥25单坐实）"
+            r["note"] = "定价方案判下架（原因见定价方案页下架档）"
             keep.append(r)
         elif tier is None:
             r["note"] = "无档位记录"
