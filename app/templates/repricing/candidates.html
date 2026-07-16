@@ -14,8 +14,13 @@
       <i class="bi bi-arrow-up-circle"></i> 重推正确价</button>
   </div>
   {% endfor %}
-  <div class="small mt-1 text-muted">「重推正确价」=按公式实时算价、经全部校验后推送（含把offer状态推回在卖）；
-    推完若Lowes上仍是下架状态需后台手动激活。处理完去问题清单关闭对应条目。</div>
+  <div class="small mt-2 d-flex align-items-center gap-2">
+    <button class="btn btn-sm btn-danger" id="repush-all-btn"
+            data-skus='{{ mismatches | map(attribute="entity") | map("replace", "@" ~ store_key, "") | list | tojson }}'>
+      <i class="bi bi-arrow-up-circle-fill"></i> 一键全部重推（{{ mismatches|length }}个，一次OF24调用）</button>
+    <span class="text-muted">「重推」=按公式实时算价、经全部校验后推送（含把offer状态推回在卖）；
+      推完若Lowes上仍是下架需后台手动激活。处理完去问题清单关闭条目。</span>
+  </div>
 </div>
 {% endif %}
 
@@ -234,6 +239,39 @@ if (batchBtn) {
             showBanner('danger', '<strong>JS 错误:</strong> ' + err.message);
             batchBtn.disabled = false;
             refreshSelectionUI();
+        }
+    });
+}
+
+// 异常SKU一键全部重推（走批量接口，一次OF24）
+const repushAll = document.getElementById('repush-all-btn');
+if (repushAll) {
+    repushAll.addEventListener('click', async () => {
+        const skus = JSON.parse(repushAll.dataset.skus || '[]');
+        if (!skus.length) return;
+        if (!confirm(`把 ${skus.length} 个错价SKU一次性重推到正确公式价？约 ${Math.ceil(2 * skus.length / 60 + 1.1)} 分钟。`)) return;
+        repushAll.disabled = true;
+        repushAll.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 重推中...';
+        try {
+            const r = await fetch('/repricing/push-batch?store=' + STORE_KEY, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({shop_skus: skus, store: STORE_KEY}),
+            });
+            const data = await r.json();
+            if (data.success) {
+                showBanner('success', `<strong>✅ 重推成功 ${data.pushed} 个</strong> (import_id=<code>${data.import_id}</code>)` +
+                    (data.rejections && data.rejections.length ? `<br>被校验拦下 ${data.rejections.length} 个: ` + JSON.stringify(data.rejections) : '') +
+                    '<br><small>推完记得去问题清单关闭对应条目；明早3:30回读验证会自动复核。</small>');
+                repushAll.innerHTML = '<i class="bi bi-check-circle"></i> 已重推';
+            } else {
+                showBanner('danger', '<strong>❌ 重推失败</strong> ' + (data.msg || '') +
+                    (data.rejections ? '<br>' + JSON.stringify(data.rejections) : ''));
+                repushAll.disabled = false;
+                repushAll.innerHTML = '<i class="bi bi-arrow-up-circle-fill"></i> 一键全部重推';
+            }
+        } catch (e) {
+            showBanner('danger', 'JS错误: ' + e.message);
+            repushAll.disabled = false;
         }
     });
 }

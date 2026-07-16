@@ -832,6 +832,31 @@ def push_batch():
     by_sku = {o.shop_sku: o for o in offers}
     configs = fetch_pricing_configs(store_key)
 
+    # 异常修复通道：挂着"推价异常"的SKU即使INACTIVE也允许批量重推
+    mismatch_skus = {r["entity"].split("@")[0] for r in _query(
+        """SELECT entity FROM order_system.issue_log
+           WHERE issue_type='price_push_mismatch' AND status='open'
+             AND entity LIKE %s""", (f"%@{store_key}",))}
+
+    def _load_inactive_ctx(sku_):
+        row = _query(
+            """SELECT shop_sku, warehouse_sku, origin_price, discount_price,
+                      raw_json, state_code, quantity, last_cost_snapshot
+               FROM order_system.offerprice_listing
+               WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+            (scfg["platform"], scfg["shop_name"], sku_))
+        if not row:
+            return None
+        r0 = row[0]
+        from app.services.repricing_monitor_service import OfferContext
+        return OfferContext(
+            shop_sku=r0["shop_sku"], warehouse_sku=r0.get("warehouse_sku"),
+            db_origin_price=float(r0["origin_price"]) if r0.get("origin_price") else None,
+            db_discount_price=float(r0["discount_price"]) if r0.get("discount_price") else None,
+            raw_json=r0.get("raw_json"), state_code=r0.get("state_code"),
+            quantity=r0.get("quantity"),
+            last_cost_snapshot=float(r0["last_cost_snapshot"]) if r0.get("last_cost_snapshot") else None)
+
     # 分档定价：SKU在方案里有目标毛利的，按它的档位算价（divisor=1−佣金−目标毛利，
     # lowes公式语义），并套单步限幅；没有档位的走店铺默认公式
     tier_targets = {}
@@ -851,6 +876,8 @@ def push_batch():
             rejections.append(("", "empty_sku"))
             continue
         ctx = by_sku.get(sku)
+        if not ctx and sku in mismatch_skus:
+            ctx = _load_inactive_ctx(sku)
         if not ctx:
             rejections.append((sku, "not_active"))
             continue
