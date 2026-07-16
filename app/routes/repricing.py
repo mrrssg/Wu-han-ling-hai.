@@ -417,14 +417,16 @@ def pricing_plan():
     p_recover = 0.0
     if p_row and p_row[0]["total_v"] and float(p_row[0]["total_v"]) > 0:
         p_recover = float(p_row[0]["tracked_v"] or 0) / float(p_row[0]["total_v"])
-    # 每档业绩占比 + 窗口退货损失率（用户2026-07-17要求：档位卡片直接看贡献和退货）
+    # 每档业绩占比 + 窗口退货损失率（档位卡片直接看贡献和退货）——
+    # 跟随运营/类目/来源/搜索筛选：选了运营，占比=该运营自己各档的业绩结构（用户2026-07-17要求）
     tier_stats: Dict[str, Dict] = {}
     try:
         from app.services.pricing_plan_service import STORE_MAP as _PLAN_STORES
         if store_key in _PLAN_STORES:
             _, _, _shop_id, _rc_store = _PLAN_STORES[store_key]
+            twhere = " AND ".join("t." + w for w in common_where)
             srows = _query(
-                """SELECT t.tier,
+                f"""SELECT t.tier,
                           SUM(COALESCE(s.sale,0)) AS sale90,
                           SUM(COALESCE(w.sale,0)) AS wsale,
                           SUM(COALESCE(r.rval,0)) AS wret
@@ -446,8 +448,8 @@ def pricing_plan():
                                  AND order_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 120 DAY)
                                                     AND DATE_SUB(CURDATE(),INTERVAL 30 DAY)
                                GROUP BY shop_sku) r ON r.shop_sku=t.shop_sku
-                   WHERE t.store_key=%s GROUP BY t.tier""",
-                (_shop_id, _shop_id, _rc_store, store_key))
+                   WHERE {twhere} GROUP BY t.tier""",
+                tuple([_shop_id, _shop_id, _rc_store] + common_params))
             total90 = sum(float(r["sale90"] or 0) for r in srows) or 1.0
             for r in srows:
                 wsale = float(r["wsale"] or 0)
