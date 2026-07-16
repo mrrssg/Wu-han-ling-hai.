@@ -359,14 +359,19 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         if tier in ("tier_12", "tier_15", "tier_18") and pr \
                 and int(pr["returns_cnt"] or 0) >= 2 and float(pr["net"] or 0) < -50:
             p_t = tier_price_map.get(tier)
-            if p_t and cur_price > 0 and abs(cur_price - p_t) / p_t <= 0.01:
+            # 现折扣价：DB折扣价缺失时用 原价×折扣系数 估（同候选生成器口径；
+            # Lowes折扣对象解析2026-07-16才上线，历史行discount_price多为NULL）
+            cur_disc = float(o["discount_price"] or 0)
+            if not cur_disc and cfg and cfg.get("discount_factor") and o["origin_price"]:
+                cur_disc = float(o["origin_price"]) * float(cfg["discount_factor"])
+            if p_t and cur_disc > 0 and abs(cur_disc - p_t) / p_t <= 0.01:
                 t0 = pushed.get(sku)
                 days_since = (datetime.now() - t0).days if t0 else None
                 if not (t0 and days_since < 30 and orders_after.get(sku, 0) < 10):
                     ev["neg_ev"] = {"net_90d": round(float(pr["net"] or 0), 2),
                                     "returns_cnt": int(pr["returns_cnt"] or 0)}
                     tier, target = "delist", None
-                    reason = (f"负期望实证：现价${cur_price:.2f}已=自己档位的公式价，"
+                    reason = (f"负期望实证：现折扣价${cur_disc:.2f}已=自己档位的公式价，"
                               f"90天仍净亏${-float(pr['net'] or 0):,.0f}（退货{int(pr['returns_cnt'] or 0)}次）"
                               f"——修价救不了，建议下架止血")
 
