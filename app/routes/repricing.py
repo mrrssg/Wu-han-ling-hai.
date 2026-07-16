@@ -560,17 +560,7 @@ def push_one(shop_sku):
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
-        if tier_margin:
-            from app.services.pricing_plan_service import MAX_STEP_UP, MAX_STEP_DOWN
-            cur_disc = ctx.db_discount_price or (
-                ctx.db_origin_price * df if ctx.db_origin_price else None)
-            if cur_disc and cur_disc > 0:
-                if target_discount > cur_disc * (1 + MAX_STEP_UP):
-                    target_discount = round(cur_disc * (1 + MAX_STEP_UP), 2)
-                    target = round(target_discount / df, 2)
-                elif target_discount < cur_disc * (1 - MAX_STEP_DOWN):
-                    target_discount = round(cur_disc * (1 - MAX_STEP_DOWN), 2)
-                    target = round(target_discount / df, 2)
+        # 2026-07-16定案：推价无限幅，纯公式价（错价事故教训：限幅锚在估算现价上会腰斩止损修价）
 
         # Both stores are non_dropship: always OF21 full-fetch + rebuild so
         # every field is preserved (OF24 resets anything not sent).
@@ -806,7 +796,6 @@ def push_batch():
             """SELECT shop_sku, target_margin FROM order_system.pricing_tier
                WHERE store_key=%s AND target_margin IS NOT NULL
                  AND tier IN ('tier_15','tier_18','cold_12')""", (store_key,))}
-    from app.services.pricing_plan_service import MAX_STEP_UP, MAX_STEP_DOWN
 
     payloads = []
     rejections = []         # (sku, reason)
@@ -870,19 +859,7 @@ def push_batch():
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
-        # 档位改价套单步限幅（和plan候选生成同一把安全阀）；
-        # 现价亏本(扣佣后不够成本)的=止损修价，不限幅直接到公式价
-        cur_disc = ctx.db_discount_price or (
-            ctx.db_origin_price * df if ctx.db_origin_price else None)
-        breakeven = cost / (1 - cr) if cr < 1 else 0
-        loss_making = bool(cur_disc and cur_disc < breakeven)
-        if tier_margin and cur_disc and cur_disc > 0 and not loss_making:
-            if target_discount > cur_disc * (1 + MAX_STEP_UP):
-                target_discount = round(cur_disc * (1 + MAX_STEP_UP), 2)
-                target = round(target_discount / df, 2)
-            elif target_discount < cur_disc * (1 - MAX_STEP_DOWN):
-                target_discount = round(cur_disc * (1 - MAX_STEP_DOWN), 2)
-                target = round(target_discount / df, 2)
+        # 2026-07-16定案：推价无限幅，纯公式价
         targets_by_sku[sku] = {
             "ctx": ctx, "target": target, "target_discount": target_discount,
             "margin": margin,

@@ -393,23 +393,10 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             height_in=float(cfg.get("height_in") or 0),
             weight_lb=float(cfg.get("weight_lb") or 0),
             formula_variant="lowes", divisor_override=divisor)
+        # 2026-07-16定案：不设限幅——价格只按用户公式算，涨跌幅在候选页展示，人工确认把关
         target_discount = round(bd.discount_price, 2)
         dev = (target_discount - cur_discount) / cur_discount
         clamp_note = ""
-        # 现价亏本(扣佣后不够成本)的SKU=止损修价，直接放行到公式价，不套限幅
-        breakeven = (bd.cost / (1 - commission)) if commission < 1 else 0
-        loss_making = cur_discount < breakeven
-        if loss_making:
-            clamp_note = "（现价亏本，止损修价不限幅）"
-        elif dev > MAX_STEP_UP:
-            target_discount = round(cur_discount * (1 + MAX_STEP_UP), 2)
-            clamp_note = f"（单步限+{MAX_STEP_UP:.0%}，剩余下轮再走）"
-            summary["clamped"] += 1
-        elif dev < -MAX_STEP_DOWN:
-            target_discount = round(cur_discount * (1 - MAX_STEP_DOWN), 2)
-            clamp_note = f"（单步限−{MAX_STEP_DOWN:.0%}）"
-            summary["clamped"] += 1
-        dev = (target_discount - cur_discount) / cur_discount
         if abs(dev) < MIN_DEVIATION:
             summary["skip_small_dev"] += 1
             continue
