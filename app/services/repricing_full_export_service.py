@@ -159,9 +159,12 @@ def _load_blacklist(store_key: str) -> set:
 
 def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
             formula_variant: str = "macy",
-            discount_factor_override: Optional[float] = None) -> Dict[str, Any]:
+            discount_factor_override: Optional[float] = None,
+            tier_row: Optional[Dict] = None) -> Dict[str, Any]:
     """Decide what to do with one offer; returns a result dict with one of
     these statuses:
+      - 'skipped_delist_tier'      (定价方案判下架——不修价，等人工下架)
+      - 'skipped_cold_watch'       (新品观察期——不动价)
       - 'skipped_blacklist'
       - 'alert_no_config'
       - 'alert_no_return_shipping'
@@ -174,6 +177,15 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
     shop_sku = offer["shop_sku"]
     warehouse_sku = offer.get("warehouse_sku")
     db_origin_price = offer.get("origin_price")
+
+    # 分档定价联动（2026-07-17）：有档位的SKU按档位公式价导出；
+    # 下架档不修价（等人工下架），新品观察档不动价
+    tier = (tier_row or {}).get("tier")
+    tier_target = (tier_row or {}).get("target_margin")
+    if tier == "delist":
+        return {"status": "skipped_delist_tier"}
+    if tier == "cold_watch":
+        return {"status": "skipped_cold_watch"}
 
     if shop_sku in blacklist:
         return {"status": "skipped_blacklist"}
@@ -215,6 +227,11 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
         df = float(feishu_df)
     cr = float(cfg["commission_rate"]) if cfg.get("commission_rate") is not None else 0.0
 
+    # 档位除数：1 − 佣金 − 档位目标毛利（12/15/18档各不同）；无档位记录用公式默认
+    divisor_override = None
+    if tier_target is not None and cfg.get("commission_rate") is not None:
+        divisor_override = 1.0 - cr - float(tier_target)
+
     bd = calculate_breakdown(
         supplier=supplier,
         supplier_price=supplier_price,
@@ -223,6 +240,7 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
         length_in=float(L), width_in=float(W),
         height_in=float(H), weight_lb=float(wt),
         formula_variant=formula_variant,
+        divisor_override=divisor_override,
     )
     target_origin = round(float(bd.origin_price), 2)
     target_discount = round(float(bd.discount_price), 2)
@@ -494,10 +512,26 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
     configs = _load_pricing_configs(store_key)
     sp_lookup = _load_supplier_prices()
     blacklist = _load_blacklist(store_key)
+    # 分档定价（2026-07-17联动）：有档位的SKU导出价=档位公式价
+    tier_map: Dict[str, Dict] = {}
+    try:
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT shop_sku, tier, target_margin
+                         FROM order_system.pricing_tier WHERE store_key=%s""",
+                    (store_key,))
+                tier_map = {r["shop_sku"]: r for r in cursor.fetchall() or []}
+        finally:
+            conn.close()
+    except Exception:
+        tier_map = {}
     print(f"  active offers : {len(active_offers)}")
     print(f"  configs       : {len(configs)}")
     print(f"  supplier prices: {len(sp_lookup)}")
     print(f"  blacklist     : {len(blacklist)}")
+    print(f"  pricing tiers : {len(tier_map)}")
 
     decisions: List[Tuple[Dict, Dict]] = []
     xlsx_rows: List[Dict[str, Any]] = []
@@ -514,16 +548,21 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
         "alert_unsupported_supplier": 0,
     }
 
+    by_tier: Dict[str, int] = {}
     for offer in active_offers:
         wh = offer.get("warehouse_sku")
         cfg = configs.get(wh) if wh else None
+        tier_row = tier_map.get(offer["shop_sku"])
         decision = _decide(offer, cfg, sp_lookup, blacklist,
                            formula_variant=formula_variant,
-                           discount_factor_override=discount_factor_override)
+                           discount_factor_override=discount_factor_override,
+                           tier_row=tier_row)
         decisions.append((offer, decision))
         summary[decision["status"]] = summary.get(decision["status"], 0) + 1
 
         if decision["status"] == "would_update":
+            tname = (tier_row or {}).get("tier") or "(无档位)"
+            by_tier[tname] = by_tier.get(tname, 0) + 1
             raw = {}
             if offer.get("raw_json"):
                 try:
@@ -559,6 +598,7 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
     # push_one / push_batch where OF24 was actually called.
 
     duration = (datetime.now() - started).total_seconds()
+    summary["by_tier"] = by_tier
     return {
         "success": True,
         "run_id": run_id,
