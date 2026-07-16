@@ -27,8 +27,8 @@ CN_TZ = timezone(timedelta(hours=8))
 
 BASELINE = 0.10            # 考核基线（唯一不动的常数）
 COLD_WATCH_DAYS = 30       # 零销量<30天=新品观察
-MIN_ORDERS_OWN = 15        # >=15单用SKU自己的数（退货损失率、实际毛利同一门槛）
-MIN_CAT_ORDERS = 30
+MIN_ORDERS_OWN = 11        # 窗口>10单用SKU自己的数（用户2026-07-17定；退货损失率、实际毛利同一门槛）
+MIN_CAT_ORDERS = 30        # 运营×类目 / 运营全池 的最小样本单数
 MATURE_MIN_AGE = 30        # 统计窗口：下单满30天的订单才进退货损失率统计（用户2026-07-16定）
 MATURE_MAX_AGE = 120
 KEEP_TOLERANCE = 0.01      # 档位毛利差1个点以内算盖得住（用户定：贴基线换销量稳）
@@ -58,7 +58,8 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
     """v5（用户2026-07-16定稿）：
 
       需要的毛利 = 10%基线 + 退货损失率
-        退货损失率 = (1-p)×成熟口径退货货值×尾部系数M ÷ 成熟口径销售额（三级数据）
+        退货损失率 = (1-p)×成熟口径退货货值×尾部系数M ÷ 成熟口径销售额
+        （取数阶梯带运营维度：SKU自己>10单 → 运营×类目 → 运营全池 → 全店）
       各档能给的毛利 = 逐SKU现算：P=该档公式价（divisor=1−佣金−名义档），
         毛利 = (P×(1−佣金) − 成本) ÷ P —— 成本/退货运费/尺寸用SKU自己的，供应商价实时
       分档 = 取能盖住"需要的毛利"的最低档（差1个点内算盖得住）
@@ -165,34 +166,53 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
 
     configs = fetch_pricing_configs(store_key)
 
-    # ---- 类目/全店聚合：损失率 与 实际毛利（展示用）----
-    cat_sale_m: Dict[str, float] = {}
-    cat_rval_m: Dict[str, float] = {}
-    cat_orders_m: Dict[str, int] = {}
+    # ---- 聚合（全部带运营维度——每人过各自的基线、不互相背锅，用户2026-07-17定）----
+    op_cat_sale: Dict[tuple, float] = {}
+    op_cat_rval: Dict[tuple, float] = {}
+    op_cat_orders: Dict[tuple, int] = {}
+    op_sale: Dict[str, float] = {}
+    op_rval: Dict[str, float] = {}
+    op_orders: Dict[str, int] = {}
     for sku, st in sku_sale_m.items():
         cat = offer_cat.get(sku, "(无类目)")
-        cat_sale_m[cat] = cat_sale_m.get(cat, 0.0) + float(st["sale"] or 0)
-        cat_orders_m[cat] = cat_orders_m.get(cat, 0) + int(st["orders"] or 0)
+        op = sku_operator(sku)
+        s_ = float(st["sale"] or 0)
+        n_ = int(st["orders"] or 0)
+        op_cat_sale[(op, cat)] = op_cat_sale.get((op, cat), 0.0) + s_
+        op_cat_orders[(op, cat)] = op_cat_orders.get((op, cat), 0) + n_
+        op_sale[op] = op_sale.get(op, 0.0) + s_
+        op_orders[op] = op_orders.get(op, 0) + n_
     for sku, rr in sku_ret_m.items():
         cat = offer_cat.get(sku, "(无类目)")
-        cat_rval_m[cat] = cat_rval_m.get(cat, 0.0) + float(rr["rval"] or 0)
-    store_sale_m = sum(cat_sale_m.values()) or 1.0
-    store_loss = loss_factor * tail_m * sum(cat_rval_m.values()) / store_sale_m
+        op = sku_operator(sku)
+        v_ = float(rr["rval"] or 0)
+        op_cat_rval[(op, cat)] = op_cat_rval.get((op, cat), 0.0) + v_
+        op_rval[op] = op_rval.get(op, 0.0) + v_
+    store_sale_m = sum(op_sale.values()) or 1.0
+    store_loss = loss_factor * tail_m * sum(op_rval.values()) / store_sale_m
 
-    cat_gross: Dict[str, float] = {}
-    cat_netsale: Dict[str, float] = {}
+    # 实际毛利（展示列）按同样阶梯聚合
+    op_cat_gross: Dict[tuple, float] = {}
+    op_cat_netsale: Dict[tuple, float] = {}
+    op_gross: Dict[str, float] = {}
+    op_netsale: Dict[str, float] = {}
     for sku, pr in sku_profit.items():
         cat = offer_cat.get(sku, "(无类目)")
+        op = sku_operator(sku)
         ns = float(pr["sale"] or 0) - sku_ret_sale.get(sku, 0.0)
         if ns > 0:
-            cat_gross[cat] = cat_gross.get(cat, 0.0) + float(pr["profit_gross"] or 0)
-            cat_netsale[cat] = cat_netsale.get(cat, 0.0) + ns
-    store_netsale = sum(cat_netsale.values()) or 1.0
-    store_am = sum(cat_gross.values()) / store_netsale
+            g_ = float(pr["profit_gross"] or 0)
+            op_cat_gross[(op, cat)] = op_cat_gross.get((op, cat), 0.0) + g_
+            op_cat_netsale[(op, cat)] = op_cat_netsale.get((op, cat), 0.0) + ns
+            op_gross[op] = op_gross.get(op, 0.0) + g_
+            op_netsale[op] = op_netsale.get(op, 0.0) + ns
+    store_netsale = sum(op_netsale.values()) or 1.0
+    store_am = sum(op_gross.values()) / store_netsale
 
-    def level_pick(sku, cat):
+    def level_pick(sku, cat, op):
         """返回 (退货损失率, 实际毛利[展示], 数据来源, 窗口单数)。
-        门槛用"满30天窗口内的单数"——损失率在窗口里算的，样本就得数窗口的"""
+        阶梯：SKU自己(窗口>10单) → 运营×类目(该运营该类目≥30单)
+        → 运营全池(该运营≥30单) → 全店。门槛都数满30天窗口内的单"""
         stm = sku_sale_m.get(sku)
         orders_m = int(stm["orders"] or 0) if stm else 0
         if orders_m >= MIN_ORDERS_OWN:
@@ -203,11 +223,17 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 lr = loss_factor * tail_m * (float(sku_ret_m[sku]["rval"]) if sku in sku_ret_m else 0.0) / sale_m
                 am = float(pr["profit_gross"] or 0) / ns
                 return lr, am, "SKU自己", orders_m
-        if cat_orders_m.get(cat, 0) >= MIN_CAT_ORDERS and cat_netsale.get(cat, 0) > 0 \
-                and cat_sale_m.get(cat, 0) > 0:
-            lr = loss_factor * tail_m * cat_rval_m.get(cat, 0.0) / cat_sale_m[cat]
-            am = cat_gross.get(cat, 0.0) / cat_netsale[cat]
-            return lr, am, "类目", orders_m
+        k = (op, cat)
+        if op_cat_orders.get(k, 0) >= MIN_CAT_ORDERS and op_cat_sale.get(k, 0) > 0:
+            lr = loss_factor * tail_m * op_cat_rval.get(k, 0.0) / op_cat_sale[k]
+            am = (op_cat_gross.get(k, 0.0) / op_cat_netsale[k]) \
+                if op_cat_netsale.get(k, 0) > 0 else store_am
+            return lr, am, "运营×类目", orders_m
+        if op_orders.get(op, 0) >= MIN_CAT_ORDERS and op_sale.get(op, 0) > 0:
+            lr = loss_factor * tail_m * op_rval.get(op, 0.0) / op_sale[op]
+            am = (op_gross.get(op, 0.0) / op_netsale[op]) \
+                if op_netsale.get(op, 0) > 0 else store_am
+            return lr, am, "运营全池", orders_m
         return store_loss, store_am, "全店", orders_m
 
     rows = []
@@ -224,7 +250,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         cur_price = float(o["discount_price"] or o["price"] or o["origin_price"] or 0)
         listed_days = (now.date() - o["listed_at"].date()).days if o["listed_at"] else None
 
-        lr, am, src, orders_m = level_pick(sku, cat)
+        lr, am, src, orders_m = level_pick(sku, cat, op)
         need = BASELINE + lr
 
         # ---- 各档公式价的精确毛利：毛利 = (P×(1−佣金) − 成本) ÷ P ----
