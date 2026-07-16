@@ -53,6 +53,11 @@
        href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key) }}">
       <div class="t">{{ meta[0] }}</div>
       <div class="n">{{ counts.get(key, 0) }}</div>
+      {% set st = tier_stats.get(key) %}
+      {% if st %}
+      <div class="d" style="color:#1f2937"><b>贡献业绩 {{ '%.1f%%' % st.share }}</b>
+        {%- if st.loss is not none %} · 退货损失率 {{ '%.1f%%' % st.loss }}{% endif %}</div>
+      {% endif %}
       <div class="d">{{ meta[2] }}</div></a>
   </div>
   {% endfor %}

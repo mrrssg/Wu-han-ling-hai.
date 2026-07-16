@@ -339,6 +339,47 @@ def pricing_plan():
     p_recover = 0.0
     if p_row and p_row[0]["total_v"] and float(p_row[0]["total_v"]) > 0:
         p_recover = float(p_row[0]["tracked_v"] or 0) / float(p_row[0]["total_v"])
+    # 每档业绩占比 + 窗口退货损失率（用户2026-07-17要求：档位卡片直接看贡献和退货）
+    tier_stats: Dict[str, Dict] = {}
+    try:
+        from app.services.pricing_plan_service import STORE_MAP as _PLAN_STORES
+        if store_key in _PLAN_STORES:
+            _, _, _shop_id, _rc_store = _PLAN_STORES[store_key]
+            srows = _query(
+                """SELECT t.tier,
+                          SUM(COALESCE(s.sale,0)) AS sale90,
+                          SUM(COALESCE(w.sale,0)) AS wsale,
+                          SUM(COALESCE(r.rval,0)) AS wret
+                   FROM order_system.pricing_tier t
+                   LEFT JOIN (SELECT offer_sku, SUM(line_total_price) AS sale
+                                FROM order_system.lowes_order_data
+                               WHERE shop_id=%s AND order_state<>'CANCELED'
+                                 AND created_date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY)
+                               GROUP BY offer_sku) s ON s.offer_sku=t.shop_sku
+                   LEFT JOIN (SELECT offer_sku, SUM(line_total_price) AS sale
+                                FROM order_system.lowes_order_data
+                               WHERE shop_id=%s AND order_state<>'CANCELED'
+                                 AND created_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 120 DAY)
+                                                      AND DATE_SUB(CURDATE(),INTERVAL 30 DAY)
+                               GROUP BY offer_sku) w ON w.offer_sku=t.shop_sku
+                   LEFT JOIN (SELECT shop_sku, SUM(cost) AS rval
+                                FROM order_system.return_case
+                               WHERE store=%s AND state<>'not_charged'
+                                 AND order_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 120 DAY)
+                                                    AND DATE_SUB(CURDATE(),INTERVAL 30 DAY)
+                               GROUP BY shop_sku) r ON r.shop_sku=t.shop_sku
+                   WHERE t.store_key=%s GROUP BY t.tier""",
+                (_shop_id, _shop_id, _rc_store, store_key))
+            total90 = sum(float(r["sale90"] or 0) for r in srows) or 1.0
+            for r in srows:
+                wsale = float(r["wsale"] or 0)
+                tier_stats[r["tier"]] = {
+                    "share": 100.0 * float(r["sale90"] or 0) / total90,
+                    "loss": (100.0 * (1 - p_recover) * float(r["wret"] or 0) / wsale)
+                            if wsale > 0 else None,
+                }
+    except Exception:
+        tier_stats = {}
     tier_filter = request.args.get("tier", "")
     counts: Dict[str, int] = {}
     for r in rows:
@@ -365,7 +406,7 @@ def pricing_plan():
         store_key=store_key, stores=store_options(),
         rows=rows[:800], total=sum(counts.values()), counts=counts,
         tier_filter=tier_filter, tier_meta=TIER_META, eval_at=eval_at,
-        n_candidates=n_candidates, p_recover=p_recover)
+        n_candidates=n_candidates, p_recover=p_recover, tier_stats=tier_stats)
 
 
 @repricing_bp.route("/candidates")
