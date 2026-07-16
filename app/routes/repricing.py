@@ -519,7 +519,7 @@ def push_one(shop_sku):
             return jsonify({"success": False, "msg": "missing Feishu config or return_shipping_base"}), 400
 
         supplier = cfg["supplier"]
-        sp, _ = lookup_supplier_price(ctx.warehouse_sku, supplier)
+        sp, sp_upd = lookup_supplier_price(ctx.warehouse_sku, supplier)
         if sp is None:
             return jsonify({"success": False, "msg": "no supplier price"}), 400
 
@@ -560,7 +560,19 @@ def push_one(shop_sku):
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
-        # 2026-07-16定案：推价无限幅，纯公式价（错价事故教训：限幅锚在估算现价上会腰斩止损修价）
+        # 2026-07-16定案：推价无限幅，纯公式价；推送前跑校验（只拦不改）
+        if formula_variant == "lowes":
+            from app.services.push_price_guard import validate_push_price
+            divisor_used = (1.0 - cr - tier_margin) if tier_margin else 0.73
+            errs = validate_push_price(
+                target_origin=target, target_discount=target_discount,
+                cost=cost, return_cost_estimate=float(bd.return_cost_estimate),
+                commission_rate=cr, discount_factor=df,
+                nominal_margin=(1.0 - cr - divisor_used),
+                supplier_updated_at=sp_upd,
+                last_cost_snapshot=ctx.last_cost_snapshot)
+            if errs:
+                return jsonify({"success": False, "msg": "校验拦截: " + "；".join(errs)}), 400
 
         # Both stores are non_dropship: always OF21 full-fetch + rebuild so
         # every field is preserved (OF24 resets anything not sent).
@@ -821,7 +833,7 @@ def push_batch():
         if supplier not in ("Costway", "Vevor"):
             rejections.append((sku, f"unsupported_supplier:{supplier}"))
             continue
-        sp, _ = lookup_supplier_price(ctx.warehouse_sku, supplier)
+        sp, sp_upd = lookup_supplier_price(ctx.warehouse_sku, supplier)
         if sp is None:
             rejections.append((sku, "no_supplier_price"))
             continue
@@ -859,7 +871,20 @@ def push_batch():
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
-        # 2026-07-16定案：推价无限幅，纯公式价
+        # 2026-07-16定案：推价无限幅，纯公式价；推送前跑校验（只拦不改）
+        if formula_variant == "lowes":
+            from app.services.push_price_guard import validate_push_price
+            divisor_used = (1.0 - cr - tier_margin) if tier_margin else 0.73
+            errs = validate_push_price(
+                target_origin=target, target_discount=target_discount,
+                cost=cost, return_cost_estimate=float(bd.return_cost_estimate),
+                commission_rate=cr, discount_factor=df,
+                nominal_margin=(1.0 - cr - divisor_used),
+                supplier_updated_at=sp_upd,
+                last_cost_snapshot=ctx.last_cost_snapshot)
+            if errs:
+                rejections.append((sku, "校验拦截: " + "；".join(errs)))
+                continue
         targets_by_sku[sku] = {
             "ctx": ctx, "target": target, "target_discount": target_discount,
             "margin": margin,
