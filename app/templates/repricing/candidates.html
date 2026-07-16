@@ -8,9 +8,14 @@
   <b>🚨 推价异常 {{ mismatches|length }} 个</b>——推送"成功"但价格没生效/被平台改动/offer被停用。
   它们<b>不会</b>出现在下方候选清单里（已推过+已下线的不进评估），必须先处理：
   {% for m in mismatches %}
-  <div class="small mt-1"><code>{{ m.entity.split('@')[0] }}</code> — {{ m.evidence }}</div>
+  <div class="small mt-1 d-flex align-items-center gap-2">
+    <code>{{ m.entity.split('@')[0] }}</code> — {{ m.evidence }}
+    <button class="btn btn-sm btn-danger py-0 push-btn" data-sku="{{ m.entity.split('@')[0] }}">
+      <i class="bi bi-arrow-up-circle"></i> 重推正确价</button>
+  </div>
   {% endfor %}
-  <div class="small mt-1 text-muted">处理完去问题清单关闭对应条目，offer恢复在卖后会自动回到评估池。</div>
+  <div class="small mt-1 text-muted">「重推正确价」=按公式实时算价、经全部校验后推送（含把offer状态推回在卖）；
+    推完若Lowes上仍是下架状态需后台手动激活。处理完去问题清单关闭对应条目。</div>
 </div>
 {% endif %}
 

@@ -517,7 +517,31 @@ def push_one(shop_sku):
         offers = fetch_active_offers(store_key)
         ctx = next((o for o in offers if o.shop_sku == shop_sku), None)
         if not ctx:
-            return jsonify({"success": False, "msg": "shop_sku not active"}), 400
+            # 异常修复通道：挂着"推价异常"(price_push_mismatch)的SKU即使INACTIVE也允许重推
+            # ——OF21实时拉全量offer重建payload，价格连同状态一起推回去
+            has_issue = _query(
+                """SELECT id FROM order_system.issue_log
+                   WHERE issue_type='price_push_mismatch' AND status='open'
+                     AND entity=%s""", (f"{shop_sku}@{store_key}",))
+            if not has_issue:
+                return jsonify({"success": False, "msg": "shop_sku not active"}), 400
+            row = _query(
+                """SELECT shop_sku, warehouse_sku, origin_price, discount_price,
+                          raw_json, state_code, quantity, last_cost_snapshot
+                   FROM order_system.offerprice_listing
+                   WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+                (scfg["platform"], scfg["shop_name"], shop_sku))
+            if not row:
+                return jsonify({"success": False, "msg": "offer不存在"}), 400
+            r0 = row[0]
+            from app.services.repricing_monitor_service import OfferContext
+            ctx = OfferContext(
+                shop_sku=r0["shop_sku"], warehouse_sku=r0.get("warehouse_sku"),
+                db_origin_price=float(r0["origin_price"]) if r0.get("origin_price") else None,
+                db_discount_price=float(r0["discount_price"]) if r0.get("discount_price") else None,
+                raw_json=r0.get("raw_json"), state_code=r0.get("state_code"),
+                quantity=r0.get("quantity"),
+                last_cost_snapshot=float(r0["last_cost_snapshot"]) if r0.get("last_cost_snapshot") else None)
         if not ctx.warehouse_sku:
             return jsonify({"success": False, "msg": "no warehouse_sku mapping"}), 400
 
