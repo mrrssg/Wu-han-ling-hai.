@@ -3,9 +3,17 @@
 {% block page_title %}定价方案（分档定价）{% endblock %}
 {% block page_sub %}每个SKU一档，每档带原因——评档只出建议，改价必须人工确认{% endblock %}
 {% block page_actions %}
-<a class="btn btn-sm btn-outline-success"
-   href="{{ url_for('repricing.pricing_plan', store=store_key, tier=tier_filter, format='csv') }}">
-  <i class="bi bi-download"></i> 导出CSV</a>
+<div class="d-inline-flex align-items-center gap-2">
+  <select class="form-select form-select-sm" style="width:auto"
+          onchange="location='{{ url_for('repricing.pricing_plan') }}?store='+this.value">
+    {% for k, label in stores.items() %}
+    <option value="{{ k }}" {{ 'selected' if k == store_key }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <a class="btn btn-sm btn-outline-success"
+     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=tier_filter, format='csv') }}">
+    <i class="bi bi-download"></i> 导出CSV</a>
+</div>
 {% endblock %}
 
 {% block content %}
@@ -19,7 +27,16 @@
 .tier-card .d { font-size:.7rem; color:#6b7280; line-height:1.35; }
 .reason { font-size:.8rem; color:#374151; max-width:520px; }
 .suspect { background:#fff8ec; }
+.tier-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:.5rem; }
+@media (max-width:1400px) { .tier-grid { grid-template-columns:repeat(4,1fr); } }
+@media (max-width:768px)  { .tier-grid { grid-template-columns:repeat(2,1fr); } }
 </style>
+
+{% if total == 0 %}
+<div class="alert alert-light border" style="font-size:.85rem">
+  该店铺还没接入分档定价（目前只有 Lowes-Autool 上线）。接入需要：订单/退货数据 + 定价配置 + 档位评估脚本加店铺映射。
+</div>
+{% endif %}
 
 {# ---------- 方案说明（算法一句话+当前p值） ---------- #}
 <div class="card p-3 mb-3" style="font-size:.85rem">
@@ -39,27 +56,23 @@
   </div>
 </div>
 
-{# ---------- 五档汇总（点击筛选） ---------- #}
-<div class="row g-2 mb-3">
-  <div class="col-6 col-lg-2">
-    <a class="tier-card {{ 'active' if not tier_filter }}" style="border-left-color:#0b0b0b"
-       href="{{ url_for('repricing.pricing_plan', store=store_key) }}">
-      <div class="t">全部在卖</div><div class="n">{{ total }}</div>
-      <div class="d">active offer 总数</div></a>
-  </div>
+{# ---------- 档位汇总（一行7卡，点击筛选） ---------- #}
+<div class="tier-grid mb-3">
+  <a class="tier-card {{ 'active' if not tier_filter }}" style="border-left-color:#0b0b0b"
+     href="{{ url_for('repricing.pricing_plan', store=store_key) }}">
+    <div class="t">全部在卖</div><div class="n">{{ total }}</div>
+    <div class="d">active offer 总数</div></a>
   {% for key, meta in tier_meta.items() %}
-  <div class="col-6 col-lg-2">
-    <a class="tier-card {{ 'active' if tier_filter == key }}" style="border-left-color:{{ meta[1] }}"
-       href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key) }}">
-      <div class="t">{{ meta[0] }}</div>
-      <div class="n">{{ counts.get(key, 0) }}</div>
-      {% set st = tier_stats.get(key) %}
-      {% if st %}
-      <div class="d" style="color:#1f2937"><b>贡献业绩 {{ '%.1f%%' % st.share }}</b>
-        {%- if st.loss is not none %} · 退货损失率 {{ '%.1f%%' % st.loss }}{% endif %}</div>
-      {% endif %}
-      <div class="d">{{ meta[2] }}</div></a>
-  </div>
+  <a class="tier-card {{ 'active' if tier_filter == key }}" style="border-left-color:{{ meta[1] }}"
+     href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key) }}">
+    <div class="t">{{ meta[0] }}</div>
+    <div class="n">{{ counts.get(key, 0) }}</div>
+    {% set st = tier_stats.get(key) %}
+    {% if st %}
+    <div class="d" style="color:#1f2937"><b>贡献业绩 {{ '%.1f%%' % st.share }}</b>
+      {%- if st.loss is not none %} · 退货损失率 {{ '%.1f%%' % st.loss }}{% endif %}</div>
+    {% endif %}
+    <div class="d">{{ meta[2] }}</div></a>
   {% endfor %}
 </div>
 
