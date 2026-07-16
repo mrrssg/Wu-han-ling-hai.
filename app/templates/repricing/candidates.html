@@ -3,6 +3,17 @@
 {% block page_title %}待改价 - {{ store_key }}{% endblock %}
 
 {% block content %}
+{% if mismatches %}
+<div class="alert alert-danger py-2 mb-3">
+  <b>🚨 推价异常 {{ mismatches|length }} 个</b>——推送"成功"但价格没生效/被平台改动/offer被停用。
+  它们<b>不会</b>出现在下方候选清单里（已推过+已下线的不进评估），必须先处理：
+  {% for m in mismatches %}
+  <div class="small mt-1"><code>{{ m.entity.split('@')[0] }}</code> — {{ m.evidence }}</div>
+  {% endfor %}
+  <div class="small mt-1 text-muted">处理完去问题清单关闭对应条目，offer恢复在卖后会自动回到评估池。</div>
+</div>
+{% endif %}
+
 <!-- Push result banner (persists until closed) -->
 <div id="push-banner-container"></div>
 

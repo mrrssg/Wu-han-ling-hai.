@@ -371,11 +371,19 @@ def pricing_plan():
 @repricing_bp.route("/candidates")
 def candidates_page():
     store_key = _current_store()
+    # 推价异常（回读验证发现价格没生效/被平台改动/下线）——候选清单看不见它们
+    # （已推过的会被success行压制、INACTIVE的不进评估），这里挂横幅提醒
+    mismatches = _query(
+        """SELECT entity, evidence FROM order_system.issue_log
+           WHERE issue_type='price_push_mismatch' AND status='open'
+             AND entity LIKE %s ORDER BY id DESC LIMIT 50""",
+        (f"%@{store_key}",))
     return render_template(
         "repricing/candidates.html",
         store_key=store_key,
         stores=store_options(),
         rows=_all_candidates(store_key),
+        mismatches=mismatches,
     )
 
 
