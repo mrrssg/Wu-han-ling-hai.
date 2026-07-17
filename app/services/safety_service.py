@@ -417,9 +417,17 @@ def _case_row(conn, case_id: int) -> Optional[Dict]:
     return rows[0] if rows else None
 
 
+def _ai_client():
+    """哨兵的 _openai_client 不自己装key（调用方负责）——这里补上再用。"""
+    from flask import current_app
+    from app.services.listing_sentinel_service import _ensure_openai_key, _openai_client
+    _ensure_openai_key(current_app.config.get("BASE_DIR", current_app.root_path))
+    return _openai_client()
+
+
 def generate_fingerprint(case_id: int) -> Dict[str, Any]:
     """AI读案例+涉事产品资料 → 结构化风险指纹（用户确认后才用于扫描）。"""
-    from app.services.listing_sentinel_service import _openai_client, MODEL_NAME
+    from app.services.listing_sentinel_service import MODEL_NAME
 
     conn = DBManager.get_connection()
     try:
@@ -454,7 +462,7 @@ def generate_fingerprint(case_id: int) -> Dict[str, Any]:
 "keywords_cn":["中文关键词,可选"],
 "judge_focus":"精判时应重点核对什么(一句话)"}}"""
 
-    client = _openai_client()
+    client = _ai_client()
     resp = client.chat.completions.create(
         model=MODEL_NAME, response_format={"type": "json_object"},
         messages=[{"role": "system", "content": "Output valid JSON only."},
@@ -546,7 +554,7 @@ def _judge_candidate(client, model: str, case: Dict, fp: Dict, cand: Dict) -> Di
 
 def run_scan(case_id: int) -> Dict[str, Any]:
     """全库举一反三（同步执行，路由用后台线程包）。"""
-    from app.services.listing_sentinel_service import _openai_client, MODEL_NAME
+    from app.services.listing_sentinel_service import MODEL_NAME
 
     conn = DBManager.get_connection()
     try:
@@ -562,7 +570,7 @@ def run_scan(case_id: int) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    client = _openai_client()
+    client = _ai_client()
     stats = {"candidates": len(cands), "judged": 0, "high": 0, "mid": 0, "low": 0}
     for cand in cands:
         try:
