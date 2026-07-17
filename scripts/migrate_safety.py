@@ -57,6 +57,9 @@ DDLS = [
 
 
 ALTERS = [
+    "ALTER TABLE order_system.safety_product_cache ADD COLUMN category VARCHAR(160) DEFAULT NULL",
+    "ALTER TABLE order_system.safety_product_cache ADD COLUMN in_catalog TINYINT DEFAULT 1 "
+    "COMMENT '1=我们目录内(在卖/卖过) 0=供应商全量feed里我们没卖的(选品预警用)'",
     "ALTER TABLE order_system.safety_case ADD COLUMN scan_status VARCHAR(24) DEFAULT NULL "
     "COMMENT 'fingerprint_ready/scanning/done/error'",
     "ALTER TABLE order_system.safety_case ADD COLUMN scan_summary_json TEXT",

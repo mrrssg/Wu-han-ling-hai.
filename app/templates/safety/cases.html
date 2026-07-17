@@ -64,8 +64,9 @@
       </div>
     </div>
     <div class="card p-2 mt-2 d-flex flex-row align-items-center gap-2" style="font-size:.78rem">
-      <span>🗂 产品文本缓存（AI扫描的料）：<b>{{ cache.n }}</b> 条
-        {% if cache.synced_at %}· 上次同步 {{ cache.synced_at }}{% else %}· <b class="text-danger">还没同步过，先点右边按钮</b>{% endif %}</span>
+      <span>🗂 产品文本缓存（AI扫描的料）：<b>{{ cache.n }}</b> 条（我们目录内 {{ cache.in_catalog }}）
+        {% if cache.synced_at %}· 上次同步 {{ cache.synced_at }}{% else %}· <b class="text-danger">还没同步过，先点右边按钮</b>{% endif %}
+        · 豪雅=官方feed直下，司顺=飞书</span>
       <button class="btn btn-sm btn-outline-primary py-0" onclick="syncCache(this)">同步产品缓存</button>
     </div>
     <p class="text-muted mt-2" style="font-size:.75rem">

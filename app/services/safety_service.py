@@ -271,63 +271,111 @@ def _catalog_skus(conn) -> Set[str]:
     return out
 
 
-def sync_product_cache() -> Dict[str, Any]:
-    """全量翻页拉飞书 Costway/Vevor sku资料表，只缓存我们目录内的SKU。
-    约几分钟，从页面按钮后台跑；建议每周手动/定时刷一次。"""
+# Costway 官方全量 dropship feed（用户指示直接下载同步，不绕飞书）。
+# WinZip AES-256 加密，密码会轮换——都失败时要向用户要新密码加到列表最前。
+FEED_URL = "https://cdn.costway.com/media/feed/dropship.zip"
+FEED_PASSWORDS = ["728465", "482619", "915473"]
+
+
+def _sync_costway_from_feed(catalog: Set[str]) -> List[tuple]:
+    """下载feed→pyzipper解压→CSV→行元组。33k+ SKU全量缓存（含我们没卖的，
+    in_catalog=0，留给选品前预警用）。"""
+    import csv as _csv
+    import io as _io
+    import requests
+    import pyzipper
+
+    r = requests.get(FEED_URL, timeout=300)
+    r.raise_for_status()
+    buf = _io.BytesIO(r.content)
+    data = None
+    last_exc: Optional[Exception] = None
+    for pwd in FEED_PASSWORDS:
+        try:
+            buf.seek(0)
+            with pyzipper.AESZipFile(buf) as zf:
+                zf.setpassword(pwd.encode())
+                name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
+                data = zf.read(name)
+            break
+        except Exception as exc:
+            last_exc = exc
+    if data is None:
+        raise RuntimeError(f"feed解压失败——密码可能又轮换了（试过{FEED_PASSWORDS}），"
+                           f"要向老板要新密码: {last_exc}")
+
+    rows = []
+    reader = _csv.DictReader(_io.StringIO(data.decode("utf-8", errors="replace")))
+    for rec in reader:
+        sku = (rec.get("SKU") or "").strip()
+        if not sku:
+            continue
+        rows.append(("Costway", sku,
+                     (rec.get("Item Name") or "")[:400],
+                     (rec.get("Specification") or "")[:1200],
+                     (rec.get("Description") or "")[:1200],
+                     (rec.get("Images1") or "")[:600],
+                     (rec.get("Category") or "")[:160],
+                     1 if sku in catalog else 0))
+    return rows
+
+
+def _sync_vevor_from_feishu(catalog: Set[str]) -> List[tuple]:
+    """司顺没有feed，仍从飞书sku资料表翻页拉（只留目录内的）。"""
     import requests
     from app.services.listing_sentinel_service import (
-        COSTWAY_TBL, VEVOR_TBL, PRODUCT_APP, _token, _gt, _glink)
+        VEVOR_TBL, PRODUCT_APP, _token, _gt, _glink)
 
+    headers = {"Authorization": f"Bearer {_token()}",
+               "Content-Type": "application/json"}
+    rows = []
+    page_token = ""
+    while True:
+        url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{PRODUCT_APP}"
+               f"/tables/{VEVOR_TBL}/records?page_size=500"
+               + (f"&page_token={page_token}" if page_token else ""))
+        r = requests.get(url, headers=headers, timeout=60).json()
+        data = r.get("data") or {}
+        for item in data.get("items") or []:
+            f = item.get("fields") or {}
+            sku = _gt(f.get("SKU")).strip()
+            if not sku or sku not in catalog:
+                continue
+            sells = " / ".join(_gt(f.get(f"Selling point {i}")) for i in range(1, 6)
+                               if _gt(f.get(f"Selling point {i}")))
+            rows.append(("Vevor", sku,
+                         _gt(f.get("Product title"))[:400], sells[:1200],
+                         _gt(f.get("Product description"))[:1200],
+                         _glink(f.get("Image link"))[:600], None, 1))
+        if not data.get("has_more"):
+            break
+        page_token = data.get("page_token") or ""
+        if not page_token:
+            break
+    return rows
+
+
+def sync_product_cache() -> Dict[str, Any]:
+    """豪雅=官方feed直下（全量33k+，含未上架的留给选品预警）；司顺=飞书。"""
     conn = DBManager.get_connection()
     try:
         catalog = _catalog_skus(conn)
     finally:
         conn.close()
 
-    headers = {"Authorization": f"Bearer {_token()}",
-               "Content-Type": "application/json"}
-    summary = {"catalog": len(catalog), "cached": 0, "pages": 0}
-
-    def _pull(table_id: str, supplier: str, extract):
-        rows = []
-        page_token = ""
-        while True:
-            url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{PRODUCT_APP}"
-                   f"/tables/{table_id}/records?page_size=500"
-                   + (f"&page_token={page_token}" if page_token else ""))
-            r = requests.get(url, headers=headers, timeout=60).json()
-            data = r.get("data") or {}
-            for item in data.get("items") or []:
-                f = item.get("fields") or {}
-                rec = extract(f)
-                if rec and rec[0] in catalog:
-                    rows.append((supplier,) + rec)
-            summary["pages"] += 1
-            if not data.get("has_more"):
-                break
-            page_token = data.get("page_token") or ""
-            if not page_token:
-                break
-        return rows
-
-    def _ex_costway(f):
-        sku = _gt(f.get("SKU")).strip()
-        if not sku:
-            return None
-        return (sku, _gt(f.get("Item Name"))[:400], _gt(f.get("Specification"))[:1500],
-                _gt(f.get("Description"))[:1500], _glink(f.get("Images1"))[:600])
-
-    def _ex_vevor(f):
-        sku = _gt(f.get("SKU")).strip()
-        if not sku:
-            return None
-        sells = " / ".join(_gt(f.get(f"Selling point {i}")) for i in range(1, 6)
-                           if _gt(f.get(f"Selling point {i}")))
-        return (sku, _gt(f.get("Product title"))[:400], sells[:1500],
-                _gt(f.get("Product description"))[:1500],
-                _glink(f.get("Image link"))[:600])
-
-    rows = _pull(COSTWAY_TBL, "Costway", _ex_costway) + _pull(VEVOR_TBL, "Vevor", _ex_vevor)
+    summary: Dict[str, Any] = {"catalog": len(catalog)}
+    try:
+        c_rows = _sync_costway_from_feed(catalog)
+        summary["costway_source"] = "feed"
+    except Exception as exc:
+        summary["costway_source"] = f"feed失败:{str(exc)[:160]}"
+        c_rows = []
+    try:
+        v_rows = _sync_vevor_from_feishu(catalog)
+    except Exception as exc:
+        summary["vevor_error"] = str(exc)[:160]
+        v_rows = []
+    rows = c_rows + v_rows
 
     conn = DBManager.get_connection()
     try:
@@ -335,24 +383,31 @@ def sync_product_cache() -> Dict[str, Any]:
             for i in range(0, len(rows), 300):
                 cur.executemany("""
                     INSERT INTO order_system.safety_product_cache
-                        (supplier, sku, title, spec, descr, image_url, synced_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,NOW())
+                        (supplier, sku, title, spec, descr, image_url, category,
+                         in_catalog, synced_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON DUPLICATE KEY UPDATE title=VALUES(title), spec=VALUES(spec),
                         descr=VALUES(descr), image_url=VALUES(image_url),
+                        category=VALUES(category), in_catalog=VALUES(in_catalog),
                         synced_at=NOW()""", rows[i:i + 300])
         conn.commit()
     finally:
         conn.close()
-    summary["cached"] = len(rows)
+    summary["costway"] = len(c_rows)
+    summary["vevor"] = len(v_rows)
+    summary["in_catalog"] = sum(1 for r in rows if r[7] == 1)
     return summary
 
 
 def cache_stats() -> Dict[str, Any]:
     conn = DBManager.get_connection()
     try:
-        r = _q(conn, """SELECT COUNT(*) AS n, MAX(synced_at) AS t
+        r = _q(conn, """SELECT COUNT(*) AS n,
+                        SUM(CASE WHEN in_catalog=1 THEN 1 ELSE 0 END) AS in_cat,
+                        MAX(synced_at) AS t
                         FROM order_system.safety_product_cache""")[0]
-        return {"n": int(r["n"] or 0), "synced_at": r["t"]}
+        return {"n": int(r["n"] or 0), "in_catalog": int(r["in_cat"] or 0),
+                "synced_at": r["t"]}
     finally:
         conn.close()
 
@@ -449,7 +504,7 @@ def _stage1_candidates(conn, case: Dict, fp: Dict) -> List[Dict]:
         (case["id"],))}
     scored = []
     for r in _q(conn, "SELECT supplier, sku, title, spec, descr, image_url "
-                      "FROM order_system.safety_product_cache"):
+                      "FROM order_system.safety_product_cache WHERE in_catalog=1"):
         if r["sku"] in already:
             continue
         text = " ".join(filter(None, [r["title"], r["spec"], r["descr"]])).lower()
