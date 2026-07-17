@@ -16,12 +16,38 @@
   <b>案情</b>
   <div class="text-muted mt-1" style="white-space:pre-wrap">{{ case.case_text or '（无描述）' }}</div>
   <div class="mt-2"><b>涉事供应商SKU</b>：<span class="font-monospace small">{{ case.supplier_skus or '—' }}</span></div>
+  {% if involved %}
+  <div class="mt-2"><b>涉事产品图</b>（对照下方命中清单的缩略图）：
+    <div class="d-flex gap-2 mt-1 flex-wrap">
+      {% for p in involved %}
+      <div class="text-center" style="width:86px">
+        {% if p.img %}
+        <a href="{{ p.img }}" target="_blank" title="{{ p.title }}">
+          <img src="{{ p.img }}" loading="lazy" referrerpolicy="no-referrer"
+               style="width:82px;height:82px;object-fit:cover;border-radius:6px;border:2px solid #d03b3b"
+               onerror="this.replaceWith('图↗')"></a>
+        {% else %}<div class="text-muted small border rounded"
+                       style="width:82px;height:82px;line-height:82px">无图</div>{% endif %}
+        <div class="font-monospace text-truncate" style="font-size:.68rem" title="{{ p.sku }}">{{ p.sku }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if files %}
   <div class="mt-2"><b>附件</b>：
-    {% for f in files %}
-    <a class="badge text-bg-light border text-dark me-1"
-       href="{{ url_for('safety.case_file', relpath=f.path) }}" target="_blank">📎 {{ f.name }}</a>
-    {% endfor %}
+    <div class="d-flex gap-2 mt-1 flex-wrap align-items-end">
+      {% for f in files %}
+      {% if f.is_img %}
+      <a href="{{ url_for('safety.case_file', relpath=f.path) }}" target="_blank" title="{{ f.name }}">
+        <img src="{{ url_for('safety.case_file', relpath=f.path) }}" loading="lazy"
+             style="width:82px;height:82px;object-fit:cover;border-radius:6px;border:1px solid #e5e8ee"></a>
+      {% else %}
+      <a class="badge text-bg-light border text-dark"
+         href="{{ url_for('safety.case_file', relpath=f.path) }}" target="_blank">📎 {{ f.name }}</a>
+      {% endif %}
+      {% endfor %}
+    </div>
   </div>
   {% endif %}
 </div>

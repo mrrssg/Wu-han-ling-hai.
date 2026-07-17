@@ -152,7 +152,24 @@ def case_detail(cid):
         files = _json.loads(case[0].get("files_json") or "[]")
     except ValueError:
         pass
-    return render_template("safety/case_detail.html", case=case[0], hits=hits, files=files)
+    for f in files:
+        f["is_img"] = (f.get("name") or "").lower().endswith(
+            (".png", ".jpg", ".jpeg", ".webp"))
+    # 涉事SKU的供应商主图（和命中清单缩略图并排对比用）
+    involved = []
+    skus = [s for s in (case[0].get("supplier_skus") or "").split(",") if s][:12]
+    if skus:
+        ph = ",".join(["%s"] * len(skus))
+        img_map = {r["sku"]: r for r in _query(
+            f"""SELECT sku, MAX(image_url) AS img, MAX(title) AS title
+                FROM order_system.safety_product_cache
+                WHERE sku IN ({ph}) GROUP BY sku""", tuple(skus))}
+        for s in skus:
+            r = img_map.get(s)
+            involved.append({"sku": s, "img": (r or {}).get("img"),
+                             "title": (r or {}).get("title") or ""})
+    return render_template("safety/case_detail.html", case=case[0], hits=hits,
+                           files=files, involved=involved)
 
 
 @safety_bp.route("/file/<path:relpath>")
