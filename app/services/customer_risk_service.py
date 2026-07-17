@@ -89,20 +89,33 @@ def rebuild_profiles() -> Dict[str, Any]:
             SELECT DISTINCT order_id FROM order_system.return_case
             WHERE state='not_charged'""")}
 
-        # 全店订单（按order_id去重行级数据）
+        # 全店订单：每单只取一行（MIN(id)），姓名/电话/街道用JSON函数在数据库侧抽取——
+        # 绝不整包回传raw_json（几万单×几十KB曾把查询卡在Sending to client半小时,2026-07-17踩过）
+        def _jx(path: str, alias: str) -> str:
+            return (f"CASE WHEN d.raw_json IS NOT NULL AND JSON_VALID(d.raw_json) "
+                    f"THEN JSON_UNQUOTE(JSON_EXTRACT(d.raw_json, '{path}')) END AS {alias}")
+
         orders: Dict[str, Dict] = {}
         for tbl in ORDER_TABLES:
             for r in _q(conn, f"""
                     SELECT d.order_id, d.created_date, d.customer_email,
                            d.shipping_city, d.shipping_state, d.shipping_zip,
-                           d.raw_json, sc.platform, sc.shop_name
+                           sc.platform, sc.shop_name,
+                           {_jx('$.customer.shipping_address.firstname', 'fn')},
+                           {_jx('$.customer.shipping_address.lastname', 'ln')},
+                           {_jx('$.customer.shipping_address.phone', 'phone')},
+                           {_jx('$.customer.shipping_address.street_1', 's1')},
+                           {_jx('$.customer.shipping_address.street_2', 's2')}
                     FROM order_system.{tbl} d
-                    JOIN order_system.shop_configs sc ON sc.id=d.shop_id
-                    WHERE d.order_state<>'CANCELED'"""):
+                    JOIN (SELECT MIN(id) AS mid FROM order_system.{tbl}
+                          WHERE order_state<>'CANCELED' GROUP BY order_id) f ON f.mid=d.id
+                    JOIN order_system.shop_configs sc ON sc.id=d.shop_id"""):
                 oid = r["order_id"]
                 if oid in orders:
                     continue
-                cust = _parse_order_customer(r["raw_json"])
+                cust = {"name": f"{(r['fn'] or '').strip()} {(r['ln'] or '').strip()}".strip(),
+                        "phone": r["phone"] or "",
+                        "street": r["s1"] or "", "street2": r["s2"] or ""}
                 orders[oid] = {
                     "order_id": oid,
                     "store": f"{r['platform']}-{r['shop_name']}",
