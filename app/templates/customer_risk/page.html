@@ -1,0 +1,79 @@
+{% extends "base_v2.html" %}
+{% block title %}可疑客户分析{% endblock %}
+{% block page_title %}可疑客户分析{% endblock %}
+{% block page_sub %}全店铺订单按 邮箱/电话/地址 三条身份线归一（大小写/写法差异已处理），只列产生过退货的客户；每天自动重算{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="rebuild(this)">🔄 立即重算</button>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex gap-2 mb-3 flex-wrap" style="font-size:.85rem">
+  <a class="btn btn-sm {{ 'btn-dark' if not level else 'btn-outline-dark' }}"
+     href="{{ url_for('customer_risk.page') }}">全部 {{ (counts.get('high',0)+counts.get('mid',0)+counts.get('low',0)) }}</a>
+  <a class="btn btn-sm {{ 'btn-danger' if level=='high' else 'btn-outline-danger' }}"
+     href="{{ url_for('customer_risk.page', level='high') }}">高可疑 {{ counts.get('high',0) }}</a>
+  <a class="btn btn-sm {{ 'btn-warning' if level=='mid' else 'btn-outline-warning' }}"
+     href="{{ url_for('customer_risk.page', level='mid') }}">中可疑 {{ counts.get('mid',0) }}</a>
+  <a class="btn btn-sm {{ 'btn-secondary' if level=='low' else 'btn-outline-secondary' }}"
+     href="{{ url_for('customer_risk.page', level='low') }}">低（退过1次） {{ counts.get('low',0) }}</a>
+  <span class="text-muted ms-auto" style="font-size:.75rem">上次重算 {{ built_at or '—' }} ·
+    判定：高=≥3单且退50%/跨店退≥2/同址多名/退≥3；中=2退且率50%或defective类集中</span>
+</div>
+
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light"><tr>
+      <th>级别</th><th>身份线</th><th>身份/姓名</th><th>店铺</th>
+      <th class="text-end">单数</th><th class="text-end">退货</th><th class="text-end">退货率</th>
+      <th>退货原因</th><th class="text-end">没扣款</th><th>最近下单</th>
+      <th>样本订单</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="{{ 'table-danger' if r.risk_level=='high' and not r.blacklisted }}">
+        <td><span class="badge {{ 'text-bg-danger' if r.risk_level=='high' else ('text-bg-warning text-dark' if r.risk_level=='mid' else 'text-bg-secondary') }}"
+              title="{{ r.risk_reason }}">{{ {'high':'高','mid':'中','low':'低'}[r.risk_level] }}</span></td>
+        <td class="small">{{ {'email':'邮箱','phone':'电话','street':'地址'}[r.id_type] }}</td>
+        <td style="max-width:240px">
+          <div class="small text-truncate" title="{{ r.display }}">{{ r.display }}</div>
+          <div class="text-muted" style="font-size:.72rem">{{ r.names }}{% if r.rep_city %} · {{ r.rep_city }},{{ r.rep_state }}{% endif %}</div></td>
+        <td class="small">{{ r.stores }}</td>
+        <td class="text-end">{{ r.orders_n }}</td>
+        <td class="text-end fw-bold {{ 'text-danger' if r.returns_n >= 2 }}">{{ r.returns_n }}</td>
+        <td class="text-end">{{ '%.0f%%' % (r.return_rate * 100) }}</td>
+        <td class="small" style="max-width:200px">{{ r.reasons or '—' }}</td>
+        <td class="text-end">{{ r.not_charged_n }}</td>
+        <td class="small text-muted">{{ r.last_order }}</td>
+        <td class="small font-monospace" style="max-width:160px">
+          <div class="text-truncate" title="{{ r.sample_orders }}">{{ r.sample_orders }}</div></td>
+        <td>
+          {% if r.blacklisted %}<span class="badge text-bg-dark">已在黑名单</span>
+          {% else %}
+          <button class="btn btn-sm btn-outline-dark py-0" onclick="toBl({{ r.id }}, this)">⛔ 加入黑名单</button>
+          {% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="12" class="text-center text-muted py-4">还没有档案——点右上"立即重算"</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+<p class="text-muted mt-2" style="font-size:.75rem">
+  加入黑名单后，豪雅/司顺/大建导单时命中（姓名/电话/邮箱/街道模糊）自动标红供复核——用的是现有黑名单拦截链路。
+  "没扣款"=申请了退货但买家货款没被扣回（蹭退特征）。同一客户可能同时出现在邮箱线和地址线，加入一条即可（黑名单按多字段匹配）。</p>
+
+<script>
+async function rebuild(btn) {
+  btn.disabled = true; btn.textContent = '已开始…';
+  const r = await fetch('{{ url_for("customer_risk.rebuild") }}', {method: 'POST'});
+  alert((await r.json()).msg || '已开始');
+}
+async function toBl(id, btn) {
+  if (!confirm('确认把该客户加入黑名单？之后导单命中会自动标红。')) return;
+  btn.disabled = true;
+  const r = await fetch('{{ url_for("customer_risk.page") }}blacklist/' + id, {method: 'POST'});
+  const d = await r.json();
+  if (d.success) location.reload();
+  else { alert(d.msg || '失败'); btn.disabled = false; }
+}
+</script>
+{% endblock %}
