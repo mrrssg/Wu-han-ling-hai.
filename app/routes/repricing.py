@@ -391,6 +391,11 @@ def pricing_plan():
                       "WHERE store_key=%s", (store_key,))
     eval_at = eval_row[0]["t"] if eval_row else None
 
+    # 下架档SKU清单（删offer按钮用；一键批量删的确认框要列出全部）
+    delist_skus = [r["shop_sku"] for r in _query(
+        """SELECT shop_sku FROM order_system.pricing_tier
+           WHERE store_key=%s AND tier='delist' ORDER BY shop_sku""", (store_key,))]
+
     # 最新plan候选的目标价（折扣后）贴到方案行上，方案页直接看得到"要改成多少钱"
     plan_prices: Dict[str, Dict] = {}
     latest_plan = _query(
@@ -468,7 +473,103 @@ def pricing_plan():
         n_candidates=n_candidates, p_recover=p_recover, tier_stats=tier_stats,
         f_operator=f_operator, f_category=f_category, f_source=f_source, f_q=f_q,
         operators=operators, categories=categories, sources=sources,
-        page=page, pages=pages, total_filtered=total_filtered, per_page=per_page)
+        page=page, pages=pages, total_filtered=total_filtered, per_page=per_page,
+        delist_skus=delist_skus)
+
+
+@repricing_bp.route("/delete-offers", methods=["POST"])
+def delete_offers():
+    """下架档删offer（用户2026-07-17拍板）：OF24 update_delete='delete'。
+
+    只允许 pricing_tier.tier='delist' 的SKU（其它档位一律拒绝，防误删）。
+    成功后全系统除名：offerprice_listing.active=0（监控/评档/候选/导出都不再碰）、
+    清掉该SKU的dry_run候选残留、写action_log(接"下架后仍出单"哨兵)、删pricing_tier行。
+    按钮点击即人工确认（批量在前端弹确认框）；删除不可逆。"""
+    from app.services.mirakl_offer_api_service import update_offers
+    from app.services.repricing_monitor_service import _log, OfferContext
+
+    store_key = _current_store()
+    scfg = get_store(store_key)
+    payload = request.get_json(silent=True) or {}
+    skus_in = [(s or "").strip() for s in (payload.get("shop_skus") or [])]
+    skus_in = [s for s in skus_in if s]
+    if not skus_in:
+        return jsonify({"success": False, "msg": "shop_skus required"}), 400
+    if len(skus_in) > 50:
+        return jsonify({"success": False, "msg": f"一次最多50个（收到{len(skus_in)}）"}), 400
+
+    ph = ",".join(["%s"] * len(skus_in))
+    delist_ok = {r["shop_sku"] for r in _query(
+        f"""SELECT shop_sku FROM order_system.pricing_tier
+            WHERE store_key=%s AND tier='delist' AND shop_sku IN ({ph})""",
+        [store_key] + skus_in)}
+    rejected = [s for s in skus_in if s not in delist_ok]
+    targets = [s for s in skus_in if s in delist_ok]
+    if not targets:
+        return jsonify({"success": False, "rejected": rejected,
+                        "msg": "没有可删的SKU（只有下架档的才允许删）"}), 400
+
+    offers = [{"shop_sku": s, "update_delete": "delete"} for s in targets]
+    resp = update_offers(store_key, offers, dry_run=False)
+    http_status = resp.get("http_status")
+    ok = http_status in (200, 201) and not resp.get("error")
+    run_id = f"delist-{store_key}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+    # action_log 的 target 用利润台账的店名口径（sku@Lowes-Autool），
+    # 和"下架后仍出单"哨兵、行动清单排除逻辑保持一致
+    try:
+        from app.services.pricing_plan_service import STORE_MAP as _PM
+        rc_store = _PM[store_key][3] if store_key in _PM else store_key
+    except Exception:
+        rc_store = store_key
+
+    if ok:
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                for s in targets:
+                    cursor.execute(
+                        """UPDATE order_system.offerprice_listing SET active=0
+                           WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+                        (scfg["platform"], scfg["shop_name"], s))
+                    cursor.execute(
+                        """DELETE FROM order_system.offer_price_change_log
+                           WHERE store_key=%s AND shop_sku=%s AND status='dry_run'""",
+                        (store_key, s))
+                    cursor.execute(
+                        """INSERT INTO order_system.action_log
+                               (action_type, target, store, status, params_json)
+                           VALUES ('delist', %s, %s, 'executed', %s)""",
+                        (f"{s}@{rc_store}", rc_store,
+                         json.dumps({"via": "OF24 update_delete=delete",
+                                     "run_id": run_id}, ensure_ascii=False)))
+                    cursor.execute(
+                        """DELETE FROM order_system.pricing_tier
+                           WHERE store_key=%s AND shop_sku=%s""", (store_key, s))
+            conn.commit()
+        finally:
+            conn.close()
+
+    for s in targets:
+        ctx = OfferContext(shop_sku=s, warehouse_sku=None, db_origin_price=None,
+                           db_discount_price=None, raw_json=None, state_code=None,
+                           quantity=None, last_cost_snapshot=None)
+        _log(store_key, run_id, "delist", ctx, {
+            "status": "success" if ok else "failed",
+            "decision_reason": "下架档删offer：OF24 update_delete=delete",
+            "mirakl_called": 1,
+            "mirakl_import_id": resp.get("import_id"),
+            "mirakl_http_status": http_status,
+            "mirakl_response_body": (resp.get("response_body") or "")[:1800],
+            "ip_used": resp.get("ip_used"),
+            "error_message": resp.get("error"),
+        })
+
+    return jsonify({"success": ok, "run_id": run_id,
+                    "deleted": targets if ok else [], "rejected": rejected,
+                    "http_status": http_status, "import_id": resp.get("import_id"),
+                    "ip_used": resp.get("ip_used"),
+                    "error_message": resp.get("error")})
 
 
 @repricing_bp.route("/candidates")

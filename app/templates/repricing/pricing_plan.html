@@ -112,6 +112,17 @@
   {% endif %}
 </form>
 
+{# ---------- 下架档批量删offer ---------- #}
+{% if delist_skus %}
+<div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+  <button id="del-all-btn" class="btn btn-sm btn-danger">
+    🗑 一键删除全部下架档（{{ delist_skus|length }}个offer）</button>
+  <span class="text-muted" style="font-size:.75rem">
+    删除=调Mirakl接口下架该offer，<b>不可逆</b>；删后全系统除名（监控/评档/候选/导出不再出现），
+    并自动启动"删后仍出单"哨兵——万一平台没删干净会红条报警</span>
+</div>
+{% endif %}
+
 {# ---------- 明细 ---------- #}
 <div class="card">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
@@ -128,7 +139,7 @@
         <th class="text-end">退货损失率</th><th class="text-end">实际毛利</th><th>数据来源</th><th class="text-end">现价$</th>
         <th class="text-end">目标价$</th>
         <th class="text-end">成本$</th><th class="text-end">上架天数</th>
-        <th style="min-width:340px">为什么进这一档</th></tr></thead>
+        <th style="min-width:340px">为什么进这一档</th><th>操作</th></tr></thead>
       <tbody>
         {% for r in rows %}
         <tr class="{{ 'suspect' if r.data_suspect }}">
@@ -149,9 +160,12 @@
           <td class="text-end">{{ '%.2f' % r.cost_price if r.cost_price else '—' }}</td>
           <td class="text-end">{{ r.listed_days if r.listed_days is not none else '—' }}</td>
           <td><div class="reason">{{ r.reason_text }}</div></td>
+          <td>{% if r.tier == 'delist' %}
+            <button class="btn btn-sm btn-outline-danger del-btn" data-sku="{{ r.shop_sku }}">🗑 删offer</button>
+            {% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="15" class="text-center text-muted py-4">还没有评档数据——先跑 scripts/pricing_tier_eval.py</td></tr>
+        <tr><td colspan="16" class="text-center text-muted py-4">还没有评档数据——先跑 scripts/pricing_tier_eval.py</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -177,6 +191,39 @@
   {% endif %}
 </div>
 <p class="text-muted mt-2" style="font-size:.75rem">
-  流程：评档（只写档位+原因，不动价）→ 你在本页审查各档 → 价格监控/候选管道发现现价毛利低于档位目标−2点或偏离档位公式价 → 待改价清单（首页待办可见）→ 人工确认推送 → 效果回看本页与利润控制台。
+  流程：评档（只写档位+原因，不动价）→ 你在本页审查各档 → 价格监控/候选管道发现现价毛利低于档位目标−2点或偏离档位公式价 → 待改价清单（首页待办可见）→ 人工确认推送 → 效果回看本页与利润控制台。下架档：本页直接删offer（单删/一键全删）。
 </p>
+
+<script>
+const DELIST_SKUS = {{ delist_skus|tojson }};
+const DEL_URL = '{{ url_for("repricing.delete_offers", store=store_key) }}';
+async function delOffers(skus, btns) {
+  btns.forEach(b => { b.disabled = true; b.textContent = '删除中…'; });
+  try {
+    const res = await fetch(DEL_URL, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({shop_skus: skus})});
+    const data = await res.json();
+    if (data.success) {
+      alert('已删除 ' + data.deleted.length + ' 个offer（Mirakl已受理，import=' + (data.import_id || '-') + '）');
+      location.reload();
+    } else {
+      alert('删除失败：' + (data.error_message || data.msg || ('HTTP ' + res.status)));
+      btns.forEach(b => { b.disabled = false; b.textContent = '🗑 删offer'; });
+    }
+  } catch (e) {
+    alert('请求失败：' + e);
+    btns.forEach(b => { b.disabled = false; b.textContent = '🗑 删offer'; });
+  }
+}
+document.querySelectorAll('.del-btn').forEach(b =>
+  b.addEventListener('click', () => delOffers([b.dataset.sku], [b])));
+const delAll = document.getElementById('del-all-btn');
+if (delAll) delAll.addEventListener('click', () => {
+  if (confirm('确认删除全部下架档 ' + DELIST_SKUS.length + ' 个offer？\n\n' +
+              DELIST_SKUS.join('\n') + '\n\n此操作不可逆（Mirakl下架）。')) {
+    delOffers(DELIST_SKUS, [delAll]);
+  }
+});
+</script>
 {% endblock %}
