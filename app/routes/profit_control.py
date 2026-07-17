@@ -239,10 +239,24 @@ def issues():
 # Listing哨兵：退货触发的 我方listing vs 供应商listing 对比结果
 # ---------------------------------------------------------------
 
+# 运营归属：SKU前缀规则（Lowes含MDLW/MRLW/YCLW段，Macy以MD/MR/YC开头）
+SENTINEL_OPS = {"刘梦蝶": ("MDLW", "MD"), "明瑞瑞": ("MRLW", "MR"), "朱以超": ("YCLW", "YC")}
+
+
+def _sku_operator_any(sku: str) -> str:
+    s = (sku or "").upper()
+    for name, (seg, head) in SENTINEL_OPS.items():
+        if seg in s or s.startswith(head):
+            return name
+    return "未知"
+
+
 @profit_control_bp.route("/sentinel")
 def sentinel():
     verdict = request.args.get("verdict", "")
     status = request.args.get("status", "open")
+    f_store = (request.args.get("store") or "").strip()
+    f_op = (request.args.get("operator") or "").strip()
     conds, params = [], []
     if verdict:
         conds.append("verdict=%s")
@@ -250,6 +264,13 @@ def sentinel():
     if status and status != "all":
         conds.append("status=%s")
         params.append(status)
+    if f_store:
+        conds.append("store=%s")
+        params.append(f_store)
+    if f_op in SENTINEL_OPS:
+        seg, head = SENTINEL_OPS[f_op]
+        conds.append("(shop_sku LIKE %s OR shop_sku LIKE %s)")
+        params.extend([f"%{seg}%", f"{head}%"])
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     rows = _query(
         f"""SELECT * FROM order_system.listing_sentinel_findings {where}
@@ -257,6 +278,7 @@ def sentinel():
                      audit_date DESC LIMIT 200""",
         tuple(params) if params else None)
     for r in rows:
+        r["operator"] = _sku_operator_any(r.get("shop_sku"))
         try:
             r["issues"] = json.loads(r["issues_json"] or "[]")
         except Exception:
@@ -265,11 +287,27 @@ def sentinel():
             r["fix"] = json.loads(r["fix_json"]) if r.get("fix_json") else None
         except Exception:
             r["fix"] = None
+    # 徽章计数跟随店铺/运营筛选（不含verdict/status本身）
+    cconds, cparams = [], []
+    if f_store:
+        cconds.append("store=%s")
+        cparams.append(f_store)
+    if f_op in SENTINEL_OPS:
+        seg, head = SENTINEL_OPS[f_op]
+        cconds.append("(shop_sku LIKE %s OR shop_sku LIKE %s)")
+        cparams.extend([f"%{seg}%", f"{head}%"])
+    cwhere = ("WHERE " + " AND ".join(cconds)) if cconds else ""
     counts = {c["k"]: int(c["n"]) for c in _query(
-        """SELECT CONCAT(verdict,'-',status) AS k, COUNT(*) AS n
-           FROM order_system.listing_sentinel_findings GROUP BY verdict, status""")}
+        f"""SELECT CONCAT(verdict,'-',status) AS k, COUNT(*) AS n
+            FROM order_system.listing_sentinel_findings {cwhere}
+            GROUP BY verdict, status""", tuple(cparams) if cparams else None)}
+    stores = [r["store"] for r in _query(
+        """SELECT DISTINCT store FROM order_system.listing_sentinel_findings
+           ORDER BY store""")]
     return render_template("profit_control/sentinel.html",
-                           rows=rows, verdict=verdict, status=status, counts=counts)
+                           rows=rows, verdict=verdict, status=status, counts=counts,
+                           f_store=f_store, f_op=f_op, stores=stores,
+                           operators=list(SENTINEL_OPS.keys()))
 
 
 @profit_control_bp.route("/sentinel/fix", methods=["POST"])

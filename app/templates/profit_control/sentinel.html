@@ -20,17 +20,36 @@
     <i class="bi bi-arrow-left"></i> 返回总览</a>
 </div>
 
+{% set keep = {'store': f_store or None, 'operator': f_op or None} %}
+<div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+  <form method="get" action="{{ url_for('profit_control.sentinel') }}" class="d-flex gap-2">
+    <input type="hidden" name="verdict" value="{{ verdict }}">
+    <input type="hidden" name="status" value="{{ status }}">
+    <select name="store" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">全部店铺</option>
+      {% for s in stores %}<option value="{{ s }}" {{ 'selected' if s == f_store }}>{{ s }}</option>{% endfor %}
+    </select>
+    <select name="operator" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">全部运营</option>
+      {% for o in operators %}<option value="{{ o }}" {{ 'selected' if o == f_op }}>{{ o }}</option>{% endfor %}
+    </select>
+  </form>
+  {% if f_store or f_op %}
+  <a class="btn btn-sm btn-outline-secondary"
+     href="{{ url_for('profit_control.sentinel', verdict=verdict, status=status) }}">✕ 清除筛选</a>
+  {% endif %}
+</div>
 <div class="mb-3">
   {% for v, label, cls in [('severe','🔴严重不符','danger'), ('minor','🟡轻微问题','warning'), ('clean','🟢干净','success')] %}
   <a class="btn btn-sm {{ 'btn-'+cls if verdict==v else 'btn-outline-'+cls }}"
-     href="{{ url_for('profit_control.sentinel', verdict=v, status=status) }}">
+     href="{{ url_for('profit_control.sentinel', verdict=v, status=status, **keep) }}">
     {{ label }} <span class="badge bg-light text-dark">{{ counts.get(v+'-open', 0) }}</span></a>
   {% endfor %}
-  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('profit_control.sentinel', status=status) }}">全部</a>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('profit_control.sentinel', status=status, **keep) }}">全部</a>
   <span class="ms-3"></span>
   {% for s, lab in [('open','待处理'), ('fixed','已修复'), ('false_positive','误报'), ('all','全部状态')] %}
   <a class="btn btn-sm {{ 'btn-secondary' if status==s else 'btn-outline-secondary' }}"
-     href="{{ url_for('profit_control.sentinel', status=s, verdict=verdict) }}">{{ lab }}</a>
+     href="{{ url_for('profit_control.sentinel', status=s, verdict=verdict, **keep) }}">{{ lab }}</a>
   {% endfor %}
 </div>
 
