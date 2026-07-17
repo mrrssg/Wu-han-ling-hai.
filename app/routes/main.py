@@ -53,6 +53,7 @@ ISSUE_TYPE_NAMES = {
     "delisted_but_selling": "已下架仍出单",
     "listing_mismatch": "Listing不符",
     "price_push_mismatch": "推价异常（未生效/被平台改动/下线）",
+    "safety_risk": "产品安全风险（案例命中，在卖）",
 }
 
 
@@ -117,7 +118,7 @@ def index():
                         GROUP BY issue_type ORDER BY v DESC""")
         for r in rows:
             t = r["issue_type"]
-            danger = t in ("delisted_but_selling", "price_push_mismatch")
+            danger = t in ("delisted_but_selling", "price_push_mismatch", "safety_risk")
             todos.append({"icon": "🚨" if danger else "📋",
                           "label": ISSUE_TYPE_NAMES.get(t, t),
                           "count": int(r["n"] or 0), "money": float(r["v"] or 0),

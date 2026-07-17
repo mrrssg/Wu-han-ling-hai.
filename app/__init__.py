@@ -40,6 +40,9 @@ def create_app(config_name='default'):
     from app.routes.assistant import assistant_bp
     app.register_blueprint(assistant_bp, url_prefix='/assistant')  # 右下角AI助理
 
+    from app.routes.safety import safety_bp
+    app.register_blueprint(safety_bp, url_prefix='/safety')  # 产品安全防控
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

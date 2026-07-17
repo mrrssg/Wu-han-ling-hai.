@@ -1,0 +1,81 @@
+{% extends "base_v2.html" %}
+{% block title %}安全案例 #{{ case.id }}{% endblock %}
+{% block page_title %}安全案例 #{{ case.id }}：{{ case.title }}{% endblock %}
+{% block page_sub %}{{ case.case_type }} · {{ case.supplier }} · {{ '🟢活跃' if case.status=='active' else '⚪已结案' }} · 建案 {{ case.created_at }}{% endblock %}
+{% block page_actions %}
+<div class="d-inline-flex gap-2">
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('safety.cases_page') }}">← 返回列表</a>
+  {% if case.status == 'active' %}
+  <button class="btn btn-sm btn-outline-dark" onclick="closeCase()">结案（关闭全部红条）</button>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="card p-3 mb-3" style="font-size:.85rem">
+  <b>案情</b>
+  <div class="text-muted mt-1" style="white-space:pre-wrap">{{ case.case_text or '（无描述）' }}</div>
+  <div class="mt-2"><b>涉事供应商SKU</b>：<span class="font-monospace small">{{ case.supplier_skus or '—' }}</span></div>
+  {% if files %}
+  <div class="mt-2"><b>附件</b>：
+    {% for f in files %}
+    <a class="badge text-bg-light border text-dark me-1"
+       href="{{ url_for('safety.case_file', relpath=f.path) }}" target="_blank">📎 {{ f.name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header bg-white fw-semibold" style="font-size:.9rem">
+    命中清单（{{ hits|length }}个店铺SKU，在卖的排最前）</div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
+      <thead class="table-light"><tr>
+        <th>平台/店铺</th><th>店铺SKU</th><th>供应商SKU</th><th>命中方式</th>
+        <th>在卖</th><th class="text-end">90天单数</th><th>处理状态</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for h in hits %}
+        <tr id="hit-{{ h.id }}" class="{{ 'table-danger' if h.active==1 and h.status=='open' }}">
+          <td class="small">{{ h.platform }}-{{ h.shop_name }}</td>
+          <td class="font-monospace small">{{ h.shop_sku }}</td>
+          <td class="font-monospace small">{{ h.supplier_sku }}
+            {% if h.hit_type=='family' %}<span class="badge text-bg-secondary">同款家族←{{ h.source_sku }}</span>{% endif %}</td>
+          <td class="small">{{ '涉事SKU' if h.hit_type=='direct' else '同款变体' }}</td>
+          <td>{{ '🔴在卖' if h.active==1 else ('⚪停卖' if h.active==0 else '—仅映射') }}</td>
+          <td class="text-end">{{ h.orders_90d }}</td>
+          <td>{{ {'open':'⏳待处理','delisted':'✅已下架','false_positive':'☑️误报'}.get(h.status, h.status) }}</td>
+          <td>
+            {% if h.status=='open' %}
+            <button class="btn btn-sm btn-outline-dark py-0" onclick="markHit({{ h.id }}, 'delisted')">已下架</button>
+            <button class="btn btn-sm btn-outline-secondary py-0" onclick="markHit({{ h.id }}, 'false_positive')">误报</button>
+            {% else %}
+            <button class="btn btn-sm btn-outline-secondary py-0" onclick="markHit({{ h.id }}, 'open')">撤销</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="text-center text-muted py-4">没有命中任何店铺SKU</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-muted mt-2" style="font-size:.75rem">
+  标"已下架"或"误报"会同时关闭该SKU的首页红条；"已下架"的SKU如之后仍出单，需在店铺后台核实（建议同时在定价方案/店铺后台执行真正的下架动作）。</p>
+
+<script>
+async function markHit(id, status) {
+  const res = await fetch('{{ url_for("safety.hit_mark", hid=0) }}'.replace('/0/', '/' + id + '/'),
+    {method: 'POST', headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({status: status})});
+  const d = await res.json();
+  if (d.success) location.reload(); else alert('操作失败');
+}
+async function closeCase() {
+  if (!confirm('确认结案？该案例全部红条会关闭，不再参与后续排查。')) return;
+  await fetch('{{ url_for("safety.case_close", cid=case.id) }}', {method: 'POST'});
+  location.reload();
+}
+</script>
+{% endblock %}

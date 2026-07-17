@@ -1,0 +1,71 @@
+{% extends "base_v2.html" %}
+{% block title %}产品安全防控{% endblock %}
+{% block page_title %}产品安全防控{% endblock %}
+{% block page_sub %}侵权 / Prop65 / 危险品案例登记 → 自动排查全店铺在卖SKU（含同款家族）→ 首页红条提醒下架{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card p-3">
+      <div class="fw-semibold mb-2" style="font-size:.9rem">📥 新建案例</div>
+      <form method="post" action="{{ url_for('safety.new_case') }}" enctype="multipart/form-data">
+        <div class="row g-2">
+          <div class="col-5">
+            <select name="case_type" class="form-select form-select-sm">
+              {% for t in case_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+            </select></div>
+          <div class="col-7">
+            <select name="supplier" class="form-select form-select-sm">
+              <option value="Costway">豪雅 Costway</option>
+              <option value="Vevor">司顺 Vevor</option>
+            </select></div>
+        </div>
+        <input name="title" class="form-control form-control-sm mt-2" required
+               placeholder="案例标题（如：蛋形吊椅外观专利投诉）">
+        <textarea name="skus" class="form-control form-control-sm mt-2" rows="3"
+                  placeholder="涉事供应商SKU（多个用空格/逗号/换行分隔；Excel附件里的SKU会自动解析，可不填）"></textarea>
+        <textarea name="case_text" class="form-control form-control-sm mt-2" rows="4"
+                  placeholder="案情描述：谁投诉的/什么问题/平台通知说了什么…（越详细，后续AI举一反三越准）"></textarea>
+        <input type="file" name="files" class="form-control form-control-sm mt-2" multiple
+               accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp">
+        <div class="text-muted mt-1" style="font-size:.72rem">
+          附件支持 PDF / Excel / 图片。Excel里的供应商SKU自动识别并核验；识别不出的会提示你。</div>
+        <button class="btn btn-sm btn-primary mt-2">建案并排查</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold" style="font-size:.9rem">案例列表</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
+          <thead class="table-light"><tr>
+            <th>#</th><th>类型</th><th>标题</th><th>供应商</th>
+            <th class="text-end">命中</th><th class="text-end">在卖未处理</th>
+            <th>状态</th><th>建案时间</th></tr></thead>
+          <tbody>
+            {% for c in cases %}
+            <tr>
+              <td>{{ c.id }}</td>
+              <td><span class="badge {{ 'text-bg-danger' if c.case_type=='侵权' else 'text-bg-warning text-dark' }}">{{ c.case_type }}</span></td>
+              <td><a href="{{ url_for('safety.case_detail', cid=c.id) }}">{{ c.title }}</a></td>
+              <td class="small">{{ c.supplier }}</td>
+              <td class="text-end">{{ c.hits_n }}</td>
+              <td class="text-end {{ 'fw-bold text-danger' if c.selling_open }}">{{ c.selling_open }}</td>
+              <td>{{ '🟢活跃' if c.status=='active' else '⚪已结案' }}</td>
+              <td class="small text-muted">{{ c.created_at }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="text-center text-muted py-4">还没有案例——左侧建第一条</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="text-muted mt-2" style="font-size:.75rem">
+      建案后自动做两层排查：①涉事SKU直接命中（全部店铺，含停卖的）；②同SKU前缀的同款变体（同模具同风险）。
+      在卖的命中会出现在首页"今日待办"红条。AI举一反三（相似产品排查）为第二期功能。</p>
+  </div>
+</div>
+{% endblock %}
