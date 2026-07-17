@@ -249,6 +249,325 @@ def mark_hit(hit_id: int, status: str) -> bool:
         conn.close()
 
 
+# =====================================================================
+# Phase 2（2026-07-17）：产品文本缓存 + AI风险指纹 + 全库举一反三扫描
+# =====================================================================
+
+SCAN_MAX_CANDIDATES = 150     # 粗筛后最多送AI精判的数量
+FP_MAX_EXAMPLE_SKUS = 3       # 提炼指纹时最多看几个涉事SKU的资料
+
+
+def _catalog_skus(conn) -> Set[str]:
+    """我们目录里的全部供应商SKU（offer表 ∪ 映射表）。"""
+    out: Set[str] = set()
+    for sql in (
+        "SELECT DISTINCT warehouse_sku AS s FROM order_system.offerprice_listing "
+        "WHERE warehouse_sku IS NOT NULL AND warehouse_sku<>''",
+        "SELECT DISTINCT warehouse_SKU AS s FROM autooperate.mapping_table",
+    ):
+        for r in _q(conn, sql):
+            if r["s"]:
+                out.add(r["s"])
+    return out
+
+
+def sync_product_cache() -> Dict[str, Any]:
+    """全量翻页拉飞书 Costway/Vevor sku资料表，只缓存我们目录内的SKU。
+    约几分钟，从页面按钮后台跑；建议每周手动/定时刷一次。"""
+    import requests
+    from app.services.listing_sentinel_service import (
+        COSTWAY_TBL, VEVOR_TBL, PRODUCT_APP, _token, _gt, _glink)
+
+    conn = DBManager.get_connection()
+    try:
+        catalog = _catalog_skus(conn)
+    finally:
+        conn.close()
+
+    headers = {"Authorization": f"Bearer {_token()}",
+               "Content-Type": "application/json"}
+    summary = {"catalog": len(catalog), "cached": 0, "pages": 0}
+
+    def _pull(table_id: str, supplier: str, extract):
+        rows = []
+        page_token = ""
+        while True:
+            url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{PRODUCT_APP}"
+                   f"/tables/{table_id}/records?page_size=500"
+                   + (f"&page_token={page_token}" if page_token else ""))
+            r = requests.get(url, headers=headers, timeout=60).json()
+            data = r.get("data") or {}
+            for item in data.get("items") or []:
+                f = item.get("fields") or {}
+                rec = extract(f)
+                if rec and rec[0] in catalog:
+                    rows.append((supplier,) + rec)
+            summary["pages"] += 1
+            if not data.get("has_more"):
+                break
+            page_token = data.get("page_token") or ""
+            if not page_token:
+                break
+        return rows
+
+    def _ex_costway(f):
+        sku = _gt(f.get("SKU")).strip()
+        if not sku:
+            return None
+        return (sku, _gt(f.get("Item Name"))[:400], _gt(f.get("Specification"))[:1500],
+                _gt(f.get("Description"))[:1500], _glink(f.get("Images1"))[:600])
+
+    def _ex_vevor(f):
+        sku = _gt(f.get("SKU")).strip()
+        if not sku:
+            return None
+        sells = " / ".join(_gt(f.get(f"Selling point {i}")) for i in range(1, 6)
+                           if _gt(f.get(f"Selling point {i}")))
+        return (sku, _gt(f.get("Product title"))[:400], sells[:1500],
+                _gt(f.get("Product description"))[:1500],
+                _glink(f.get("Image link"))[:600])
+
+    rows = _pull(COSTWAY_TBL, "Costway", _ex_costway) + _pull(VEVOR_TBL, "Vevor", _ex_vevor)
+
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            for i in range(0, len(rows), 300):
+                cur.executemany("""
+                    INSERT INTO order_system.safety_product_cache
+                        (supplier, sku, title, spec, descr, image_url, synced_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,NOW())
+                    ON DUPLICATE KEY UPDATE title=VALUES(title), spec=VALUES(spec),
+                        descr=VALUES(descr), image_url=VALUES(image_url),
+                        synced_at=NOW()""", rows[i:i + 300])
+        conn.commit()
+    finally:
+        conn.close()
+    summary["cached"] = len(rows)
+    return summary
+
+
+def cache_stats() -> Dict[str, Any]:
+    conn = DBManager.get_connection()
+    try:
+        r = _q(conn, """SELECT COUNT(*) AS n, MAX(synced_at) AS t
+                        FROM order_system.safety_product_cache""")[0]
+        return {"n": int(r["n"] or 0), "synced_at": r["t"]}
+    finally:
+        conn.close()
+
+
+def _case_row(conn, case_id: int) -> Optional[Dict]:
+    rows = _q(conn, "SELECT * FROM order_system.safety_case WHERE id=%s", (case_id,))
+    return rows[0] if rows else None
+
+
+def generate_fingerprint(case_id: int) -> Dict[str, Any]:
+    """AI读案例+涉事产品资料 → 结构化风险指纹（用户确认后才用于扫描）。"""
+    from app.services.listing_sentinel_service import _openai_client, MODEL_NAME
+
+    conn = DBManager.get_connection()
+    try:
+        case = _case_row(conn, case_id)
+        if not case:
+            return {"success": False, "msg": "案例不存在"}
+        skus = [s for s in (case["supplier_skus"] or "").split(",") if s][:FP_MAX_EXAMPLE_SKUS]
+        examples = []
+        for sku in skus:
+            rows = _q(conn, """SELECT title, spec, descr FROM order_system.safety_product_cache
+                               WHERE sku=%s LIMIT 1""", (sku,))
+            if rows:
+                examples.append({"sku": sku, **rows[0]})
+    finally:
+        conn.close()
+
+    prompt = f"""你是电商合规审计专家。下面是一起产品安全案例，请提炼出用于"举一反三排查相似产品"的结构化风险指纹。
+
+【案例类型】{case['case_type']}
+【案例标题】{case['title']}
+【案情描述】{case['case_text'] or '（无）'}
+【涉事产品资料】{json.dumps(examples, ensure_ascii=False)[:6000] if examples else '（缓存里没有涉事SKU的资料，只按案情描述提炼）'}
+
+按案例类型抓重点：侵权→外观形态/品牌词/独特设计元素；Prop65→材质化学成分(如PVC/黄铜/铅/邻苯)；危险品→危险部件成分(如锂电池/压力罐/易燃物)；召回→缺陷结构。
+只输出JSON：
+{{"case_essence":"一句话案由本质",
+"key_features":["产品关键特征,3-8条"],
+"materials":["涉险材质/成分,没有则空数组"],
+"brand_terms":["涉险品牌词/型号词,没有则空数组"],
+"category_scope":["可能涉及的产品类目,英文"],
+"keywords_en":["用于全库粗筛的英文关键词,8-20个,含同义词"],
+"keywords_cn":["中文关键词,可选"],
+"judge_focus":"精判时应重点核对什么(一句话)"}}"""
+
+    client = _openai_client()
+    resp = client.chat.completions.create(
+        model=MODEL_NAME, response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": "Output valid JSON only."},
+                  {"role": "user", "content": prompt}])
+    fp = json.loads(resp.choices[0].message.content)
+
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE order_system.safety_case
+                           SET fingerprint_json=%s, scan_status='fingerprint_ready'
+                           WHERE id=%s""",
+                        (json.dumps(fp, ensure_ascii=False), case_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True, "fingerprint": fp}
+
+
+def save_fingerprint(case_id: int, fp_text: str) -> Dict[str, Any]:
+    try:
+        fp = json.loads(fp_text)
+    except ValueError as exc:
+        return {"success": False, "msg": f"JSON格式错误: {exc}"}
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE order_system.safety_case
+                           SET fingerprint_json=%s, scan_status='fingerprint_ready'
+                           WHERE id=%s""",
+                        (json.dumps(fp, ensure_ascii=False), case_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+def _stage1_candidates(conn, case: Dict, fp: Dict) -> List[Dict]:
+    """粗筛：关键词在缓存文本里打分，排除已命中的家族SKU，取前N。零AI成本。"""
+    kws = [k.strip().lower() for k in
+           (fp.get("keywords_en") or []) + (fp.get("keywords_cn") or [])
+           + (fp.get("brand_terms") or []) + (fp.get("materials") or []) if k and len(k) >= 3]
+    if not kws:
+        return []
+    already = {r["supplier_sku"] for r in _q(conn,
+        "SELECT DISTINCT supplier_sku FROM order_system.safety_hit WHERE case_id=%s",
+        (case["id"],))}
+    scored = []
+    for r in _q(conn, "SELECT supplier, sku, title, spec, descr, image_url "
+                      "FROM order_system.safety_product_cache"):
+        if r["sku"] in already:
+            continue
+        text = " ".join(filter(None, [r["title"], r["spec"], r["descr"]])).lower()
+        if not text:
+            continue
+        score = sum(1 for k in kws if k in text)
+        if score > 0:
+            r["_score"] = score
+            scored.append(r)
+    scored.sort(key=lambda x: -x["_score"])
+    return scored[:SCAN_MAX_CANDIDATES]
+
+
+def _judge_candidate(client, model: str, case: Dict, fp: Dict, cand: Dict) -> Dict:
+    prompt = f"""你是电商合规审计专家。已知一起{case['case_type']}安全案例，判断下面这个产品是否可能有同类风险。
+
+【案由本质】{fp.get('case_essence','')}
+【关键特征】{fp.get('key_features')}
+【涉险材质/成分】{fp.get('materials')}
+【涉险品牌词】{fp.get('brand_terms')}
+【精判重点】{fp.get('judge_focus','')}
+
+【待判产品 {cand['sku']}】
+标题: {(cand['title'] or '')[:300]}
+规格: {(cand['spec'] or '')[:1200]}
+描述: {(cand['descr'] or '')[:1200]}
+
+原则：只有产品资料里有明确依据才判 high；特征部分吻合判 mid；仅类目沾边判 low；无关判 none。宁可漏判不可乱判。
+只输出JSON：{{"risk":"high|mid|low|none","reason":"一句话中文理由","evidence":"引用产品资料原文(≤200字)"}}"""
+    content = [{"type": "text", "text": prompt}]
+    if case["case_type"] == "侵权" and cand.get("image_url"):
+        content.append({"type": "image_url", "image_url": {"url": cand["image_url"]}})
+    resp = client.chat.completions.create(
+        model=model, response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": "Output valid JSON only."},
+                  {"role": "user", "content": content}])
+    return json.loads(resp.choices[0].message.content)
+
+
+def run_scan(case_id: int) -> Dict[str, Any]:
+    """全库举一反三（同步执行，路由用后台线程包）。"""
+    from app.services.listing_sentinel_service import _openai_client, MODEL_NAME
+
+    conn = DBManager.get_connection()
+    try:
+        case = _case_row(conn, case_id)
+        if not case or not case.get("fingerprint_json"):
+            return {"success": False, "msg": "先生成并确认风险指纹"}
+        fp = json.loads(case["fingerprint_json"])
+        with conn.cursor() as cur:
+            cur.execute("UPDATE order_system.safety_case SET scan_status='scanning' "
+                        "WHERE id=%s", (case_id,))
+        conn.commit()
+        cands = _stage1_candidates(conn, case, fp)
+    finally:
+        conn.close()
+
+    client = _openai_client()
+    stats = {"candidates": len(cands), "judged": 0, "high": 0, "mid": 0, "low": 0}
+    for cand in cands:
+        try:
+            verdict = _judge_candidate(client, MODEL_NAME, case, fp, cand)
+        except Exception:
+            continue
+        stats["judged"] += 1
+        risk = (verdict.get("risk") or "none").lower()
+        if risk not in ("high", "mid", "low"):
+            continue
+        stats[risk] += 1
+        conn = DBManager.get_connection()
+        try:
+            fam = {cand["sku"]: cand["sku"]}
+            hits = _resolve_hits(conn, fam, set())
+            with conn.cursor() as cur:
+                for h in hits:
+                    cur.execute("""
+                        INSERT IGNORE INTO order_system.safety_hit
+                            (case_id, supplier_sku, source_sku, hit_type, platform,
+                             shop_name, shop_sku, active, orders_90d, risk_level,
+                             reason, evidence)
+                        VALUES (%s,%s,%s,'ai',%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (case_id, h["supplier_sku"], cand["sku"],
+                         h["platform"], h["shop_name"], h["shop_sku"], h["active"],
+                         h.get("orders_90d", 0), risk,
+                         (verdict.get("reason") or "")[:500],
+                         (verdict.get("evidence") or "")[:990]))
+                    if risk == "high" and h["active"] == 1:
+                        entity = f"{h['shop_sku']}@{h['platform']}-{h['shop_name']}"
+                        cur.execute("""SELECT id FROM order_system.issue_log
+                                       WHERE issue_type='safety_risk' AND entity=%s
+                                         AND status='open'""", (entity,))
+                        if not cur.fetchone():
+                            cur.execute("""
+                                INSERT INTO order_system.issue_log
+                                    (detected_date, issue_type, entity, severity, impact_usd,
+                                     evidence, suggestion, status)
+                                VALUES (CURDATE(), 'safety_risk', %s, 'high', 0, %s,
+                                        '立即评估下架；处理后在安全防控页标记', 'open')""",
+                                (entity,
+                                 f"安全案例#{case_id} AI相似判定(high)：{cand['sku']}——"
+                                 f"{(verdict.get('reason') or '')[:300]}"))
+            conn.commit()
+        finally:
+            conn.close()
+
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            stats["done_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute("""UPDATE order_system.safety_case
+                           SET scan_status='done', scan_summary_json=%s WHERE id=%s""",
+                        (json.dumps(stats, ensure_ascii=False), case_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True, **stats}
+
+
 def close_case(case_id: int) -> None:
     conn = DBManager.get_connection()
     try:

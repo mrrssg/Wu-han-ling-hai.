@@ -63,9 +63,22 @@
         </table>
       </div>
     </div>
+    <div class="card p-2 mt-2 d-flex flex-row align-items-center gap-2" style="font-size:.78rem">
+      <span>🗂 产品文本缓存（AI扫描的料）：<b>{{ cache.n }}</b> 条
+        {% if cache.synced_at %}· 上次同步 {{ cache.synced_at }}{% else %}· <b class="text-danger">还没同步过，先点右边按钮</b>{% endif %}</span>
+      <button class="btn btn-sm btn-outline-primary py-0" onclick="syncCache(this)">同步产品缓存</button>
+    </div>
     <p class="text-muted mt-2" style="font-size:.75rem">
       建案后自动做两层排查：①涉事SKU直接命中（全部店铺，含停卖的）；②同SKU前缀的同款变体（同模具同风险）。
-      在卖的命中会出现在首页"今日待办"红条。AI举一反三（相似产品排查）为第二期功能。</p>
+      在卖的命中出首页红条。第三层AI举一反三在案例详情页：生成风险指纹→你确认→全库扫描相似SKU。</p>
+<script>
+async function syncCache(btn) {
+  btn.disabled = true; btn.textContent = '同步中…';
+  const r = await fetch('{{ url_for("safety.cache_sync") }}', {method: 'POST'});
+  const d = await r.json();
+  alert(d.msg || '已开始');
+}
+</script>
   </div>
 </div>
 {% endblock %}

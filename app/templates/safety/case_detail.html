@@ -26,6 +26,41 @@
   {% endif %}
 </div>
 
+{# ---------- AI举一反三（Phase 2） ---------- #}
+{% if case.status == 'active' %}
+<div class="card p-3 mb-3" style="font-size:.85rem">
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    <b>🧬 AI举一反三</b>
+    <span class="text-muted" style="font-size:.75rem">
+      流程：生成风险指纹 → 你检查/改关键词 → 确认并全库扫描（后台跑，5~15分钟）</span>
+    <span class="ms-auto">
+      {% if case.scan_status == 'scanning' %}<span class="badge text-bg-warning text-dark">扫描中…刷新本页看进度</span>
+      {% elif case.scan_status == 'done' %}<span class="badge text-bg-success">扫描完成</span>
+      {% elif case.scan_status == 'error' %}<span class="badge text-bg-danger">扫描出错，可重跑</span>
+      {% elif case.scan_status == 'fingerprint_ready' %}<span class="badge text-bg-info">指纹就绪</span>
+      {% endif %}</span>
+  </div>
+  <div class="mt-2 d-flex gap-2 flex-wrap">
+    <button class="btn btn-sm btn-outline-primary" onclick="genFp(this)">
+      {{ '重新生成指纹' if case.fingerprint_json else '① 生成AI风险指纹' }}</button>
+    {% if case.fingerprint_json %}
+    <button class="btn btn-sm btn-outline-success" onclick="saveFp(this)">② 保存修改后的指纹</button>
+    <button class="btn btn-sm btn-danger" onclick="startScan(this)"
+            {{ 'disabled' if case.scan_status == 'scanning' }}>③ 开始全库扫描</button>
+    {% endif %}
+  </div>
+  {% if case.fingerprint_json %}
+  <textarea id="fp-text" class="form-control form-control-sm mt-2 font-monospace"
+            rows="9" style="font-size:.75rem">{{ case.fingerprint_json }}</textarea>
+  <div class="text-muted mt-1" style="font-size:.72rem">
+    可直接改上面的JSON（比如往 keywords_en 里加词/删词）再点"保存"。扫描只会用你保存过的版本。</div>
+  {% endif %}
+  {% if case.scan_summary_json %}
+  <div class="mt-2 text-muted" style="font-size:.78rem">上次扫描：{{ case.scan_summary_json }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-header bg-white fw-semibold" style="font-size:.9rem">
     命中清单（{{ hits|length }}个店铺SKU，在卖的排最前）</div>
@@ -41,7 +76,12 @@
           <td class="font-monospace small">{{ h.shop_sku }}</td>
           <td class="font-monospace small">{{ h.supplier_sku }}
             {% if h.hit_type=='family' %}<span class="badge text-bg-secondary">同款家族←{{ h.source_sku }}</span>{% endif %}</td>
-          <td class="small">{{ '涉事SKU' if h.hit_type=='direct' else '同款变体' }}</td>
+          <td class="small">
+            {% if h.hit_type == 'ai' %}
+            <span class="badge {{ 'text-bg-danger' if h.risk_level=='high' else ('text-bg-warning text-dark' if h.risk_level=='mid' else 'text-bg-secondary') }}"
+                  {% if h.evidence %}title="证据：{{ h.evidence }}"{% endif %}>AI相似·{{ h.risk_level }}</span>
+            <div class="text-muted" style="font-size:.72rem;max-width:260px">{{ h.reason }}</div>
+            {% else %}{{ '涉事SKU' if h.hit_type=='direct' else '同款变体' }}{% endif %}</td>
           <td>{{ '🔴在卖' if h.active==1 else ('⚪停卖' if h.active==0 else '—仅映射') }}</td>
           <td class="text-end">{{ h.orders_90d }}</td>
           <td>{{ {'open':'⏳待处理','delisted':'✅已下架','false_positive':'☑️误报'}.get(h.status, h.status) }}</td>
@@ -75,6 +115,29 @@ async function markHit(id, status) {
 async function closeCase() {
   if (!confirm('确认结案？该案例全部红条会关闭，不再参与后续排查。')) return;
   await fetch('{{ url_for("safety.case_close", cid=case.id) }}', {method: 'POST'});
+  location.reload();
+}
+async function genFp(btn) {
+  btn.disabled = true; btn.textContent = '生成中…（约15秒）';
+  const r = await fetch('{{ url_for("safety.fingerprint_gen", cid=case.id) }}', {method: 'POST'});
+  const d = await r.json();
+  if (d.success) location.reload();
+  else { alert('生成失败：' + (d.msg || '')); btn.disabled = false; btn.textContent = '生成AI风险指纹'; }
+}
+async function saveFp(btn) {
+  const r = await fetch('{{ url_for("safety.fingerprint_save", cid=case.id) }}',
+    {method: 'POST', headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({fingerprint: document.getElementById('fp-text').value})});
+  const d = await r.json();
+  if (d.success) { btn.textContent = '✓ 已保存'; setTimeout(() => btn.textContent = '② 保存修改后的指纹', 1500); }
+  else alert('保存失败：' + (d.msg || ''));
+}
+async function startScan(btn) {
+  if (!confirm('用当前保存的指纹对全库产品做AI相似排查？后台约5~15分钟，会产生少量AI费用。')) return;
+  btn.disabled = true;
+  const r = await fetch('{{ url_for("safety.scan_start", cid=case.id) }}', {method: 'POST'});
+  const d = await r.json();
+  alert(d.msg || '已开始');
   location.reload();
 }
 </script>

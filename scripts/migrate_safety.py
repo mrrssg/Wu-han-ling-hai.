@@ -25,6 +25,16 @@ DDLS = [
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         KEY idx_status (status)
     ) CHARSET=utf8mb4 COMMENT='产品安全案例库'""",
+    """CREATE TABLE IF NOT EXISTS order_system.safety_product_cache (
+        supplier VARCHAR(16) NOT NULL,
+        sku VARCHAR(64) NOT NULL,
+        title VARCHAR(400),
+        spec TEXT,
+        descr TEXT,
+        image_url VARCHAR(600),
+        synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (supplier, sku)
+    ) CHARSET=utf8mb4 COMMENT='安全扫描用产品文本缓存(飞书供应商资料,只缓存我们目录内SKU)'""",
     """CREATE TABLE IF NOT EXISTS order_system.safety_hit (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         case_id BIGINT NOT NULL,
@@ -46,6 +56,15 @@ DDLS = [
 ]
 
 
+ALTERS = [
+    "ALTER TABLE order_system.safety_case ADD COLUMN scan_status VARCHAR(24) DEFAULT NULL "
+    "COMMENT 'fingerprint_ready/scanning/done/error'",
+    "ALTER TABLE order_system.safety_case ADD COLUMN scan_summary_json TEXT",
+    "ALTER TABLE order_system.safety_hit ADD COLUMN evidence VARCHAR(1000) DEFAULT NULL "
+    "COMMENT 'AI判定引用的产品原文'",
+]
+
+
 def main() -> int:
     app = create_app(os.environ.get("FLASK_CONFIG", "production"))
     with app.app_context():
@@ -54,6 +73,12 @@ def main() -> int:
             with conn.cursor() as cur:
                 for ddl in DDLS:
                     cur.execute(ddl)
+                for alter in ALTERS:
+                    try:
+                        cur.execute(alter)
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
             print("safety schema OK")
         finally:

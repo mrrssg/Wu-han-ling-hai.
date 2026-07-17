@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """产品安全防控页面（/safety）。"""
+import json
 import os
+import threading
 import time
-from flask import (Blueprint, flash, jsonify, redirect, render_template,
-                   request, send_from_directory, url_for)
+from flask import (Blueprint, current_app, flash, jsonify, redirect,
+                   render_template, request, send_from_directory, url_for)
 
 from app.models.db_manager import DBManager
 
@@ -22,7 +24,7 @@ def _query(sql, params=None):
 
 @safety_bp.route("/")
 def cases_page():
-    from app.services.safety_service import CASE_TYPES
+    from app.services.safety_service import CASE_TYPES, cache_stats
     cases = _query("""
         SELECT c.*,
                (SELECT COUNT(*) FROM order_system.safety_hit h
@@ -30,7 +32,67 @@ def cases_page():
                (SELECT COUNT(*) FROM order_system.safety_hit h
                  WHERE h.case_id=c.id AND h.active=1 AND h.status='open') AS selling_open
         FROM order_system.safety_case c ORDER BY c.id DESC LIMIT 200""")
-    return render_template("safety/cases.html", cases=cases, case_types=CASE_TYPES)
+    return render_template("safety/cases.html", cases=cases, case_types=CASE_TYPES,
+                           cache=cache_stats())
+
+
+@safety_bp.route("/cache/sync", methods=["POST"])
+def cache_sync():
+    """后台全量刷新产品文本缓存（飞书供应商资料→DB，约几分钟）。"""
+    app_obj = current_app._get_current_object()
+
+    def _bg():
+        with app_obj.app_context():
+            from app.services.safety_service import sync_product_cache
+            try:
+                print("[safety] cache sync:", sync_product_cache())
+            except Exception as exc:
+                print("[safety] cache sync failed:", exc)
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"success": True, "msg": "后台同步已开始，几分钟后刷新本页看条数"})
+
+
+@safety_bp.route("/case/<int:cid>/fingerprint", methods=["POST"])
+def fingerprint_gen(cid):
+    from app.services.safety_service import generate_fingerprint
+    try:
+        return jsonify(generate_fingerprint(cid))
+    except Exception as exc:
+        return jsonify({"success": False, "msg": str(exc)[:300]}), 500
+
+
+@safety_bp.route("/case/<int:cid>/fingerprint/save", methods=["POST"])
+def fingerprint_save(cid):
+    from app.services.safety_service import save_fingerprint
+    fp_text = (request.get_json(silent=True) or {}).get("fingerprint") or ""
+    return jsonify(save_fingerprint(cid, fp_text))
+
+
+@safety_bp.route("/case/<int:cid>/scan", methods=["POST"])
+def scan_start(cid):
+    """后台跑全库举一反三扫描（百来个候选逐个AI精判，约5~15分钟）。"""
+    app_obj = current_app._get_current_object()
+
+    def _bg():
+        with app_obj.app_context():
+            from app.services.safety_service import run_scan
+            from app.models.db_manager import DBManager as _DBM
+            try:
+                print(f"[safety] scan case {cid}:", run_scan(cid))
+            except Exception as exc:
+                print(f"[safety] scan case {cid} failed:", exc)
+                conn = _DBM.get_connection()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""UPDATE order_system.safety_case
+                                       SET scan_status='error' WHERE id=%s""", (cid,))
+                    conn.commit()
+                finally:
+                    conn.close()
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"success": True, "msg": "扫描已在后台开始，几分钟后刷新本页看结果"})
 
 
 @safety_bp.route("/new", methods=["POST"])
