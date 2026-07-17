@@ -37,6 +37,9 @@ def create_app(config_name='default'):
     from app.routes.preview import preview_bp
     app.register_blueprint(preview_bp, url_prefix='/preview')  # 新版界面样本，定稿后下线
 
+    from app.routes.assistant import assistant_bp
+    app.register_blueprint(assistant_bp, url_prefix='/assistant')  # 右下角AI助理
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

@@ -40,7 +40,7 @@ STORE_TABLES = {
 COSTWAY_TBL = "tblDohq1QfgABVeH"
 VEVOR_TBL = "tbl4OqqXTIsywAyK"
 
-MODEL_NAME = "gpt-5.1"
+MODEL_NAME = "gpt-5.2"   # 2026-07-17 用户定：哨兵和AI助理都用5.2
 MAX_TEXT = 2800   # 喂给模型的单段文本上限
 
 
