@@ -1107,7 +1107,7 @@ def push_batch():
             "formula_calc_price": round(info["bd"].formula_calc_price, 4),
             "target_origin_price": info["target"],
             "profit_margin_before": round(info["margin"], 4),
-            "profit_margin_after": 0.12 if ok else None,
+            "profit_margin_after": (tier_targets.get(sku) or 0.12) if ok else None,
             "mirakl_called": 1,
             "mirakl_import_id": import_id,
             "mirakl_http_status": http_status,
