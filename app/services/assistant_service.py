@@ -57,7 +57,9 @@ def _run_readonly_sql(sql: str) -> str:
         return json.dumps({"error": "语句包含被禁止的关键词"}, ensure_ascii=False)
     if any(t in low for t in _SQL_BLOCK_TABLES):
         return json.dumps({"error": "该表包含敏感配置，不允许查询"}, ensure_ascii=False)
-    if " limit " not in low:
+    # 词边界判断——模型常把LIMIT写在换行后，用" limit "带空格匹配会漏掉，
+    # 再拼一个LIMIT 50就变成"LIMIT 1 LIMIT 50"语法错误（2026-07-17踩过）
+    if not re.search(r"\blimit\b", low):
         s += f" LIMIT {SQL_ROW_CAP}"
     conn = DBManager.get_connection()
     try:
