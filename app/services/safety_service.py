@@ -274,7 +274,7 @@ def _catalog_skus(conn) -> Set[str]:
 # Costway 官方全量 dropship feed（用户指示直接下载同步，不绕飞书）。
 # WinZip AES-256 加密，密码会轮换——都失败时要向用户要新密码加到列表最前。
 FEED_URL = "https://cdn.costway.com/media/feed/dropship.zip"
-FEED_PASSWORDS = ["728465", "482619", "915473"]
+FEED_PASSWORDS = ["576302", "728465", "482619", "915473"]   # 2026-07-17用户给576302
 
 
 def _sync_costway_from_feed(catalog: Set[str]) -> List[tuple]:
