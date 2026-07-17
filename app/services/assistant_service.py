@@ -10,6 +10,7 @@
 """
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
@@ -20,6 +21,62 @@ MAX_MODULES = 3          # 每次最多喂几个知识模块
 MAX_HISTORY = 8          # 带最近几条对话历史
 DAILY_REQUEST_CAP = 300  # 每日提问上限（防失控，3个运营远用不完）
 MAX_QUESTION_LEN = 2000
+
+# ---- run_sql 工具（Phase 2，2026-07-17）：只读查询，软硬两层防线 ----
+SQL_ROW_CAP = 50
+MAX_TOOL_CALLS = 4       # 一次问答最多查4次库
+_SQL_FORBIDDEN = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|grant|revoke|truncate|replace"
+    r"|call|handler|load|outfile|dumpfile|lock|sleep|benchmark|shutdown|kill)\b", re.I)
+_SQL_BLOCK_TABLES = ("shop_configs",)   # 含API密钥/代理配置，绝不允许查
+
+SQL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_sql",
+        "description": ("对ERP数据库执行一条只读SELECT查询并返回JSON行。"
+                        "表结构和口径见《数据库速查手册》。最多返回50行——"
+                        "优先用聚合(COUNT/SUM/GROUP BY)而不是拉明细。"),
+        "parameters": {
+            "type": "object",
+            "properties": {"sql": {"type": "string", "description": "单条SELECT语句"}},
+            "required": ["sql"],
+        },
+    },
+}
+
+
+def _run_readonly_sql(sql: str) -> str:
+    s = (sql or "").strip().rstrip(";").strip()
+    low = s.lower()
+    if not (low.startswith("select") or low.startswith("with")):
+        return json.dumps({"error": "只允许SELECT查询"}, ensure_ascii=False)
+    if ";" in s or "/*" in s:
+        return json.dumps({"error": "不允许多条语句或注释"}, ensure_ascii=False)
+    if _SQL_FORBIDDEN.search(low):
+        return json.dumps({"error": "语句包含被禁止的关键词"}, ensure_ascii=False)
+    if any(t in low for t in _SQL_BLOCK_TABLES):
+        return json.dumps({"error": "该表包含敏感配置，不允许查询"}, ensure_ascii=False)
+    if " limit " not in low:
+        s += f" LIMIT {SQL_ROW_CAP}"
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SET SESSION MAX_EXECUTION_TIME=5000")
+            except Exception:
+                pass
+            cur.execute(s)
+            rows = list(cur.fetchmany(SQL_ROW_CAP))
+        out = json.dumps(rows, ensure_ascii=False, default=str)
+        while len(out) > 8000 and len(rows) > 1:   # 防超长撑爆上下文
+            rows = rows[: max(1, len(rows) // 2)]
+            out = json.dumps(rows, ensure_ascii=False, default=str)
+        return out[:8000]
+    except Exception as exc:
+        return json.dumps({"error": str(exc)[:300]}, ensure_ascii=False)
+    finally:
+        conn.close()
 
 _KB_CACHE: Dict[str, Any] = {"mtime": None, "manifest": None, "texts": {}}
 
@@ -66,8 +123,10 @@ def select_modules(question: str) -> List[str]:
 
 SYSTEM_PROMPT = """你是AutoWeb电商ERP系统的内置助理，服务对象是电商运营（管理Lowes/Macy等平台店铺）。
 规则：
-1. 只依据下面提供的【系统资料】回答。资料里没有的，直说"资料里没有这条"，并猜测可能在哪个页面能看到。
-2. 严禁编造任何具体数字（销量/金额/利润率等实时数据）。被问到数字时，指路对应页面或飞书看板。
+1. 规则/公式/字段类问题：只依据下面提供的【系统资料】回答。资料里没有的，直说"资料里没有这条"。
+2. 具体数字类问题（某SKU的数据/销量/金额/利润率/档位原因等）：用 run_sql 工具现查数据库（只读），
+   表结构见《数据库速查手册》。回答时简要说明查询口径（时间范围/是否剔除取消单等）。
+   严禁凭记忆或推测报数字——查不到就说查不到。
 3. 用简体中文，口语化、简洁，像同事之间讲话。公式用文字+算式写清楚。
 4. 涉及不可逆操作（删offer、推价、下架）时，提醒确认要点。
 5. 回答保持在300字以内，除非用户要求详细展开。"""
@@ -133,6 +192,11 @@ def chat(question: str, history: List[Dict], page: str = "") -> Dict[str, Any]:
         f"=== 系统资料：{titles[mid]} ===\n{texts[mid]}" for mid in module_ids)
     toc = "、".join(m["title"] for m in manifest)
 
+    # 数据库速查手册（run_sql 的说明书）常驻——不走关键词检索
+    schema_path = os.path.join(_kb_dir(), "db_schema.md")
+    with open(schema_path, encoding="utf-8") as f:
+        kb_text += "\n\n=== 数据库速查手册 ===\n" + f.read()
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT
                  + f"\n\n系统资料共有这些主题：{toc}。本次已按问题挑选相关部分给你。"}]
     messages.append({"role": "system", "content": kb_text})
@@ -143,11 +207,31 @@ def chat(question: str, history: List[Dict], page: str = "") -> Dict[str, Any]:
     messages.append({"role": "user", "content": ctx + question})
 
     client = _openai_client()
-    resp = client.chat.completions.create(model=MODEL_NAME, messages=messages)
-    reply = resp.choices[0].message.content or ""
-    usage = getattr(resp, "usage", None)
-    pt = getattr(usage, "prompt_tokens", None) if usage else None
-    ct = getattr(usage, "completion_tokens", None) if usage else None
+    reply = ""
+    pt = ct = 0
+    sql_used = 0
+    for _ in range(MAX_TOOL_CALLS + 1):
+        resp = client.chat.completions.create(
+            model=MODEL_NAME, messages=messages, tools=[SQL_TOOL])
+        usage = getattr(resp, "usage", None)
+        pt += getattr(usage, "prompt_tokens", 0) or 0
+        ct += getattr(usage, "completion_tokens", 0) or 0
+        msg = resp.choices[0].message
+        if msg.tool_calls and sql_used < MAX_TOOL_CALLS:
+            messages.append({"role": "assistant", "content": msg.content or "",
+                             "tool_calls": [tc.model_dump() for tc in msg.tool_calls]})
+            for tc in msg.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except ValueError:
+                    args = {}
+                result = _run_readonly_sql(args.get("sql") or "")
+                messages.append({"role": "tool", "tool_call_id": tc.id,
+                                 "content": result})
+                sql_used += 1
+            continue
+        reply = msg.content or ""
+        break
 
     conn = DBManager.get_connection()
     try:
@@ -157,11 +241,12 @@ def chat(question: str, history: List[Dict], page: str = "") -> Dict[str, Any]:
                     (question, reply_chars, modules, model,
                      prompt_tokens, completion_tokens, page)
                 VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                (question[:2000], len(reply), ",".join(module_ids), MODEL_NAME,
-                 pt, ct, (page or "")[:255]))
+                (question[:2000], len(reply),
+                 ",".join(module_ids) + (f"+sql{sql_used}" if sql_used else ""),
+                 MODEL_NAME, pt, ct, (page or "")[:255]))
         conn.commit()
     finally:
         conn.close()
 
     return {"success": True, "reply": reply, "modules": module_ids,
-            "prompt_tokens": pt, "completion_tokens": ct}
+            "sql_calls": sql_used, "prompt_tokens": pt, "completion_tokens": ct}
