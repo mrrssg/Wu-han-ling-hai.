@@ -80,10 +80,82 @@ def main() -> int:
                                         %s, '去Mirakl后台核对价格与offer状态；确认后手动关闭本条', 'open')""",
                                 (entity, "；".join(problems)))
                         found.append({"entity": entity, "problems": problems})
+
+                # ---- Excel整体导出的回读对账（2026-07-17用户拍板B）----
+                # 导出页点过"已上传"的run：夜间同步后逐行比对 Mirakl真实价 vs 文件目标价。
+                # 还是上传前老价的行不按错误报（用户可能删行分批传），只计数进日志；
+                # 价格变了但不等于目标价的才开 issue。验完标 verified，不重复验。
+                exports_checked = []
+                cur.execute("""
+                    SELECT id, target AS run_id, store AS store_key, created_at
+                    FROM order_system.action_log
+                    WHERE action_type='full_export_uploaded' AND status='executed'""")
+                for m in cur.fetchall():
+                    scfg = REPRICING_STORES.get(m["store_key"])
+                    if not scfg:
+                        continue
+                    cur.execute("""
+                        SELECT MAX(updated_at) AS t FROM order_system.offerprice_listing
+                        WHERE platform=%s AND shop_name=%s""",
+                        (scfg["platform"], scfg["shop_name"]))
+                    sync_t = (cur.fetchone() or {}).get("t")
+                    if not sync_t or sync_t <= m["created_at"]:
+                        continue   # 标记之后同步还没跑，下次再验
+                    cur.execute("""
+                        SELECT shop_sku, old_origin_price, new_origin_price, new_discount_price
+                        FROM order_system.offer_price_change_log
+                        WHERE run_id=%s AND run_type='full_export' AND status='dry_run'""",
+                        (m["run_id"],))
+                    intents = cur.fetchall()
+                    applied = untouched = bad = 0
+                    for p in intents:
+                        cur.execute("""
+                            SELECT origin_price, discount_price, active
+                            FROM order_system.offerprice_listing
+                            WHERE platform=%s AND shop_name=%s AND shop_sku=%s""",
+                            (scfg["platform"], scfg["shop_name"], p["shop_sku"]))
+                        o = cur.fetchone()
+                        if not o:
+                            continue
+                        po = float(p["new_origin_price"] or 0)
+                        oo = float(o["origin_price"] or 0)
+                        old = float(p["old_origin_price"] or 0)
+                        if po and abs(oo - po) <= PRICE_TOL:
+                            applied += 1
+                            continue
+                        if old and abs(oo - old) <= PRICE_TOL:
+                            untouched += 1   # 还是上传前的老价——大概率这行没传，不报错
+                            continue
+                        bad += 1
+                        problems = [f"Excel上传对账: 目标原价{po}，上传前{old}，现在{oo}"]
+                        if not o["active"]:
+                            problems.append("offer已INACTIVE")
+                        entity = f"{p['shop_sku']}@{m['store_key']}"
+                        cur.execute("""
+                            SELECT id FROM order_system.issue_log
+                            WHERE issue_type='price_push_mismatch' AND entity=%s
+                              AND status='open'""", (entity,))
+                        if not cur.fetchone():
+                            cur.execute("""
+                                INSERT INTO order_system.issue_log
+                                    (detected_date, issue_type, entity, severity,
+                                     impact_usd, evidence, suggestion, status)
+                                VALUES (CURDATE(), 'price_push_mismatch', %s, 'high', 0,
+                                        %s, '去Mirakl后台核对该SKU价格；或在待改价页重推；确认后关闭本条', 'open')""",
+                                (entity, "；".join(problems)))
+                        found.append({"entity": entity, "problems": problems})
+                    metrics = {"rows": len(intents), "applied": applied,
+                               "untouched": untouched, "mismatch": bad}
+                    cur.execute("""
+                        UPDATE order_system.action_log
+                        SET status='verified', after_metrics=%s WHERE id=%s""",
+                        (json.dumps(metrics, ensure_ascii=False), m["id"]))
+                    exports_checked.append({"run_id": m["run_id"], **metrics})
             conn.commit()
         finally:
             conn.close()
         result = {"checked": len(pushes), "mismatches": len(found),
+                  "exports_checked": exports_checked,
                   "detail": found, "success": True}
     print(json.dumps(result, ensure_ascii=False, default=str))
     return 0

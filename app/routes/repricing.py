@@ -1203,6 +1203,20 @@ def full_export_mark_uploaded(run_id):
         for r in rows
     ]
 
+    # 记录"已上传"标记——夜间 push_verify_daily 据此对Excel路径做回读对账
+    # （2026-07-17用户拍板B：上传后自动比对Mirakl真实价vs文件目标价）
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO order_system.action_log
+                       (action_type, target, store, status)
+                   VALUES ('full_export_uploaded', %s, %s, 'executed')""",
+                (run_id, store_key))
+        conn.commit()
+    finally:
+        conn.close()
+
     def _bg(updates_, store_key_, run_id_):
         try:
             from app.services.feishu_pricing_config_service import write_supplier_prices_to_feishu

@@ -284,6 +284,70 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
 
 
 # =============================================================================
+# 生成后逐行复验（2026-07-17用户拍板：有一行不过就不给下载，fail-closed）
+# =============================================================================
+
+def _verify_xlsx(path: str, intents: Dict[str, Dict], push_discount: bool) -> List[str]:
+    """把写完的文件重新读回来，和算价意图逐行核对（专防写文件环节的错列/错行/漏行）：
+    ① SKU集合与意图完全一致（不多行/不缺行/不重复）
+    ② 原价、折扣价与意图一致
+    ③ 原价 = 折扣价 ÷ 折扣系数
+    ④ 保本线：折扣价×(1−佣金) ≥ 成本
+    ⑤ 折扣结束日期未过期（过期=折扣不生效，买家看到原价）
+    返回失败清单，空=全部通过。"""
+    fails: List[str] = []
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    head = [c.value for c in ws[1]]
+    idx = {h: i for i, h in enumerate(head)}
+    seen = set()
+    today = datetime.now().date()
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        sku = row[idx["sku"]]
+        if sku is None:
+            continue
+        it = intents.get(sku)
+        if not it:
+            fails.append(f"{sku}: 文件里多出的行（不在算价意图中）")
+            continue
+        if sku in seen:
+            fails.append(f"{sku}: 重复行")
+            continue
+        seen.add(sku)
+        try:
+            price = float(row[idx["price"]])
+        except (TypeError, ValueError):
+            fails.append(f"{sku}: price列不是数字")
+            continue
+        if abs(price - it["origin"]) > 0.011:
+            fails.append(f"{sku}: 原价{price}≠意图{it['origin']}")
+        if push_discount:
+            dcell = row[idx["discount-price"]]
+            disc = float(dcell) if dcell not in (None, "") else None
+            if disc is None:
+                fails.append(f"{sku}: 缺折扣价")
+            else:
+                if it.get("discount") is not None and abs(disc - it["discount"]) > 0.011:
+                    fails.append(f"{sku}: 折扣价{disc}≠意图{it['discount']}")
+                if it.get("df") and abs(price - round(disc / float(it["df"]), 2)) > 0.011:
+                    fails.append(f"{sku}: 原价≠折扣÷{it['df']}")
+                cr = float(it.get("cr") or 0)
+                if it.get("cost") is not None and disc * (1 - cr) < float(it["cost"]) - 0.01:
+                    fails.append(f"{sku}: 破保本线（折扣{disc}×{1-cr:.2f} < 成本{float(it['cost']):.2f}）")
+            dend = row[idx["discount-end-date"]]
+            if dend:
+                try:
+                    if datetime.strptime(str(dend)[:10], "%Y-%m-%d").date() < today:
+                        fails.append(f"{sku}: 折扣窗口已过期({dend})——上传后折扣不生效，买家看到原价")
+                except ValueError:
+                    pass
+    missing = set(intents) - seen
+    if missing:
+        fails.append(f"文件缺{len(missing)}行，如: {sorted(missing)[:5]}")
+    return fails
+
+
+# =============================================================================
 # Excel writer
 # =============================================================================
 
@@ -595,7 +659,35 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
 
     written = write_xlsx(xlsx_rows, output_path, base_template_path=base_template)
 
+    # 生成后逐行复验（fail-closed）：任何一行不过 → 文件隔离，不提供下载
+    intents: Dict[str, Dict] = {}
+    for offer, d in decisions:
+        if d["status"] == "would_update":
+            intents[offer["shop_sku"]] = {
+                "origin": float(d["target_origin_price"]),
+                "discount": (float(d["target_discount_price"])
+                             if d.get("target_discount_price") is not None else None),
+                "cost": d.get("new_cost"),
+                "cr": d.get("commission_rate"),
+                "df": d.get("discount_factor"),
+            }
+    verify_fails = _verify_xlsx(output_path, intents, push_discount)
     _log_decisions(run_id, decisions, store_key)
+    if verify_fails:
+        rejected = output_path + ".REJECTED"
+        os.replace(output_path, rejected)
+        print(f"[{run_id}] VERIFY FAILED ({len(verify_fails)}): {verify_fails[:5]}")
+        summary["by_tier"] = by_tier
+        return {
+            "success": False,
+            "run_id": run_id,
+            "store_key": store_key,
+            "msg": f"生成后复验不通过（{len(verify_fails)}项）——文件已隔离，不提供下载",
+            "verify_failures": verify_fails[:20],
+            "rejected_file": rejected,
+            "summary": summary,
+        }
+    summary["verify"] = {"passed": True, "rows_checked": written}
 
     # NB: Feishu supplier-price writeback used to happen here, but it was
     # premature - this endpoint only GENERATES the xlsx; Mirakl prices change
