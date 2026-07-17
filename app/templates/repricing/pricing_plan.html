@@ -112,14 +112,14 @@
   {% endif %}
 </form>
 
-{# ---------- 下架档批量删offer ---------- #}
+{# ---------- 下架档删offer（勾选后删除已选） ---------- #}
 {% if delist_skus %}
 <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
-  <button id="del-all-btn" class="btn btn-sm btn-danger">
-    🗑 一键删除全部下架档（{{ delist_skus|length }}个offer）</button>
+  <button id="del-sel-btn" class="btn btn-sm btn-danger" disabled>
+    🗑 删除已选（<span id="sel-count">0</span>）</button>
   <span class="text-muted" style="font-size:.75rem">
-    删除=调Mirakl接口下架该offer，<b>不可逆</b>；删后全系统除名（监控/评档/候选/导出不再出现），
-    并自动启动"删后仍出单"哨兵——万一平台没删干净会红条报警</span>
+    勾选下架档行首的复选框（表头可全选），点"删除已选"确认后删。删除=调Mirakl接口下架该offer，<b>不可逆</b>；
+    删后全系统除名（监控/评档/候选/导出不再出现），并自动启动"删后仍出单"哨兵</span>
 </div>
 {% endif %}
 
@@ -134,6 +134,7 @@
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
       <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th style="width:28px">{% if delist_skus %}<input type="checkbox" id="sel-all" title="全选本页下架档">{% endif %}</th>
         <th>SKU</th><th>运营</th><th>类目</th><th>档位</th><th class="text-end">目标毛利</th>
         <th class="text-end">90天单数</th><th class="text-end">退货</th>
         <th class="text-end">退货损失率</th><th class="text-end">实际毛利</th><th>数据来源</th><th class="text-end">现价$</th>
@@ -143,6 +144,7 @@
       <tbody>
         {% for r in rows %}
         <tr class="{{ 'suspect' if r.data_suspect }}">
+          <td>{% if r.tier == 'delist' %}<input type="checkbox" class="sel-del" data-sku="{{ r.shop_sku }}">{% endif %}</td>
           <td class="font-monospace small">{{ r.shop_sku }}</td>
           <td class="small">{{ r.operator or '—' }}</td>
           <td class="small">{{ r.category or '—' }}</td>
@@ -165,7 +167,7 @@
             {% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="16" class="text-center text-muted py-4">还没有评档数据——先跑 scripts/pricing_tier_eval.py</td></tr>
+        <tr><td colspan="17" class="text-center text-muted py-4">还没有评档数据——先跑 scripts/pricing_tier_eval.py</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -195,9 +197,8 @@
 </p>
 
 <script>
-const DELIST_SKUS = {{ delist_skus|tojson }};
 const DEL_URL = '{{ url_for("repricing.delete_offers", store=store_key) }}';
-async function delOffers(skus, btns) {
+async function delOffers(skus, btns, resetText) {
   btns.forEach(b => { b.disabled = true; b.textContent = '删除中…'; });
   try {
     const res = await fetch(DEL_URL, {
@@ -209,20 +210,39 @@ async function delOffers(skus, btns) {
       location.reload();
     } else {
       alert('删除失败：' + (data.error_message || data.msg || ('HTTP ' + res.status)));
-      btns.forEach(b => { b.disabled = false; b.textContent = '🗑 删offer'; });
+      btns.forEach(b => { b.disabled = false; b.textContent = resetText; });
     }
   } catch (e) {
     alert('请求失败：' + e);
-    btns.forEach(b => { b.disabled = false; b.textContent = '🗑 删offer'; });
+    btns.forEach(b => { b.disabled = false; b.textContent = resetText; });
   }
 }
 document.querySelectorAll('.del-btn').forEach(b =>
-  b.addEventListener('click', () => delOffers([b.dataset.sku], [b])));
-const delAll = document.getElementById('del-all-btn');
-if (delAll) delAll.addEventListener('click', () => {
-  if (confirm('确认删除全部下架档 ' + DELIST_SKUS.length + ' 个offer？\n\n' +
-              DELIST_SKUS.join('\n') + '\n\n此操作不可逆（Mirakl下架）。')) {
-    delOffers(DELIST_SKUS, [delAll]);
+  b.addEventListener('click', () => delOffers([b.dataset.sku], [b], '🗑 删offer')));
+
+// 勾选式批量删：全选/单选 → 计数 → 删除已选（confirm列出选中SKU）
+const selBtn = document.getElementById('del-sel-btn');
+const selAll = document.getElementById('sel-all');
+const boxes = () => Array.from(document.querySelectorAll('.sel-del'));
+const picked = () => boxes().filter(b => b.checked).map(b => b.dataset.sku);
+function refreshSel() {
+  const n = picked().length;
+  const cnt = document.getElementById('sel-count');
+  if (cnt) cnt.textContent = n;
+  if (selBtn) selBtn.disabled = (n === 0);
+  if (selAll) selAll.checked = (n > 0 && n === boxes().length);
+}
+boxes().forEach(b => b.addEventListener('change', refreshSel));
+if (selAll) selAll.addEventListener('change', () => {
+  boxes().forEach(b => { b.checked = selAll.checked; });
+  refreshSel();
+});
+if (selBtn) selBtn.addEventListener('click', () => {
+  const skus = picked();
+  if (!skus.length) return;
+  if (confirm('确认删除已选 ' + skus.length + ' 个offer？\n\n' + skus.join('\n') +
+              '\n\n此操作不可逆（Mirakl下架）。')) {
+    delOffers(skus, [selBtn], '🗑 删除已选（' + skus.length + '）');
   }
 });
 </script>
