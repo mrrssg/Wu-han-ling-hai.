@@ -199,7 +199,11 @@
 <script>
 const DEL_URL = '{{ url_for("repricing.delete_offers", store=store_key) }}';
 async function delOffers(skus, btns, resetText) {
-  btns.forEach(b => { b.disabled = true; b.textContent = '删除中…'; });
+  // Mirakl OF24 限1次/分钟（65秒冷却闸排队）——请求在途时锁住页面上所有删除按钮，
+  // 防止连点把请求堆在冷却队列里占满worker
+  const allBtns = Array.from(document.querySelectorAll('.del-btn, #del-sel-btn'));
+  allBtns.forEach(b => { b.disabled = true; });
+  btns.forEach(b => { b.textContent = '删除中…（Mirakl限1次/分钟，可能排队等约1分钟）'; });
   try {
     const res = await fetch(DEL_URL, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -210,11 +214,15 @@ async function delOffers(skus, btns, resetText) {
       location.reload();
     } else {
       alert('删除失败：' + (data.error_message || data.msg || ('HTTP ' + res.status)));
-      btns.forEach(b => { b.disabled = false; b.textContent = resetText; });
+      allBtns.forEach(b => { b.disabled = false; });
+      btns.forEach(b => { b.textContent = resetText; });
+      refreshSel();
     }
   } catch (e) {
     alert('请求失败：' + e);
-    btns.forEach(b => { b.disabled = false; b.textContent = resetText; });
+    allBtns.forEach(b => { b.disabled = false; });
+    btns.forEach(b => { b.textContent = resetText; });
+    refreshSel();
   }
 }
 document.querySelectorAll('.del-btn').forEach(b =>
