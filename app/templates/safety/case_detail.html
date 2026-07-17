@@ -67,11 +67,17 @@
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
       <thead class="table-light"><tr>
-        <th>平台/店铺</th><th>店铺SKU</th><th>供应商SKU</th><th>命中方式</th>
+        <th>产品图</th><th>平台/店铺</th><th>店铺SKU</th><th>供应商SKU</th><th>命中方式</th>
         <th>在卖</th><th class="text-end">90天单数</th><th>处理状态</th><th>操作</th></tr></thead>
       <tbody>
         {% for h in hits %}
         <tr id="hit-{{ h.id }}" class="{{ 'table-danger' if h.active==1 and h.status=='open' }}">
+          <td>{% if h.product_img %}
+            <a href="{{ h.product_img }}" target="_blank" title="{{ h.product_title or '' }}">
+              <img src="{{ h.product_img }}" loading="lazy" referrerpolicy="no-referrer"
+                   style="width:46px;height:46px;object-fit:cover;border-radius:5px;border:1px solid #e5e8ee"
+                   onerror="this.replaceWith('图↗')"></a>
+            {% else %}—{% endif %}</td>
           <td class="small">{{ h.platform }}-{{ h.shop_name }}</td>
           <td class="font-monospace small">{{ h.shop_sku }}</td>
           <td class="font-monospace small">{{ h.supplier_sku }}
@@ -95,7 +101,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="text-center text-muted py-4">没有命中任何店铺SKU</td></tr>
+        <tr><td colspan="9" class="text-center text-muted py-4">没有命中任何店铺SKU</td></tr>
         {% endfor %}
       </tbody>
     </table>

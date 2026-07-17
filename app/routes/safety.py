@@ -138,8 +138,14 @@ def case_detail(cid):
         flash("案例不存在", "danger")
         return redirect(url_for("safety.cases_page"))
     hits = _query("""
-        SELECT * FROM order_system.safety_hit WHERE case_id=%s
-        ORDER BY (active=1) DESC, status='open' DESC, orders_90d DESC, shop_sku""", (cid,))
+        SELECT h.*, c.image_url AS product_img, c.title AS product_title
+        FROM order_system.safety_hit h
+        LEFT JOIN (SELECT sku, MAX(image_url) AS image_url, MAX(title) AS title
+                   FROM order_system.safety_product_cache GROUP BY sku) c
+          ON c.sku = h.supplier_sku
+        WHERE h.case_id=%s
+        ORDER BY (h.active=1) DESC, h.status='open' DESC, h.orders_90d DESC, h.shop_sku""",
+        (cid,))
     import json as _json
     files = []
     try:
