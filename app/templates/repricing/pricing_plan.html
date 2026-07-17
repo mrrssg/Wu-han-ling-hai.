@@ -117,9 +117,19 @@
 <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
   <button id="del-sel-btn" class="btn btn-sm btn-danger" disabled>
     🗑 删除已选（<span id="sel-count">0</span>）</button>
-  <span class="text-muted" style="font-size:.75rem">
-    勾选下架档行首的复选框（表头可全选），点"删除已选"确认后删。删除=调Mirakl接口下架该offer，<b>不可逆</b>；
-    删后全系统除名（监控/评档/候选/导出不再出现），并自动启动"删后仍出单"哨兵</span>
+  <details style="font-size:.78rem" class="text-muted">
+    <summary style="cursor:pointer"><b>📖 删offer使用说明（点开）</b></summary>
+    <div class="card p-2 mt-1" style="max-width:760px;line-height:1.7">
+      <b>什么样的SKU会进下架档？</b>两种：①退货太重——连18%档的价格都盖不住退货损失，且窗口内≥25单坐实；
+      ②价格已经是正确的公式价却还在持续净亏（修价救不了）。"为什么进这一档"列写了每个SKU的具体原因和数字。<br>
+      <b>怎么删？</b>删单个→点行末「删offer」；删多个→勾行首复选框（表头可全选本页），点上面红色「删除已选」，
+      确认框会列出你勾中的SKU。<b>建议删多个用勾选批量</b>——Mirakl限制这类接口一分钟只能调1次，
+      勾10个也只算1次；一个个点单删，每次都要排队约1分钟（排队时全部删除按钮会锁住，属正常）。<br>
+      <b>删了之后？</b>该SKU从Mirakl下架（<b>不可逆</b>，要卖需重新上架），并自动从价格监控/评档/待改价/整体导出里除名；
+      系统会持续盯它——万一平台没删干净又出了新订单，第二天首页会红条报警。每笔删除都有审计记录（改价历史页可查）。<br>
+      <b>误操作保护：</b>只有下架档的SKU能删，其它档位的提交了也会被拒绝。
+    </div>
+  </details>
 </div>
 {% endif %}
 
