@@ -165,6 +165,7 @@
         <option value="pending_desc" {{ 'selected' if uo.sort == 'pending_desc' }}>待发单 多→少</option>
         <option value="n30_desc" {{ 'selected' if uo.sort == 'n30_desc' }}>30天单 多→少</option>
         <option value="n90_desc" {{ 'selected' if uo.sort == 'n90_desc' }}>90天单 多→少</option>
+        <option value="ret_desc" {{ 'selected' if uo.sort == 'ret_desc' }}>退货率 高→低</option>
       </select>
       {% if uo.shop or uo.op or uo.sup or uo.sort %}
       <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.index') }}#unshipped-detail">✕ 清除</a>

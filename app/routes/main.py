@@ -310,6 +310,7 @@ def index():
             "pending_desc": lambda r: -r["n_pending"],
             "n30_desc": lambda r: -r["n30"],
             "n90_desc": lambda r: -r["n90"],
+            "ret_desc": lambda r: (r["ret_rate"] is None, -(r["ret_rate"] or 0), -r["n90"]),
         }
         if uo_sort == "time_desc":
             rows.sort(key=lambda r: r["created_date"] or datetime(1970, 1, 1), reverse=True)
