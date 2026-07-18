@@ -203,7 +203,7 @@ def index():
     UO_PER = 50
     uo = {"rows": [], "total": 0, "page": uo_page, "pages": 1,
           "shops": [], "shop": uo_shop, "per": UO_PER,
-          "op": uo_op, "sup": uo_sup, "sort": uo_sort}
+          "op": uo_op, "sup": uo_sup, "sort": uo_sort, "amount": 0.0}
 
     _UO_OPS = {"刘梦蝶": ("MDLW", "MD"), "明瑞瑞": ("MRLW", "MR"), "朱以超": ("YCLW", "YC")}
 
@@ -322,7 +322,8 @@ def index():
             rows.sort(key=lambda r: (0 if r["order_state"] == "WAITING_ACCEPTANCE" else 1,
                                      -(r["created_date"] or datetime(1970, 1, 1)).timestamp()))
 
-        # 分页（内存切片）
+        # 分页（内存切片）；总金额跟随当前筛选
+        uo["amount"] = round(sum(_f(r["line_total_price"]) for r in rows), 2)
         uo["total"] = len(rows)
         uo["pages"] = max(1, (uo["total"] + UO_PER - 1) // UO_PER)
         uo["page"] = min(uo_page, uo["pages"])

@@ -131,7 +131,9 @@
 
 {# ---------- 未发货订单明细（分页50/页） ---------- #}
 <div class="sec-title mb-2 mt-3" id="unshipped-detail">📦 未发货订单明细
-  <span class="text-muted fw-normal" style="font-size:.75rem">未接单的排最前 · 共 {{ uo.total }} 单行 · 第 {{ uo.page }}/{{ uo.pages }} 页</span></div>
+  <span class="text-muted fw-normal" style="font-size:.75rem">共 {{ uo.total }} 单行 ·
+    <b style="color:#1f2937">总金额 ${{ '{:,.2f}'.format(uo.amount) }}</b>{{ '（当前筛选）' if uo.shop or uo.op or uo.sup }} ·
+    第 {{ uo.page }}/{{ uo.pages }} 页</span></div>
 <div class="card mb-3">
   <div class="card-header bg-white d-flex align-items-center gap-2 flex-wrap">
     <form method="get" action="{{ url_for('main.index') }}" class="d-flex gap-2 flex-wrap">
