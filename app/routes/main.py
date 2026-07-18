@@ -198,9 +198,10 @@ def index():
           "shops": [], "shop": uo_shop, "per": UO_PER}
 
     def _unshipped_detail():
+        # 店铺键用"|"分隔——platform值本身带横杠(如lowes-autool)，用"-"拼会切错(踩过)
         shop_cond, extra = "", []
-        if uo_shop and "-" in uo_shop:
-            pf, sn = uo_shop.split("-", 1)
+        if uo_shop and "|" in uo_shop:
+            pf, sn = uo_shop.split("|", 1)
             shop_cond = "AND sc.platform=%s AND sc.shop_name=%s"
             extra = [pf, sn]
         union = " UNION ALL ".join(
@@ -221,7 +222,8 @@ def index():
                                  u.created_date DESC
                         LIMIT %s OFFSET %s""",
                     params_all + [UO_PER, (uo["page"] - 1) * UO_PER])
-        uo["shops"] = [f"{r['platform']}-{r['shop_name']}" for r in qall(
+        uo["shops"] = [{"key": f"{r['platform']}|{r['shop_name']}",
+                        "label": r["platform"]} for r in qall(
             """SELECT DISTINCT sc.platform, sc.shop_name FROM (
                  SELECT shop_id FROM order_system.macy_order_data
                   WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')

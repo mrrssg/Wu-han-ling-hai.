@@ -139,7 +139,7 @@
               onchange="this.form.submit()">
         <option value="">全部店铺</option>
         {% for s in uo.shops %}
-        <option value="{{ s }}" {{ 'selected' if s == uo.shop }}>{{ s }}</option>
+        <option value="{{ s.key }}" {{ 'selected' if s.key == uo.shop }}>{{ s.label }}</option>
         {% endfor %}
       </select>
     </form>
@@ -159,7 +159,7 @@
           <td>{% if r.order_state == 'WAITING_ACCEPTANCE' %}
             <span class="badge text-bg-danger">未接单</span>
             {% else %}<span class="badge text-bg-warning text-dark">待发货</span>{% endif %}</td>
-          <td class="small">{{ r.platform }}-{{ r.shop_name }}</td>
+          <td class="small">{{ r.platform }}</td>
           <td class="font-monospace small">{{ r.order_id }}</td>
           <td class="font-monospace small">{{ r.order_line_id or '—' }}</td>
           <td>{% if r.img %}
