@@ -336,6 +336,20 @@ def sentinel_mark():
         return jsonify({"ok": False}), 400
     _exec("UPDATE order_system.listing_sentinel_findings SET status=%s WHERE id=%s",
           (new_status, fid))
+    # 联动首页红条（2026-07-18用户拍板）：标已修复/误报=关闭该SKU的listing_mismatch，
+    # 撤销回待处理=重开最近一条；重审自动打回的场景由哨兵daily的UPSERT status='open'兜住
+    row = _query("""SELECT shop_sku, store FROM order_system.listing_sentinel_findings
+                    WHERE id=%s""", (fid,))
+    if row:
+        entity = f"{row[0]['shop_sku']}@{row[0]['store']}"
+        if new_status in ("fixed", "false_positive"):
+            _exec("""UPDATE order_system.issue_log SET status='resolved'
+                     WHERE issue_type='listing_mismatch' AND entity=%s AND status='open'""",
+                  (entity,))
+        else:
+            _exec("""UPDATE order_system.issue_log SET status='open'
+                     WHERE issue_type='listing_mismatch' AND entity=%s AND status='resolved'
+                     ORDER BY id DESC LIMIT 1""", (entity,))
     return jsonify({"ok": True})
 
 

@@ -467,7 +467,8 @@ def run_sentinel(base_dir: str, days: int = 1, limit: int = 0,
                               (detected_date, issue_type, entity, severity, impact_usd,
                                evidence, suggestion)
                             VALUES (%s,'listing_mismatch',%s,'high',0,%s,%s)
-                            ON DUPLICATE KEY UPDATE evidence=VALUES(evidence)
+                            ON DUPLICATE KEY UPDATE evidence=VALUES(evidence),
+                              status='open'
                         """, (date.today(), f"{sku}@{store}",
                               (ai.get("summary") or "")[:800],
                               "对照哨兵页的原文对照修正listing/图片，改完在哨兵页标记已修复"))
