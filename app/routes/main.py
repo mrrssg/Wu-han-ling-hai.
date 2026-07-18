@@ -255,8 +255,6 @@ def index():
         for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
             for r in qall(f"""
                 SELECT sc.platform, sc.shop_name, d.offer_sku,
-                       COUNT(DISTINCT CASE WHEN d.created_date >= CURDATE()
-                             THEN d.order_id END) AS n_today,
                        COUNT(DISTINCT CASE WHEN d.created_date >=
                              DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                              THEN d.order_id END) AS n30,
@@ -270,17 +268,23 @@ def index():
                   AND d.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 GROUP BY sc.platform, sc.shop_name, d.offer_sku""", skus):
                 sales[(r["platform"], r["shop_name"], r["offer_sku"])] = (
-                    int(r["n_today"] or 0), int(r["n30"] or 0),
-                    int(r["n90"] or 0), int(r["ret90"] or 0))
+                    int(r["n30"] or 0), int(r["n90"] or 0), int(r["ret90"] or 0))
+        # 待发单：未发货集合里该SKU压了几单（同款打包处理/爆款信号，用户2026-07-18定）
+        pending_cnt = {}
+        for r in rows:
+            k = (r["platform"], r["shop_name"], r["offer_sku"])
+            pending_cnt[k] = pending_cnt.get(k, 0) + 1
         for r in rows:
             wh = wh_map.get(r["offer_sku"])
             c = cache.get(wh) or {}
             r["img"] = c.get("img")
             r["supplier"] = c.get("supplier") or ""
             r["stock"] = stock.get(wh)
-            r["n_today"], r["n30"], r["n90"], ret90 = sales.get(
-                (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0, 0, 0))
+            r["n30"], r["n90"], ret90 = sales.get(
+                (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0, 0))
             r["ret_rate"] = (ret90 / r["n90"]) if r["n90"] else None
+            r["n_pending"] = pending_cnt.get(
+                (r["platform"], r["shop_name"], r["offer_sku"]), 1)
             r["operator"] = _uo_operator(r["offer_sku"])
 
         # 筛选（内存）
@@ -303,6 +307,7 @@ def index():
             "time_asc": None,   # 特判
             "amount_desc": lambda r: -_f(r["line_total_price"]),
             "stock_asc": lambda r: (r["stock"] is None, _f(r["stock"], 9e9)),
+            "pending_desc": lambda r: -r["n_pending"],
             "n30_desc": lambda r: -r["n30"],
             "n90_desc": lambda r: -r["n90"],
         }

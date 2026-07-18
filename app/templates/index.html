@@ -162,6 +162,7 @@
         <option value="time_asc" {{ 'selected' if uo.sort == 'time_asc' }}>下单时间 旧→新</option>
         <option value="amount_desc" {{ 'selected' if uo.sort == 'amount_desc' }}>金额 高→低</option>
         <option value="stock_asc" {{ 'selected' if uo.sort == 'stock_asc' }}>库存 少→多</option>
+        <option value="pending_desc" {{ 'selected' if uo.sort == 'pending_desc' }}>待发单 多→少</option>
         <option value="n30_desc" {{ 'selected' if uo.sort == 'n30_desc' }}>30天单 多→少</option>
         <option value="n90_desc" {{ 'selected' if uo.sort == 'n90_desc' }}>90天单 多→少</option>
       </select>
@@ -185,7 +186,8 @@
         <th>状态</th><th>店铺</th><th>运营</th><th>订单号</th><th>行单号</th><th>图</th>
         <th style="min-width:220px">产品名称</th><th class="text-end">数量</th>
         <th class="text-end">金额$</th><th>供应商</th><th class="text-end">库存</th>
-        <th class="text-end">今日单</th><th class="text-end">30天单</th><th class="text-end">90天单</th>
+        <th class="text-end" title="该SKU在未发货清单里压了几单——同款可打包处理，也≈正在走量">待发单</th>
+        <th class="text-end">30天单</th><th class="text-end">90天单</th>
         <th class="text-end" title="该SKU近90天退货单数÷订单数">退货率</th><th>下单时间</th></tr></thead>
       <tbody>
         {% for r in uo.rows %}
@@ -211,7 +213,7 @@
           <td class="small">{{ {'Costway':'豪雅','Vevor':'司顺'}.get(r.supplier, r.supplier or '—') }}</td>
           <td class="text-end {{ 'fw-bold text-danger' if r.stock is not none and r.stock|int == 0 }}">
             {{ r.stock if r.stock is not none else '—' }}</td>
-          <td class="text-end {{ 'fw-bold' if r.n_today >= 2 }}">{{ r.n_today }}</td>
+          <td class="text-end {{ 'fw-bold text-primary' if r.n_pending >= 2 }}">{{ r.n_pending }}</td>
           <td class="text-end">{{ r.n30 }}</td>
           <td class="text-end">{{ r.n90 }}</td>
           <td class="text-end {{ 'fw-bold text-danger' if r.ret_rate is not none and r.ret_rate >= 0.3 }}">
