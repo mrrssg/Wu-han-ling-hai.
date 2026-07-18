@@ -245,6 +245,55 @@
   {% endif %}
 </div>
 
+{# ---------- 昨日退货明细 ---------- #}
+<div class="sec-title mb-2 mt-3">🔁 昨日退货明细
+  <span class="text-muted fw-normal" style="font-size:.75rem">共 {{ ry_rows|length }} 单 ·
+    有跟踪号=退回我们海外仓（不欠供应商货款，记得去登记表登记）</span></div>
+<div class="card mb-3">
+  <div class="table-responsive" style="max-height:520px;overflow-y:auto">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th>店铺</th><th>运营</th><th>订单号</th><th>图</th>
+        <th style="min-width:220px">产品名称</th><th class="text-end">金额$</th>
+        <th>供应商</th><th>退货原因</th><th>跟踪号</th>
+        <th class="text-end">30天单</th><th class="text-end">90天单</th>
+        <th class="text-end" title="该SKU近90天退货单数÷订单数">退货率</th>
+        <th>下单日期</th></tr></thead>
+      <tbody>
+        {% for r in ry_rows %}
+        <tr>
+          <td class="small">{{ r.platform }}</td>
+          <td class="small">{{ r.operator }}</td>
+          <td class="font-monospace small">{{ r.order_id }}</td>
+          <td>{% if r.img %}
+            <a href="{{ r.img }}" target="_blank">
+              <img src="{{ r.img }}" loading="lazy" referrerpolicy="no-referrer" class="uo-img"
+                   style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #e5e8ee"
+                   onerror="this.replaceWith('图')"></a>
+            {% else %}—{% endif %}</td>
+          <td class="small">
+            <div style="max-width:340px" class="text-truncate" title="{{ r.title }}">{{ r.title or '—' }}</div>
+            <div class="text-muted font-monospace" style="font-size:.68rem">{{ r.offer_sku }}</div></td>
+          <td class="text-end">{{ '%.2f' % r.amount if r.amount is not none else '—' }}</td>
+          <td class="small">{{ {'Costway':'豪雅','Vevor':'司顺'}.get(r.supplier, r.supplier or '—') }}</td>
+          <td class="small" title="{{ r.reason_raw }}">{{ r.reason }}</td>
+          <td class="small">{% if r.tracking %}
+            <span class="badge text-bg-success" title="{{ r.tracking }}">✓ 回仓</span>
+            {% else %}—{% endif %}</td>
+          <td class="text-end">{{ r.n30 }}</td>
+          <td class="text-end">{{ r.n90 }}</td>
+          <td class="text-end {{ 'fw-bold text-danger' if r.ret_rate is not none and r.ret_rate >= 0.3 }}">
+            {{ '%.0f%%' % (r.ret_rate * 100) if r.ret_rate is not none else '—' }}</td>
+          <td class="small text-muted">{{ r.order_date.strftime('%m-%d') if r.order_date else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="13" class="text-center text-muted py-4">昨天没有退货 🎉</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <script>
 (function () {
   const prev = document.createElement('img');

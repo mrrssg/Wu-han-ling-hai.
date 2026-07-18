@@ -329,15 +329,104 @@ def index():
         uo["page"] = min(uo_page, uo["pages"])
         uo["rows"] = rows[(uo["page"] - 1) * UO_PER: uo["page"] * UO_PER]
 
+    # ---------- 昨日退货明细（未发货明细下方，用户2026-07-18拍板） ----------
+    ry_rows = []
+
+    _REASON_CN = {
+        "RETURN_CM_DONT_WANT": "不想要了", "RETURN_PRODUCT_DOES_NOT_FIT": "尺寸不合适",
+        "RETURN_CM_QUALITY": "质量问题", "RETURN_CM_DAMAGED": "损坏",
+        "RETURN_CM_NOT_AS_DESCRIBED": "与描述不符", "RETURN_CM_DEFECTIVE": "有缺陷",
+        "RETURN_CM_WRONG_ITEM": "发错货", "RETURN_CM_LATE": "到货太晚",
+    }
+
+    def _returns_detail():
+        rets = qall("""
+            SELECT platform, shop_name, order_id, reason_code, tracking_number,
+                   date_created
+            FROM order_system.mirakl_returns
+            WHERE DATE(date_created) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+            ORDER BY date_created DESC LIMIT 200""")
+        if not rets:
+            return
+        oids = list({r["order_id"] for r in rets if r["order_id"]})
+        ph = ",".join(["%s"] * len(oids))
+        # 订单信息（每单取一行）
+        oinfo = {}
+        for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
+            for r in qall(f"""
+                SELECT d.order_id, d.offer_sku, d.product_title, d.line_total_price,
+                       d.created_date
+                FROM order_system.{t} d
+                JOIN (SELECT MIN(id) AS mid FROM order_system.{t}
+                      WHERE order_id IN ({ph}) GROUP BY order_id) f ON f.mid=d.id""",
+                oids):
+                oinfo.setdefault(r["order_id"], r)
+        skus = list({o["offer_sku"] for o in oinfo.values() if o["offer_sku"]})
+        wh_map, cache, sales = {}, {}, {}
+        if skus:
+            sph = ",".join(["%s"] * len(skus))
+            wh_map = {r["shop_sku"]: r["warehouse_sku"] for r in qall(
+                f"""SELECT DISTINCT shop_sku, warehouse_sku
+                    FROM order_system.offerprice_listing
+                    WHERE shop_sku IN ({sph}) AND warehouse_sku IS NOT NULL
+                      AND warehouse_sku<>''""", skus)}
+            whs = list({w for w in wh_map.values()})
+            if whs:
+                wph = ",".join(["%s"] * len(whs))
+                for r in qall(f"""SELECT sku, MAX(supplier) AS supplier,
+                                  MAX(image_url) AS img
+                                  FROM order_system.safety_product_cache
+                                  WHERE sku IN ({wph}) GROUP BY sku""", whs):
+                    cache[r["sku"]] = r
+            for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
+                for r in qall(f"""
+                    SELECT sc.platform, sc.shop_name, d.offer_sku,
+                           COUNT(DISTINCT CASE WHEN d.created_date >=
+                                 DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                                 THEN d.order_id END) AS n30,
+                           COUNT(DISTINCT d.order_id) AS n90,
+                           COUNT(DISTINCT CASE WHEN mr.order_id IS NOT NULL
+                                 THEN d.order_id END) AS ret90
+                    FROM order_system.{t} d
+                    JOIN order_system.shop_configs sc ON sc.id=d.shop_id
+                    LEFT JOIN order_system.mirakl_returns mr ON mr.order_id=d.order_id
+                    WHERE d.offer_sku IN ({sph}) AND d.order_state<>'CANCELED'
+                      AND d.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                    GROUP BY sc.platform, sc.shop_name, d.offer_sku""", skus):
+                    sales[(r["platform"], r["shop_name"], r["offer_sku"])] = (
+                        int(r["n30"] or 0), int(r["n90"] or 0), int(r["ret90"] or 0))
+        for r in rets:
+            o = oinfo.get(r["order_id"]) or {}
+            sku = o.get("offer_sku") or ""
+            wh = wh_map.get(sku)
+            c = cache.get(wh) or {}
+            n30, n90, ret90 = sales.get((r["platform"], r["shop_name"], sku), (0, 0, 0))
+            ry_rows.append({
+                "platform": r["platform"], "shop_name": r["shop_name"],
+                "order_id": r["order_id"],
+                "reason": _REASON_CN.get(r["reason_code"], r["reason_code"] or "—"),
+                "reason_raw": r["reason_code"] or "",
+                "tracking": (r["tracking_number"] or "").strip(),
+                "ret_time": r["date_created"],
+                "offer_sku": sku, "title": o.get("product_title"),
+                "amount": o.get("line_total_price"),
+                "order_date": o.get("created_date"),
+                "img": c.get("img"), "supplier": c.get("supplier") or "",
+                "operator": _uo_operator(sku),
+                "n30": n30, "n90": n90,
+                "ret_rate": (ret90 / n90) if n90 else None,
+            })
+
     try:
         for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-                   _todo_repricing, _unshipped, _returns_yesterday, _unshipped_detail):
+                   _todo_repricing, _unshipped, _returns_yesterday, _unshipped_detail,
+                   _returns_detail):
             _safe(fn)
     finally:
         conn.close()
 
     return render_template('index.html', todos=todos, unshipped=unshipped,
-                           returns_y=returns_y, uo=uo)
+                           returns_y=returns_y, uo=uo, ry_rows=ry_rows)
 
 
 @main_bp.route('/feishu-dashboard')
