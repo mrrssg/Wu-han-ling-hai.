@@ -180,6 +180,17 @@ def index():
                 a["waiting"] = int(r["n"] or 0)
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
+    def _todo_supplier_stale():
+        # 供应商价格断更报警（2026-07-15断供两天靠导出闸门才发现——以后第一时间跳出来）
+        for label, tbl in (("豪雅", "newestdropship"), ("司顺", "newestdropship_vevor")):
+            r = q1(f"SELECT TIMESTAMPDIFF(HOUR, MAX(Updated_At), NOW()) AS h "
+                   f"FROM autooperate.{tbl}")
+            h = int(r["h"]) if r and r["h"] is not None else None
+            if h is not None and h >= 24:
+                todos.append({"icon": "🛑", "label": f"{label}供应商价格已{h}小时没更新（同步任务可能挂了）",
+                              "count": None, "money": None,
+                              "href": url_for("main.health"), "danger": True})
+
     def _returns_yesterday():
         rows = qall("""
             SELECT CONCAT(platform, '-', shop_name) AS label, COUNT(*) AS n
@@ -218,7 +229,7 @@ def index():
         union = " UNION ALL ".join(
             f"""SELECT sc.platform, sc.shop_name, d.order_id, d.order_line_id,
                        d.created_date, d.offer_sku, d.product_title, d.quantity,
-                       d.line_total_price, d.order_state
+                       d.line_total_price, d.order_state, d.customer_email
                 FROM order_system.{t} d
                 JOIN order_system.shop_configs sc ON sc.id=d.shop_id
                 WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE')"""
@@ -274,6 +285,13 @@ def index():
         for r in rows:
             k = (r["platform"], r["shop_name"], r["offer_sku"])
             pending_cnt[k] = pending_cnt.get(k, 0) + 1
+        # 可疑买家标记：邮箱命中 黑名单 / 高中可疑档案（发货前最后一道闸）
+        bl_emails = {(b["email"] or "").strip().lower() for b in qall(
+            """SELECT email FROM order_system.customer_blacklist
+               WHERE active=1 AND email IS NOT NULL AND email<>''""")}
+        risk_emails = {r_["id_norm"] for r_ in qall(
+            """SELECT id_norm FROM order_system.customer_risk_profile
+               WHERE id_type='email' AND risk_level IN ('high','mid')""")}
         for r in rows:
             wh = wh_map.get(r["offer_sku"])
             c = cache.get(wh) or {}
@@ -286,6 +304,20 @@ def index():
             r["n_pending"] = pending_cnt.get(
                 (r["platform"], r["shop_name"], r["offer_sku"]), 1)
             r["operator"] = _uo_operator(r["offer_sku"])
+            em = (r.get("customer_email") or "").strip().lower()
+            r["buyer_flag"] = ("black" if em and em in bl_emails
+                               else "risk" if em and em in risk_emails else None)
+
+        # 无货压单统计（全量、不受筛选影响）→ 首页红条
+        def _f2(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+        zero = [r for r in rows
+                if r["stock"] is not None and int(r["stock"] or 0) == 0]
+        uo["zero_stock_n"] = len(zero)
+        uo["zero_stock_amt"] = round(sum(_f2(r["line_total_price"]) for r in zero), 2)
 
         # 筛选（内存）
         if uo_shop and "|" in uo_shop:
@@ -419,11 +451,19 @@ def index():
 
     try:
         for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-                   _todo_repricing, _unshipped, _returns_yesterday, _unshipped_detail,
-                   _returns_detail):
+                   _todo_repricing, _todo_supplier_stale, _unshipped,
+                   _returns_yesterday, _unshipped_detail, _returns_detail):
             _safe(fn)
     finally:
         conn.close()
+
+    # 未发货×无货 红条（依赖 _unshipped_detail 的统计，所以放循环后补）
+    if uo.get("zero_stock_n"):
+        todos.append({"icon": "📦",
+                      "label": "未发货但供应商无货（发不出会超时，优先处理）",
+                      "count": uo["zero_stock_n"], "money": uo.get("zero_stock_amt"),
+                      "href": url_for("main.index", uo_sort="stock_asc") + "#unshipped-detail",
+                      "danger": True})
 
     return render_template('index.html', todos=todos, unshipped=unshipped,
                            returns_y=returns_y, uo=uo, ry_rows=ry_rows)

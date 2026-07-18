@@ -200,7 +200,12 @@
             {% else %}<span class="badge text-bg-warning text-dark">待发货</span>{% endif %}</td>
           <td class="small">{{ r.platform }}</td>
           <td class="small">{{ r.operator }}</td>
-          <td class="font-monospace small">{{ r.order_id }}</td>
+          <td class="font-monospace small">{{ r.order_id }}
+            {% if r.buyer_flag == 'black' %}
+            <div><span class="badge text-bg-dark" title="买家在黑名单里，发货前建议复核">⛔ 黑名单买家</span></div>
+            {% elif r.buyer_flag == 'risk' %}
+            <div><span class="badge text-bg-warning text-dark" title="买家在可疑客户名单（高/中），历史退货多">⚠️ 可疑买家</span></div>
+            {% endif %}</td>
           <td class="font-monospace small">{{ r.order_line_id or '—' }}</td>
           <td>{% if r.img %}
             <a href="{{ r.img }}" target="_blank">
