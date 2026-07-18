@@ -134,7 +134,7 @@
   <span class="text-muted fw-normal" style="font-size:.75rem">未接单的排最前 · 共 {{ uo.total }} 单行 · 第 {{ uo.page }}/{{ uo.pages }} 页</span></div>
 <div class="card mb-3">
   <div class="card-header bg-white d-flex align-items-center gap-2 flex-wrap">
-    <form method="get" action="{{ url_for('main.index') }}" class="d-flex gap-2">
+    <form method="get" action="{{ url_for('main.index') }}" class="d-flex gap-2 flex-wrap">
       <select name="uo_shop" class="form-select form-select-sm" style="width:auto"
               onchange="this.form.submit()">
         <option value="">全部店铺</option>
@@ -142,10 +142,41 @@
         <option value="{{ s.key }}" {{ 'selected' if s.key == uo.shop }}>{{ s.label }}</option>
         {% endfor %}
       </select>
+      <select name="uo_op" class="form-select form-select-sm" style="width:auto"
+              onchange="this.form.submit()">
+        <option value="">全部运营</option>
+        {% for o in ['刘梦蝶', '明瑞瑞', '朱以超', '未分配'] %}
+        <option value="{{ o }}" {{ 'selected' if o == uo.op }}>{{ o }}</option>
+        {% endfor %}
+      </select>
+      <select name="uo_sup" class="form-select form-select-sm" style="width:auto"
+              onchange="this.form.submit()">
+        <option value="">全部供应商</option>
+        <option value="Costway" {{ 'selected' if uo.sup == 'Costway' }}>豪雅</option>
+        <option value="Vevor" {{ 'selected' if uo.sup == 'Vevor' }}>司顺</option>
+      </select>
+      <select name="uo_sort" class="form-select form-select-sm" style="width:auto"
+              onchange="this.form.submit()">
+        <option value="">排序：未接单优先</option>
+        <option value="time_desc" {{ 'selected' if uo.sort == 'time_desc' }}>下单时间 新→旧</option>
+        <option value="time_asc" {{ 'selected' if uo.sort == 'time_asc' }}>下单时间 旧→新</option>
+        <option value="amount_desc" {{ 'selected' if uo.sort == 'amount_desc' }}>金额 高→低</option>
+        <option value="stock_asc" {{ 'selected' if uo.sort == 'stock_asc' }}>库存 少→多</option>
+        <option value="n30_desc" {{ 'selected' if uo.sort == 'n30_desc' }}>30天单 多→少</option>
+        <option value="n90_desc" {{ 'selected' if uo.sort == 'n90_desc' }}>90天单 多→少</option>
+      </select>
+      {% if uo.shop or uo.op or uo.sup or uo.sort %}
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.index') }}#unshipped-detail">✕ 清除</a>
+      {% endif %}
     </form>
     <span class="text-muted ms-auto" style="font-size:.72rem">
-      🔴未接单=WAITING_ACCEPTANCE（最急）｜库存=供应商实时库存，0要小心发不出</span>
+      🔴未接单最急｜库存=供应商实时库存，0要小心发不出</span>
   </div>
+  <style>
+    .uo-img { transition: transform .15s ease; transform-origin: left center; }
+    .uo-img:hover { transform: scale(4.2); position: relative; z-index: 40;
+                    box-shadow: 0 6px 24px rgba(0,0,0,.35); border-radius: 2px; }
+  </style>
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
       <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
@@ -164,7 +195,7 @@
           <td class="font-monospace small">{{ r.order_line_id or '—' }}</td>
           <td>{% if r.img %}
             <a href="{{ r.img }}" target="_blank">
-              <img src="{{ r.img }}" loading="lazy" referrerpolicy="no-referrer"
+              <img src="{{ r.img }}" loading="lazy" referrerpolicy="no-referrer" class="uo-img"
                    style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #e5e8ee"
                    onerror="this.replaceWith('图')"></a>
             {% else %}—{% endif %}</td>
@@ -189,12 +220,14 @@
   {% if uo.pages > 1 %}
   <div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
     <span class="text-muted">共 {{ uo.total }} 单行 · 每页 {{ uo.per }}</span>
+    {% set ukeep = {'uo_shop': uo.shop or None, 'uo_op': uo.op or None,
+                    'uo_sup': uo.sup or None, 'uo_sort': uo.sort or None} %}
     <div class="btn-group">
       <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if uo.page <= 1 }}"
-         href="{{ url_for('main.index', uo_shop=uo.shop or None, uo_page=uo.page-1) }}#unshipped-detail">‹ 上一页</a>
+         href="{{ url_for('main.index', uo_page=uo.page-1, **ukeep) }}#unshipped-detail">‹ 上一页</a>
       <span class="btn btn-sm btn-light disabled">{{ uo.page }} / {{ uo.pages }}</span>
       <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if uo.page >= uo.pages }}"
-         href="{{ url_for('main.index', uo_shop=uo.shop or None, uo_page=uo.page+1) }}#unshipped-detail">下一页 ›</a>
+         href="{{ url_for('main.index', uo_page=uo.page+1, **ukeep) }}#unshipped-detail">下一页 ›</a>
     </div>
   </div>
   {% endif %}

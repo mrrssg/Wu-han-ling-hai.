@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask import Blueprint, render_template, request, url_for
 from app.models.db_manager import DBManager
 
@@ -188,54 +190,45 @@ def index():
         returns_y["total"] = sum(r["n"] for r in returns_y["rows"])
 
     # ---------- 未发货订单明细（常用功能下方，分页50/页，用户2026-07-18拍板） ----------
+    # 未发货全量只有几百行：一次取出+全量富化，筛选(店铺/运营/供应商)和排序在内存做，
+    # 灵活且SQL简单。若以后未发货涨到几千行再改回SQL分页。
     uo_shop = (request.args.get("uo_shop") or "").strip()
+    uo_op = (request.args.get("uo_op") or "").strip()
+    uo_sup = (request.args.get("uo_sup") or "").strip()
+    uo_sort = (request.args.get("uo_sort") or "").strip()
     try:
         uo_page = max(1, int(request.args.get("uo_page") or 1))
     except (TypeError, ValueError):
         uo_page = 1
     UO_PER = 50
     uo = {"rows": [], "total": 0, "page": uo_page, "pages": 1,
-          "shops": [], "shop": uo_shop, "per": UO_PER}
+          "shops": [], "shop": uo_shop, "per": UO_PER,
+          "op": uo_op, "sup": uo_sup, "sort": uo_sort}
+
+    _UO_OPS = {"刘梦蝶": ("MDLW", "MD"), "明瑞瑞": ("MRLW", "MR"), "朱以超": ("YCLW", "YC")}
+
+    def _uo_operator(sku):
+        s = (sku or "").upper()
+        for name, (seg, head) in _UO_OPS.items():
+            if seg in s or s.startswith(head):
+                return name
+        return "未分配"
 
     def _unshipped_detail():
-        # 店铺键用"|"分隔——platform值本身带横杠(如lowes-autool)，用"-"拼会切错(踩过)
-        shop_cond, extra = "", []
-        if uo_shop and "|" in uo_shop:
-            pf, sn = uo_shop.split("|", 1)
-            shop_cond = "AND sc.platform=%s AND sc.shop_name=%s"
-            extra = [pf, sn]
         union = " UNION ALL ".join(
             f"""SELECT sc.platform, sc.shop_name, d.order_id, d.order_line_id,
                        d.created_date, d.offer_sku, d.product_title, d.quantity,
                        d.line_total_price, d.order_state
                 FROM order_system.{t} d
                 JOIN order_system.shop_configs sc ON sc.id=d.shop_id
-                WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE') {shop_cond}"""
+                WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE')"""
             for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"))
-        params_all = extra * 3
-        uo["total"] = int((q1(f"SELECT COUNT(*) AS n FROM ({union}) u",
-                              params_all or None) or {}).get("n") or 0)
-        uo["pages"] = max(1, (uo["total"] + UO_PER - 1) // UO_PER)
-        uo["page"] = min(uo_page, uo["pages"])
-        rows = qall(f"""SELECT * FROM ({union}) u
-                        ORDER BY FIELD(u.order_state,'WAITING_ACCEPTANCE','SHIPPING'),
-                                 u.created_date DESC
-                        LIMIT %s OFFSET %s""",
-                    params_all + [UO_PER, (uo["page"] - 1) * UO_PER])
-        uo["shops"] = [{"key": f"{r['platform']}|{r['shop_name']}",
-                        "label": r["platform"]} for r in qall(
-            """SELECT DISTINCT sc.platform, sc.shop_name FROM (
-                 SELECT shop_id FROM order_system.macy_order_data
-                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
-                 UNION SELECT shop_id FROM order_system.lowes_order_data
-                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
-                 UNION SELECT shop_id FROM order_system.bestbuy_order_data
-                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
-               ) x JOIN order_system.shop_configs sc ON sc.id=x.shop_id
-               ORDER BY sc.platform, sc.shop_name""")]
+        rows = qall(f"SELECT * FROM ({union}) u")
+        uo["shops"] = sorted({f"{r['platform']}|{r['shop_name']}" for r in rows})
+        uo["shops"] = [{"key": k, "label": k.split("|", 1)[0]} for k in uo["shops"]]
         if not rows:
             return
-        # 富化只针对本页的SKU：产品图/供应商(缓存)、供应商库存(实时表)、本店30/90天出单
+        # 全量富化（未发货SKU数很少）：产品图/供应商(缓存)、供应商库存、本店30/90天出单
         skus = list({r["offer_sku"] for r in rows if r["offer_sku"]})
         ph = ",".join(["%s"] * len(skus))
         wh_map = {r["shop_sku"]: r["warehouse_sku"] for r in qall(
@@ -281,7 +274,46 @@ def index():
             r["stock"] = stock.get(wh)
             r["n30"], r["n90"] = sales.get(
                 (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0))
-        uo["rows"] = rows
+            r["operator"] = _uo_operator(r["offer_sku"])
+
+        # 筛选（内存）
+        if uo_shop and "|" in uo_shop:
+            pf, sn = uo_shop.split("|", 1)
+            rows = [r for r in rows if r["platform"] == pf and r["shop_name"] == sn]
+        if uo_op:
+            rows = [r for r in rows if r["operator"] == uo_op]
+        if uo_sup:
+            rows = [r for r in rows if r["supplier"] == uo_sup]
+
+        # 排序（内存）
+        def _f(v, d=0.0):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return d
+        sorters = {
+            "time_desc": lambda r: (r["created_date"] is None, ),
+            "time_asc": None,   # 特判
+            "amount_desc": lambda r: -_f(r["line_total_price"]),
+            "stock_asc": lambda r: (r["stock"] is None, _f(r["stock"], 9e9)),
+            "n30_desc": lambda r: -r["n30"],
+            "n90_desc": lambda r: -r["n90"],
+        }
+        if uo_sort == "time_desc":
+            rows.sort(key=lambda r: r["created_date"] or datetime(1970, 1, 1), reverse=True)
+        elif uo_sort == "time_asc":
+            rows.sort(key=lambda r: r["created_date"] or datetime(2999, 1, 1))
+        elif uo_sort in sorters and sorters[uo_sort]:
+            rows.sort(key=sorters[uo_sort])
+        else:   # 默认：未接单优先，再按时间新→旧
+            rows.sort(key=lambda r: (0 if r["order_state"] == "WAITING_ACCEPTANCE" else 1,
+                                     -(r["created_date"] or datetime(1970, 1, 1)).timestamp()))
+
+        # 分页（内存切片）
+        uo["total"] = len(rows)
+        uo["pages"] = max(1, (uo["total"] + UO_PER - 1) // UO_PER)
+        uo["page"] = min(uo_page, uo["pages"])
+        uo["rows"] = rows[(uo["page"] - 1) * UO_PER: uo["page"] * UO_PER]
 
     try:
         for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
