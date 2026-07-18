@@ -155,7 +155,7 @@
         <th class="text-end">30天单</th><th class="text-end">90天单</th><th>下单时间</th></tr></thead>
       <tbody>
         {% for r in uo.rows %}
-        <tr class="{{ 'table-danger' if r.order_state == 'WAITING_ACCEPTANCE' }}">
+        <tr>
           <td>{% if r.order_state == 'WAITING_ACCEPTANCE' %}
             <span class="badge text-bg-danger">未接单</span>
             {% else %}<span class="badge text-bg-warning text-dark">待发货</span>{% endif %}</td>
