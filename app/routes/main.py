@@ -255,25 +255,32 @@ def index():
         for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
             for r in qall(f"""
                 SELECT sc.platform, sc.shop_name, d.offer_sku,
+                       COUNT(DISTINCT CASE WHEN d.created_date >= CURDATE()
+                             THEN d.order_id END) AS n_today,
                        COUNT(DISTINCT CASE WHEN d.created_date >=
                              DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                              THEN d.order_id END) AS n30,
-                       COUNT(DISTINCT d.order_id) AS n90
+                       COUNT(DISTINCT d.order_id) AS n90,
+                       COUNT(DISTINCT CASE WHEN mr.order_id IS NOT NULL
+                             THEN d.order_id END) AS ret90
                 FROM order_system.{t} d
                 JOIN order_system.shop_configs sc ON sc.id=d.shop_id
+                LEFT JOIN order_system.mirakl_returns mr ON mr.order_id=d.order_id
                 WHERE d.offer_sku IN ({ph}) AND d.order_state<>'CANCELED'
                   AND d.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 GROUP BY sc.platform, sc.shop_name, d.offer_sku""", skus):
                 sales[(r["platform"], r["shop_name"], r["offer_sku"])] = (
-                    int(r["n30"] or 0), int(r["n90"] or 0))
+                    int(r["n_today"] or 0), int(r["n30"] or 0),
+                    int(r["n90"] or 0), int(r["ret90"] or 0))
         for r in rows:
             wh = wh_map.get(r["offer_sku"])
             c = cache.get(wh) or {}
             r["img"] = c.get("img")
             r["supplier"] = c.get("supplier") or ""
             r["stock"] = stock.get(wh)
-            r["n30"], r["n90"] = sales.get(
-                (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0))
+            r["n_today"], r["n30"], r["n90"], ret90 = sales.get(
+                (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0, 0, 0))
+            r["ret_rate"] = (ret90 / r["n90"]) if r["n90"] else None
             r["operator"] = _uo_operator(r["offer_sku"])
 
         # 筛选（内存）

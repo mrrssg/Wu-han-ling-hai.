@@ -182,10 +182,11 @@
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
       <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
-        <th>状态</th><th>店铺</th><th>订单号</th><th>行单号</th><th>图</th>
+        <th>状态</th><th>店铺</th><th>运营</th><th>订单号</th><th>行单号</th><th>图</th>
         <th style="min-width:220px">产品名称</th><th class="text-end">数量</th>
         <th class="text-end">金额$</th><th>供应商</th><th class="text-end">库存</th>
-        <th class="text-end">30天单</th><th class="text-end">90天单</th><th>下单时间</th></tr></thead>
+        <th class="text-end">今日单</th><th class="text-end">30天单</th><th class="text-end">90天单</th>
+        <th class="text-end" title="该SKU近90天退货单数÷订单数">退货率</th><th>下单时间</th></tr></thead>
       <tbody>
         {% for r in uo.rows %}
         <tr>
@@ -193,6 +194,7 @@
             <span class="badge text-bg-danger">未接单</span>
             {% else %}<span class="badge text-bg-warning text-dark">待发货</span>{% endif %}</td>
           <td class="small">{{ r.platform }}</td>
+          <td class="small">{{ r.operator }}</td>
           <td class="font-monospace small">{{ r.order_id }}</td>
           <td class="font-monospace small">{{ r.order_line_id or '—' }}</td>
           <td>{% if r.img %}
@@ -209,12 +211,15 @@
           <td class="small">{{ {'Costway':'豪雅','Vevor':'司顺'}.get(r.supplier, r.supplier or '—') }}</td>
           <td class="text-end {{ 'fw-bold text-danger' if r.stock is not none and r.stock|int == 0 }}">
             {{ r.stock if r.stock is not none else '—' }}</td>
+          <td class="text-end {{ 'fw-bold' if r.n_today >= 2 }}">{{ r.n_today }}</td>
           <td class="text-end">{{ r.n30 }}</td>
           <td class="text-end">{{ r.n90 }}</td>
+          <td class="text-end {{ 'fw-bold text-danger' if r.ret_rate is not none and r.ret_rate >= 0.3 }}">
+            {{ '%.0f%%' % (r.ret_rate * 100) if r.ret_rate is not none else '—' }}</td>
           <td class="small text-muted">{{ r.created_date }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="13" class="text-center text-muted py-4">当前没有未发货订单 🎉</td></tr>
+        <tr><td colspan="16" class="text-center text-muted py-4">当前没有未发货订单 🎉</td></tr>
         {% endfor %}
       </tbody>
     </table>
