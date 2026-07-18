@@ -98,7 +98,11 @@ def rebuild_profiles() -> Dict[str, Any]:
         orders: Dict[str, Dict] = {}
         for tbl in ORDER_TABLES:
             for r in _q(conn, f"""
-                    SELECT d.order_id, d.created_date, d.customer_email,
+                    SELECT d.order_id, d.created_date,
+                           COALESCE(NULLIF(d.customer_email,''),
+                             CASE WHEN d.raw_json IS NOT NULL AND JSON_VALID(d.raw_json)
+                                  THEN JSON_UNQUOTE(JSON_EXTRACT(d.raw_json,
+                                       '$.customer.customer_id')) END) AS customer_email,
                            d.shipping_city, d.shipping_state, d.shipping_zip,
                            sc.platform, sc.shop_name,
                            {_jx('$.customer.shipping_address.firstname', 'fn')},

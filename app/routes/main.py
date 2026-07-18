@@ -226,10 +226,19 @@ def index():
         return "未分配"
 
     def _unshipped_detail():
+        # 邮箱列 Lowes 是空的，真身在 raw_json 的 customer.customer_id 里——JSON兜底取；
+        # 电话也一并抽出来，可疑买家匹配走 邮箱+电话 两条线
         union = " UNION ALL ".join(
             f"""SELECT sc.platform, sc.shop_name, d.order_id, d.order_line_id,
                        d.created_date, d.offer_sku, d.product_title, d.quantity,
-                       d.line_total_price, d.order_state, d.customer_email
+                       d.line_total_price, d.order_state,
+                       COALESCE(NULLIF(d.customer_email,''),
+                         CASE WHEN d.raw_json IS NOT NULL AND JSON_VALID(d.raw_json)
+                              THEN JSON_UNQUOTE(JSON_EXTRACT(d.raw_json,
+                                   '$.customer.customer_id')) END) AS customer_email,
+                       CASE WHEN d.raw_json IS NOT NULL AND JSON_VALID(d.raw_json)
+                            THEN JSON_UNQUOTE(JSON_EXTRACT(d.raw_json,
+                                 '$.customer.shipping_address.phone')) END AS customer_phone
                 FROM order_system.{t} d
                 JOIN order_system.shop_configs sc ON sc.id=d.shop_id
                 WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE')"""
@@ -285,13 +294,27 @@ def index():
         for r in rows:
             k = (r["platform"], r["shop_name"], r["offer_sku"])
             pending_cnt[k] = pending_cnt.get(k, 0) + 1
-        # 可疑买家标记：邮箱命中 黑名单 / 高中可疑档案（发货前最后一道闸）
-        bl_emails = {(b["email"] or "").strip().lower() for b in qall(
-            """SELECT email FROM order_system.customer_blacklist
-               WHERE active=1 AND email IS NOT NULL AND email<>''""")}
-        risk_emails = {r_["id_norm"] for r_ in qall(
-            """SELECT id_norm FROM order_system.customer_risk_profile
-               WHERE id_type='email' AND risk_level IN ('high','mid')""")}
+        # 可疑买家标记：邮箱/电话任一命中 黑名单 / 高中可疑档案（发货前最后一道闸）
+        import re as _re
+
+        def _digits(p):
+            d = _re.sub(r"\D", "", p or "")
+            return d[-10:] if len(d) >= 10 else (d if len(d) >= 7 else "")
+
+        bl_emails, bl_phones = set(), set()
+        for b in qall("""SELECT email, phone FROM order_system.customer_blacklist
+                         WHERE active=1"""):
+            e = (b["email"] or "").strip().lower()
+            if "@" in e:
+                bl_emails.add(e)
+            p_ = _digits(b["phone"])
+            if p_:
+                bl_phones.add(p_)
+        risk_emails, risk_phones = set(), set()
+        for r_ in qall("""SELECT id_type, id_norm FROM order_system.customer_risk_profile
+                          WHERE id_type IN ('email','phone')
+                            AND risk_level IN ('high','mid')"""):
+            (risk_emails if r_["id_type"] == "email" else risk_phones).add(r_["id_norm"])
         for r in rows:
             wh = wh_map.get(r["offer_sku"])
             c = cache.get(wh) or {}
@@ -305,8 +328,13 @@ def index():
                 (r["platform"], r["shop_name"], r["offer_sku"]), 1)
             r["operator"] = _uo_operator(r["offer_sku"])
             em = (r.get("customer_email") or "").strip().lower()
-            r["buyer_flag"] = ("black" if em and em in bl_emails
-                               else "risk" if em and em in risk_emails else None)
+            if "@" not in em:
+                em = ""
+            pn = _digits(r.get("customer_phone"))
+            r["buyer_flag"] = (
+                "black" if (em and em in bl_emails) or (pn and pn in bl_phones)
+                else "risk" if (em and em in risk_emails) or (pn and pn in risk_phones)
+                else None)
 
         # 无货压单统计（全量、不受筛选影响）→ 首页红条
         def _f2(v):
