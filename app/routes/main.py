@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, url_for
+from flask import Blueprint, render_template, request, url_for
 from app.models.db_manager import DBManager
 
 # 定义一个名为 'main' 的蓝图
@@ -187,15 +187,109 @@ def index():
         returns_y["rows"] = [{"label": r["label"], "n": int(r["n"] or 0)} for r in rows]
         returns_y["total"] = sum(r["n"] for r in returns_y["rows"])
 
+    # ---------- 未发货订单明细（常用功能下方，分页50/页，用户2026-07-18拍板） ----------
+    uo_shop = (request.args.get("uo_shop") or "").strip()
+    try:
+        uo_page = max(1, int(request.args.get("uo_page") or 1))
+    except (TypeError, ValueError):
+        uo_page = 1
+    UO_PER = 50
+    uo = {"rows": [], "total": 0, "page": uo_page, "pages": 1,
+          "shops": [], "shop": uo_shop, "per": UO_PER}
+
+    def _unshipped_detail():
+        shop_cond, extra = "", []
+        if uo_shop and "-" in uo_shop:
+            pf, sn = uo_shop.split("-", 1)
+            shop_cond = "AND sc.platform=%s AND sc.shop_name=%s"
+            extra = [pf, sn]
+        union = " UNION ALL ".join(
+            f"""SELECT sc.platform, sc.shop_name, d.order_id, d.order_line_id,
+                       d.created_date, d.offer_sku, d.product_title, d.quantity,
+                       d.line_total_price, d.order_state
+                FROM order_system.{t} d
+                JOIN order_system.shop_configs sc ON sc.id=d.shop_id
+                WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE') {shop_cond}"""
+            for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"))
+        params_all = extra * 3
+        uo["total"] = int((q1(f"SELECT COUNT(*) AS n FROM ({union}) u",
+                              params_all or None) or {}).get("n") or 0)
+        uo["pages"] = max(1, (uo["total"] + UO_PER - 1) // UO_PER)
+        uo["page"] = min(uo_page, uo["pages"])
+        rows = qall(f"""SELECT * FROM ({union}) u
+                        ORDER BY FIELD(u.order_state,'WAITING_ACCEPTANCE','SHIPPING'),
+                                 u.created_date DESC
+                        LIMIT %s OFFSET %s""",
+                    params_all + [UO_PER, (uo["page"] - 1) * UO_PER])
+        uo["shops"] = [f"{r['platform']}-{r['shop_name']}" for r in qall(
+            """SELECT DISTINCT sc.platform, sc.shop_name FROM (
+                 SELECT shop_id FROM order_system.macy_order_data
+                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+                 UNION SELECT shop_id FROM order_system.lowes_order_data
+                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+                 UNION SELECT shop_id FROM order_system.bestbuy_order_data
+                  WHERE order_state IN ('SHIPPING','WAITING_ACCEPTANCE')
+               ) x JOIN order_system.shop_configs sc ON sc.id=x.shop_id
+               ORDER BY sc.platform, sc.shop_name""")]
+        if not rows:
+            return
+        # 富化只针对本页的SKU：产品图/供应商(缓存)、供应商库存(实时表)、本店30/90天出单
+        skus = list({r["offer_sku"] for r in rows if r["offer_sku"]})
+        ph = ",".join(["%s"] * len(skus))
+        wh_map = {r["shop_sku"]: r["warehouse_sku"] for r in qall(
+            f"""SELECT DISTINCT shop_sku, warehouse_sku
+                FROM order_system.offerprice_listing
+                WHERE shop_sku IN ({ph}) AND warehouse_sku IS NOT NULL
+                  AND warehouse_sku<>''""", skus)}
+        whs = list({w for w in wh_map.values()})
+        cache, stock = {}, {}
+        if whs:
+            wph = ",".join(["%s"] * len(whs))
+            for r in qall(f"""SELECT sku, MAX(supplier) AS supplier, MAX(image_url) AS img
+                              FROM order_system.safety_product_cache
+                              WHERE sku IN ({wph}) GROUP BY sku""", whs):
+                cache[r["sku"]] = r
+            for tbl in ("newestdropship", "newestdropship_vevor"):
+                try:
+                    for r in qall(f"SELECT SKU, Stock FROM autooperate.{tbl} "
+                                  f"WHERE SKU IN ({wph})", whs):
+                        stock.setdefault(r["SKU"], r["Stock"])
+                except Exception:
+                    pass
+        sales = {}
+        for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
+            for r in qall(f"""
+                SELECT sc.platform, sc.shop_name, d.offer_sku,
+                       COUNT(DISTINCT CASE WHEN d.created_date >=
+                             DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                             THEN d.order_id END) AS n30,
+                       COUNT(DISTINCT d.order_id) AS n90
+                FROM order_system.{t} d
+                JOIN order_system.shop_configs sc ON sc.id=d.shop_id
+                WHERE d.offer_sku IN ({ph}) AND d.order_state<>'CANCELED'
+                  AND d.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                GROUP BY sc.platform, sc.shop_name, d.offer_sku""", skus):
+                sales[(r["platform"], r["shop_name"], r["offer_sku"])] = (
+                    int(r["n30"] or 0), int(r["n90"] or 0))
+        for r in rows:
+            wh = wh_map.get(r["offer_sku"])
+            c = cache.get(wh) or {}
+            r["img"] = c.get("img")
+            r["supplier"] = c.get("supplier") or ""
+            r["stock"] = stock.get(wh)
+            r["n30"], r["n90"] = sales.get(
+                (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0))
+        uo["rows"] = rows
+
     try:
         for fn in (_todo_unfiled, _todo_near_writeoff, _todo_sentinel, _todo_issues,
-                   _todo_repricing, _unshipped, _returns_yesterday):
+                   _todo_repricing, _unshipped, _returns_yesterday, _unshipped_detail):
             _safe(fn)
     finally:
         conn.close()
 
     return render_template('index.html', todos=todos, unshipped=unshipped,
-                           returns_y=returns_y)
+                           returns_y=returns_y, uo=uo)
 
 
 @main_bp.route('/feishu-dashboard')
