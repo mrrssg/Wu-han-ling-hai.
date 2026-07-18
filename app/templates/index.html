@@ -173,9 +173,11 @@
       🔴未接单最急｜库存=供应商实时库存，0要小心发不出</span>
   </div>
   <style>
-    .uo-img { transition: transform .15s ease; transform-origin: left center; }
-    .uo-img:hover { transform: scale(4.2); position: relative; z-index: 40;
-                    box-shadow: 0 6px 24px rgba(0,0,0,.35); border-radius: 2px; }
+    .uo-img { cursor: zoom-in; }
+    #uo-preview { position: fixed; width: 420px; height: 420px; object-fit: contain;
+                  background: #fff; border: 1px solid #d5d9e0; border-radius: 8px;
+                  box-shadow: 0 10px 34px rgba(0,0,0,.35); z-index: 2000;
+                  display: none; pointer-events: none; }
   </style>
   <div class="table-responsive" style="max-height:640px;overflow-y:auto">
     <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
@@ -232,6 +234,32 @@
   </div>
   {% endif %}
 </div>
+
+<script>
+(function () {
+  const prev = document.createElement('img');
+  prev.id = 'uo-preview';
+  document.body.appendChild(prev);
+  function place(e) {
+    const W = 420, pad = 16;
+    let x = e.clientX + pad;
+    if (x + W > window.innerWidth - 8) x = e.clientX - W - pad;
+    let y = e.clientY - W / 2;
+    y = Math.max(8, Math.min(y, window.innerHeight - W - 8));
+    prev.style.left = x + 'px';
+    prev.style.top = y + 'px';
+  }
+  document.querySelectorAll('.uo-img').forEach(img => {
+    img.addEventListener('mouseenter', e => {
+      prev.src = img.src;
+      prev.style.display = 'block';
+      place(e);
+    });
+    img.addEventListener('mousemove', place);
+    img.addEventListener('mouseleave', () => { prev.style.display = 'none'; });
+  });
+})();
+</script>
 
 {% endblock %}
 
