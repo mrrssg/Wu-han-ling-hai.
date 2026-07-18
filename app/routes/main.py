@@ -244,6 +244,26 @@ def index():
                 WHERE d.order_state IN ('SHIPPING','WAITING_ACCEPTANCE')"""
             for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"))
         rows = qall(f"SELECT * FROM ({union}) u")
+        # HD订单（Teapplix同步，2026-07-18接入）：并入未发货明细。
+        # HD没有"未接单"概念统一算待发货；45天前的未发货老单是Teapplix侧僵尸，不展示
+        for h in qall("""
+                SELECT store_key, invoice, txn_id, line_number, payment_date,
+                       item_sku, item_desc, quantity, amount, warehouse_sku,
+                       buyer_name, phone
+                FROM order_system.hd_order_data
+                WHERE shipped=0
+                  AND payment_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)"""):
+            rows.append({
+                "platform": f"HD-{h['store_key']}", "shop_name": h["store_key"],
+                "order_id": h["invoice"] or h["txn_id"],
+                "order_line_id": str(h["line_number"]),
+                "created_date": h["payment_date"],
+                "offer_sku": h["item_sku"], "product_title": h["item_desc"],
+                "quantity": h["quantity"], "line_total_price": h["amount"],
+                "order_state": "SHIPPING",
+                "customer_email": "", "customer_phone": h["phone"],
+                "hd_wh": h["warehouse_sku"],
+            })
         uo["shops"] = sorted({f"{r['platform']}|{r['shop_name']}" for r in rows})
         uo["shops"] = [{"key": k, "label": k.split("|", 1)[0]} for k in uo["shops"]]
         if not rows:
@@ -256,7 +276,8 @@ def index():
                 FROM order_system.offerprice_listing
                 WHERE shop_sku IN ({ph}) AND warehouse_sku IS NOT NULL
                   AND warehouse_sku<>''""", skus)}
-        whs = list({w for w in wh_map.values()})
+        whs = list({w for w in wh_map.values()}
+                   | {r["hd_wh"] for r in rows if r.get("hd_wh")})
         cache, stock = {}, {}
         if whs:
             wph = ",".join(["%s"] * len(whs))
@@ -289,6 +310,23 @@ def index():
                 GROUP BY sc.platform, sc.shop_name, d.offer_sku""", skus):
                 sales[(r["platform"], r["shop_name"], r["offer_sku"])] = (
                     int(r["n30"] or 0), int(r["n90"] or 0), int(r["ret90"] or 0))
+        # HD的30/90天出单（退货数据未接，ret按0记、页面显示为—）
+        hd_skus = list({r["offer_sku"] for r in rows
+                        if str(r["platform"]).startswith("HD-") and r["offer_sku"]})
+        if hd_skus:
+            hph = ",".join(["%s"] * len(hd_skus))
+            for r in qall(f"""
+                SELECT store_key, item_sku,
+                       COUNT(DISTINCT CASE WHEN payment_date >=
+                             DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                             THEN txn_id END) AS n30,
+                       COUNT(DISTINCT txn_id) AS n90
+                FROM order_system.hd_order_data
+                WHERE item_sku IN ({hph})
+                  AND payment_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                GROUP BY store_key, item_sku""", hd_skus):
+                sales[(f"HD-{r['store_key']}", r["store_key"], r["item_sku"])] = (
+                    int(r["n30"] or 0), int(r["n90"] or 0), 0)
         # 待发单：未发货集合里该SKU压了几单（同款打包处理/爆款信号，用户2026-07-18定）
         pending_cnt = {}
         for r in rows:
@@ -316,14 +354,15 @@ def index():
                             AND risk_level IN ('high','mid')"""):
             (risk_emails if r_["id_type"] == "email" else risk_phones).add(r_["id_norm"])
         for r in rows:
-            wh = wh_map.get(r["offer_sku"])
+            wh = r.get("hd_wh") or wh_map.get(r["offer_sku"])
             c = cache.get(wh) or {}
             r["img"] = c.get("img")
             r["supplier"] = c.get("supplier") or ""
             r["stock"] = stock.get(wh)
             r["n30"], r["n90"], ret90 = sales.get(
                 (r["platform"], r["shop_name"], r["offer_sku"]), (0, 0, 0))
-            r["ret_rate"] = (ret90 / r["n90"]) if r["n90"] else None
+            r["ret_rate"] = (None if str(r["platform"]).startswith("HD-")
+                             else (ret90 / r["n90"]) if r["n90"] else None)
             r["n_pending"] = pending_cnt.get(
                 (r["platform"], r["shop_name"], r["offer_sku"]), 1)
             r["operator"] = _uo_operator(r["offer_sku"])
