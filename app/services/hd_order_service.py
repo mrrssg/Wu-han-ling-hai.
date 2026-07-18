@@ -14,6 +14,13 @@ from typing import Any, Dict, List
 
 from app.models.db_manager import DBManager
 
+# 只同步这两个HD店（用户2026-07-18定：只要TOP和DEL；BOS/无标识的不要）
+HD_ALLOWED_STORES = {"TOP", "DEL"}
+
+
+def _allowed(o: Dict) -> bool:
+    return (o.get("StoreKey") or "").strip().upper() in HD_ALLOWED_STORES
+
 
 def _fetch_page(params: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.teapplix_label_service import _get
@@ -91,11 +98,12 @@ ON DUPLICATE KEY UPDATE
 
 def sync_hd_orders(days: int = 3) -> Dict[str, Any]:
     """未发货全量 + 近days天已发货。tracking从打单记录表回填。"""
-    unshipped = _fetch_all({"Shipped": 0})
+    unshipped = [o for o in _fetch_all({"Shipped": 0}) if _allowed(o)]
     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     finish = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    shipped = _fetch_all({"Shipped": 1,
-                          "PaymentDateStart": start, "PaymentDateFinish": finish})
+    shipped = [o for o in _fetch_all({"Shipped": 1,
+                                      "PaymentDateStart": start,
+                                      "PaymentDateFinish": finish}) if _allowed(o)]
 
     rows: List[tuple] = []
     for o in unshipped:
@@ -139,9 +147,10 @@ def backfill_hd_orders(days: int = 120, step: int = 15) -> Dict[str, Any]:
     try:
         while cursor < end:
             w_end = min(cursor + timedelta(days=step), end)
-            orders = _fetch_all({"Shipped": 1,
-                                 "PaymentDateStart": cursor.strftime("%Y-%m-%d"),
-                                 "PaymentDateFinish": w_end.strftime("%Y-%m-%d")})
+            orders = [o for o in _fetch_all({
+                "Shipped": 1,
+                "PaymentDateStart": cursor.strftime("%Y-%m-%d"),
+                "PaymentDateFinish": w_end.strftime("%Y-%m-%d")}) if _allowed(o)]
             rows: List[tuple] = []
             for o in orders:
                 rows.extend(_rows_from_order(o, 1))
