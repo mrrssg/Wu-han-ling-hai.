@@ -215,6 +215,7 @@ def index():
     uo_op = (request.args.get("uo_op") or "").strip()
     uo_sup = (request.args.get("uo_sup") or "").strip()
     uo_sort = (request.args.get("uo_sort") or "").strip()
+    uo_q = (request.args.get("uo_q") or "").strip()
     try:
         uo_page = max(1, int(request.args.get("uo_page") or 1))
     except (TypeError, ValueError):
@@ -222,7 +223,7 @@ def index():
     UO_PER = 50
     uo = {"rows": [], "total": 0, "page": uo_page, "pages": 1,
           "shops": [], "shop": uo_shop, "per": UO_PER,
-          "op": uo_op, "sup": uo_sup, "sort": uo_sort, "amount": 0.0}
+          "op": uo_op, "sup": uo_sup, "sort": uo_sort, "q": uo_q, "amount": 0.0}
 
     _UO_OPS = {"刘梦蝶": ("MDLW", "MD"), "明瑞瑞": ("MRLW", "MR"), "朱以超": ("YCLW", "YC")}
 
@@ -414,6 +415,12 @@ def index():
             rows = [r for r in rows if r["operator"] == uo_op]
         if uo_sup:
             rows = [r for r in rows if r["supplier"] == uo_sup]
+        if uo_q:
+            q_ = uo_q.lower()
+            rows = [r for r in rows
+                    if q_ in str(r["order_id"] or "").lower()
+                    or q_ in str(r.get("order_id_sub") or "").lower()
+                    or q_ in str(r["offer_sku"] or "").lower()]
 
         # 排序（内存）
         def _f(v, d=0.0):

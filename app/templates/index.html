@@ -177,7 +177,10 @@
         <option value="n90_desc" {{ 'selected' if uo.sort == 'n90_desc' }}>90天单 多→少</option>
         <option value="ret_desc" {{ 'selected' if uo.sort == 'ret_desc' }}>退货率 高→低</option>
       </select>
-      {% if uo.shop or uo.op or uo.sup or uo.sort %}
+      <input name="uo_q" value="{{ uo.q }}" class="form-control form-control-sm" style="width:200px"
+             placeholder="搜订单号 / SKU（回车即搜）">
+      <button class="btn btn-sm btn-primary" type="submit">搜索</button>
+      {% if uo.shop or uo.op or uo.sup or uo.sort or uo.q %}
       <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.index') }}#unshipped-detail">✕ 清除</a>
       {% endif %}
     </form>
@@ -247,7 +250,8 @@
   <div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
     <span class="text-muted">共 {{ uo.total }} 单行 · 每页 {{ uo.per }}</span>
     {% set ukeep = {'uo_shop': uo.shop or None, 'uo_op': uo.op or None,
-                    'uo_sup': uo.sup or None, 'uo_sort': uo.sort or None} %}
+                    'uo_sup': uo.sup or None, 'uo_sort': uo.sort or None,
+                    'uo_q': uo.q or None} %}
     <div class="btn-group">
       <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if uo.page <= 1 }}"
          href="{{ url_for('main.index', uo_page=uo.page-1, **ukeep) }}#unshipped-detail">‹ 上一页</a>
