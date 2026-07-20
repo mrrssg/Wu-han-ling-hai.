@@ -469,7 +469,39 @@ class DBManager:
                 """
                 params = [regex_pattern] * 24
                 cursor.execute(query, params)
-                return cursor.fetchall()
+                results = cursor.fetchall() or []
+
+                # HD（Teapplix同步表 order_system.hd_order_data，2026-07-20并入全平台搜索）
+                hd_sql = """
+                    SELECT CONCAT('HD-', h.store_key) AS Source,
+                           CASE
+                               WHEN h.item_sku LIKE '%%VE-%%' THEN '司顺'
+                               WHEN h.item_sku LIKE '%%CO-%%' THEN '豪雅'
+                               ELSE ''
+                           END AS SupplierSource,
+                           h.txn_id AS OrderID,
+                           h.invoice AS CostwayOrder,
+                           COALESCE(NULLIF(h.warehouse_sku,''), m.warehouse_SKU, '') AS CostwaySKU,
+                           h.buyer_name AS FullName,
+                           h.item_sku AS SKU,
+                           h.quantity AS Qty,
+                           h.payment_date AS Date,
+                           CASE WHEN h.shipped=1 THEN 'Shipped' ELSE 'Unshipped' END AS Status,
+                           h.tracking_number AS Tracking
+                    FROM order_system.hd_order_data h
+                    LEFT JOIN autooperate.mapping_table m
+                      ON m.SKU COLLATE utf8mb4_unicode_ci = h.item_sku COLLATE utf8mb4_unicode_ci
+                    WHERE h.buyer_name REGEXP %s
+                       OR h.txn_id REGEXP %s
+                       OR h.invoice REGEXP %s
+                       OR h.item_sku REGEXP %s
+                       OR h.warehouse_sku REGEXP %s
+                       OR h.phone REGEXP %s
+                    LIMIT 200
+                """
+                cursor.execute(hd_sql, [regex_pattern] * 6)
+                results.extend(cursor.fetchall() or [])
+                return results
         finally:
             conn.close()
 
