@@ -369,6 +369,9 @@ def index():
             p_ = _digits(b["phone"])
             if p_:
                 bl_phones.add(p_)
+        # 已改址标记（客户改址覆盖表）
+        ov_ids = {str(r_["order_number"]) for r_ in qall(
+            "SELECT order_number FROM order_system.order_address_override")}
         risk_emails, risk_phones = set(), set()
         for r_ in qall("""SELECT id_type, id_norm FROM order_system.customer_risk_profile
                           WHERE id_type IN ('email','phone')
@@ -395,6 +398,7 @@ def index():
                 "black" if (em and em in bl_emails) or (pn and pn in bl_phones)
                 else "risk" if (em and em in risk_emails) or (pn and pn in risk_phones)
                 else None)
+            r["addr_edited"] = str(r["order_id"]) in ov_ids
 
         # 无货压单统计（全量、不受筛选影响）→ 首页红条
         def _f2(v):

@@ -212,6 +212,12 @@
           <td class="small">{{ r.platform }}</td>
           <td class="small">{{ r.operator }}</td>
           <td class="font-monospace small">{{ r.order_id }}
+            {% if not r.platform.startswith('HD-') %}
+            <a href="javascript:void(0)" onclick="editAddr('{{ r.order_id }}')"
+               title="编辑收货地址（客户改址后导出发货单自动用新地址）" style="text-decoration:none">✏️</a>
+            {% endif %}
+            {% if r.addr_edited %}<div><span class="badge text-bg-info"
+              title="已手动改址，供应商发货单将使用新地址">📍已改址</span></div>{% endif %}
             {% if r.order_id_sub %}<div class="text-muted" style="font-size:.68rem">HD单号 {{ r.order_id_sub }}</div>{% endif %}
             {% if r.buyer_flag == 'black' %}
             <div><span class="badge text-bg-dark" title="买家在黑名单里，发货前建议复核">⛔ 黑名单买家</span></div>
@@ -312,6 +318,78 @@
   </div>
 </div>
 
+{# ---------- 改址弹窗 ---------- #}
+<div class="modal fade" id="addr-modal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header py-2">
+      <h6 class="modal-title">✏️ 编辑收货地址 <span id="addr-oid" class="font-monospace small text-muted"></span></h6>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body py-2" style="font-size:.85rem">
+      <div class="text-muted mb-2" style="font-size:.75rem" id="addr-current">读取原地址中…</div>
+      <div class="row g-2">
+        <div class="col-6"><label class="form-label mb-0 small">名 First name</label>
+          <input id="af-first_name" class="form-control form-control-sm"></div>
+        <div class="col-6"><label class="form-label mb-0 small">姓 Last name</label>
+          <input id="af-last_name" class="form-control form-control-sm"></div>
+        <div class="col-12"><label class="form-label mb-0 small">街道（含门牌/公寓号）</label>
+          <input id="af-street" class="form-control form-control-sm"></div>
+        <div class="col-5"><label class="form-label mb-0 small">城市</label>
+          <input id="af-city" class="form-control form-control-sm"></div>
+        <div class="col-3"><label class="form-label mb-0 small">州</label>
+          <input id="af-region" class="form-control form-control-sm"></div>
+        <div class="col-4"><label class="form-label mb-0 small">邮编</label>
+          <input id="af-postcode" class="form-control form-control-sm"></div>
+        <div class="col-6"><label class="form-label mb-0 small">电话</label>
+          <input id="af-phone" class="form-control form-control-sm"></div>
+        <div class="col-6"><label class="form-label mb-0 small">备注（为什么改）</label>
+          <input id="af-note" class="form-control form-control-sm" placeholder="如：客户邮件要求改址"></div>
+      </div>
+      <div class="text-muted mt-2" style="font-size:.72rem">
+        保存后：豪雅/司顺/大建"未发货订单"导出自动用这里的地址（非空字段才覆盖）；黑名单筛查同样按新地址。</div>
+    </div>
+    <div class="modal-footer py-2">
+      <button class="btn btn-sm btn-outline-danger me-auto" onclick="resetAddr()">恢复原地址</button>
+      <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">取消</button>
+      <button class="btn btn-sm btn-primary" onclick="saveAddr()">保存</button>
+    </div>
+  </div></div>
+</div>
+<script>
+let _addrOid = null;
+const AF = ['first_name','last_name','street','city','region','postcode','phone','note'];
+async function editAddr(oid) {
+  _addrOid = oid;
+  document.getElementById('addr-oid').textContent = oid;
+  AF.forEach(k => document.getElementById('af-' + k).value = '');
+  document.getElementById('addr-current').textContent = '读取原地址中…';
+  new bootstrap.Modal(document.getElementById('addr-modal')).show();
+  const r = await fetch('/orders/address-override/' + encodeURIComponent(oid));
+  const d = await r.json();
+  const cur = d.current || {};
+  document.getElementById('addr-current').textContent = 'Mirakl原地址：' +
+    [cur.first_name, cur.last_name, cur.street, cur.city, cur.region, cur.postcode, cur.phone]
+      .filter(Boolean).join(' / ') || '（没读到）';
+  const src = d.override || cur;
+  AF.forEach(k => { if (src[k]) document.getElementById('af-' + k).value = src[k]; });
+  if (d.override && d.override.note) document.getElementById('af-note').value = d.override.note;
+}
+async function saveAddr() {
+  const body = {};
+  AF.forEach(k => body[k] = document.getElementById('af-' + k).value.trim());
+  const r = await fetch('/orders/address-override/' + encodeURIComponent(_addrOid),
+    {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  alert(d.msg || (d.success ? '已保存' : '失败'));
+  if (d.success) location.reload();
+}
+async function resetAddr() {
+  if (!confirm('恢复Mirakl原地址？（删除手动覆盖）')) return;
+  const r = await fetch('/orders/address-override/' + encodeURIComponent(_addrOid), {method: 'DELETE'});
+  const d = await r.json();
+  alert(d.msg || '完成');
+  if (d.success) location.reload();
+}
+</script>
 <script>
 (function () {
   const prev = document.createElement('img');

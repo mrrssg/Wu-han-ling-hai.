@@ -1559,7 +1559,36 @@ class DBManager:
         finally:
             conn.close()
 
-        return list(walmart_data) + list(macy_data) + list(bestbuy_data) + list(lowes_data)
+        combined = (list(walmart_data) + list(macy_data)
+                    + list(bestbuy_data) + list(lowes_data))
+        # 客户改址覆盖（2026-07-20用户拍板）：首页"改址"编辑存的地址在这里替换原地址。
+        # 豪雅/司顺/大建未发货导出、黑名单筛查全部经过本函数——一处替换处处生效。
+        try:
+            onums = list({str(o.get("order_number") or "") for o in combined if o.get("order_number")})
+            if onums:
+                conn2 = DBManager.get_connection()
+                try:
+                    with conn2.cursor() as cur2:
+                        ph = ",".join(["%s"] * len(onums))
+                        cur2.execute(
+                            f"""SELECT * FROM order_system.order_address_override
+                                WHERE order_number IN ({ph})""", onums)
+                        ov = {str(r["order_number"]): r for r in cur2.fetchall() or []}
+                finally:
+                    conn2.close()
+                if ov:
+                    for o in combined:
+                        d = ov.get(str(o.get("order_number") or ""))
+                        if not d:
+                            continue
+                        for k in ("first_name", "last_name", "phone", "street",
+                                  "city", "region", "postcode"):
+                            if d.get(k):
+                                o[k] = d[k]
+                        o["_addr_overridden"] = 1
+        except Exception:
+            pass   # 覆盖表异常不阻断导出（用原地址）
+        return combined
 
     @staticmethod
     def fetch_unshipped_orders_for_manual():

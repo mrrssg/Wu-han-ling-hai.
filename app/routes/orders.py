@@ -101,6 +101,68 @@ def import_orders():
     return render_template('order/import.html')
 
 
+@orders_bp.route('/address-override/<path:order_id>', methods=['GET', 'POST', 'DELETE'])
+def address_override(order_id):
+    """客户改址（2026-07-20）：GET=读原地址+已有覆盖预填；POST=保存覆盖；DELETE=恢复原地址。
+    覆盖在 DBManager.fetch_unshipped_orders 里统一生效（豪雅/司顺/大建导出+黑名单筛查）。"""
+    conn = DBManager.get_connection()
+    try:
+        if request.method == 'GET':
+            current = None
+            with conn.cursor() as cur:
+                for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
+                    cur.execute(f"""
+                        SELECT
+                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
+                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.firstname')) END AS first_name,
+                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
+                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.lastname')) END AS last_name,
+                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
+                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.phone')) END AS phone,
+                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
+                            CONCAT_WS(', ',
+                              NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.street_1')),''),
+                              NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.street_2')),'')) END AS street,
+                          shipping_city AS city, shipping_state AS region, shipping_zip AS postcode
+                        FROM order_system.{t} WHERE order_id=%s LIMIT 1""", (order_id,))
+                    row = cur.fetchone()
+                    if row:
+                        current = row
+                        break
+                cur.execute("""SELECT * FROM order_system.order_address_override
+                               WHERE order_number=%s""", (order_id,))
+                ov = cur.fetchone()
+            return jsonify({"success": True, "current": current, "override": ov})
+
+        if request.method == 'DELETE':
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM order_system.order_address_override "
+                            "WHERE order_number=%s", (order_id,))
+            conn.commit()
+            return jsonify({"success": True, "msg": "已恢复原地址"})
+
+        d = request.get_json(silent=True) or {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO order_system.order_address_override
+                    (order_number, first_name, last_name, phone, street,
+                     city, region, postcode, note)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    first_name=VALUES(first_name), last_name=VALUES(last_name),
+                    phone=VALUES(phone), street=VALUES(street), city=VALUES(city),
+                    region=VALUES(region), postcode=VALUES(postcode), note=VALUES(note)""",
+                (order_id,
+                 (d.get("first_name") or "")[:80], (d.get("last_name") or "")[:80],
+                 (d.get("phone") or "")[:40], (d.get("street") or "")[:255],
+                 (d.get("city") or "")[:80], (d.get("region") or "")[:40],
+                 (d.get("postcode") or "")[:16], (d.get("note") or "")[:255]))
+        conn.commit()
+        return jsonify({"success": True, "msg": "已保存——之后导出的供应商发货单自动用新地址"})
+    finally:
+        conn.close()
+
+
 @orders_bp.route('/search', methods=['GET', 'POST'])
 def search_orders():
     results = []
