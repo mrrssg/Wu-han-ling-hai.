@@ -264,8 +264,12 @@ def index():
                 "customer_email": "", "customer_phone": h["phone"],
                 "hd_wh": h["warehouse_sku"],
             })
-        uo["shops"] = sorted({f"{r['platform']}|{r['shop_name']}" for r in rows})
-        uo["shops"] = [{"key": k, "label": k.split("|", 1)[0]} for k in uo["shops"]]
+        _sc = {}
+        for r in rows:
+            k = f"{r['platform']}|{r['shop_name']}"
+            _sc[k] = _sc.get(k, 0) + 1
+        uo["shops"] = [{"key": k, "label": k.split("|", 1)[0], "n": _sc[k]}
+                       for k in sorted(_sc)]
         if not rows:
             return
         # 全量富化（未发货SKU数很少）：产品图/供应商(缓存)、供应商库存、本店30/90天出单
