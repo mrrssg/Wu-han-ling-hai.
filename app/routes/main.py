@@ -178,6 +178,14 @@ def index():
                 a["shipping"] = int(r["n"] or 0)
             else:
                 a["waiting"] = int(r["n"] or 0)
+        # HD（Teapplix同步表，只有"待发货"没有"未接单"概念）
+        for r in qall("""SELECT store_key, COUNT(*) AS n
+                         FROM order_system.hd_order_data
+                         WHERE shipped=0
+                           AND payment_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)
+                         GROUP BY store_key"""):
+            agg[f"HD-{r['store_key']}"] = {"label": f"HD-{r['store_key']}",
+                                           "shipping": int(r["n"] or 0), "waiting": 0}
         unshipped.extend(sorted(agg.values(), key=lambda x: -(x["shipping"] + x["waiting"])))
 
     def _todo_supplier_stale():
@@ -280,6 +288,13 @@ def index():
                 FROM order_system.offerprice_listing
                 WHERE shop_sku IN ({ph}) AND warehouse_sku IS NOT NULL
                   AND warehouse_sku<>''""", skus)}
+        # offer表没有的（HD的item_sku就是店铺SKU）→ 映射表兜底
+        missing = [s for s in skus if s not in wh_map]
+        if missing:
+            mph = ",".join(["%s"] * len(missing))
+            for r in qall(f"""SELECT SKU, warehouse_SKU FROM autooperate.mapping_table
+                              WHERE SKU IN ({mph})""", missing):
+                wh_map.setdefault(r["SKU"], r["warehouse_SKU"])
         whs = list({w for w in wh_map.values()}
                    | {r["hd_wh"] for r in rows if r.get("hd_wh")})
         cache, stock = {}, {}
