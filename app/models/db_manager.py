@@ -501,6 +501,47 @@ class DBManager:
                 """
                 cursor.execute(hd_sql, [regex_pattern] * 6)
                 results.extend(cursor.fetchall() or [])
+
+                # Mirakl同步表（macy/lowes/bestbuy_order_data，API每30分钟全量单，
+                # 2026-07-20并入搜索）。与老导入表重复的订单号不重复列
+                mirakl_union = " UNION ALL ".join(f"""
+                    SELECT sc.platform AS Source,
+                           CASE
+                               WHEN t1.SKU IS NOT NULL THEN '豪雅'
+                               WHEN t2.SKU IS NOT NULL THEN '司顺'
+                               ELSE ''
+                           END AS SupplierSource,
+                           d.order_id AS OrderID,
+                           d.commercial_id AS CostwayOrder,
+                           COALESCE(m.warehouse_SKU, '') AS CostwaySKU,
+                           '' AS FullName,
+                           d.offer_sku AS SKU,
+                           d.quantity AS Qty,
+                           d.created_date AS Date,
+                           d.order_state AS Status,
+                           d.shipping_tracking AS Tracking
+                    FROM order_system.{t} d
+                    JOIN order_system.shop_configs sc ON sc.id = d.shop_id
+                    LEFT JOIN autooperate.mapping_table m
+                      ON m.SKU COLLATE utf8mb4_unicode_ci = d.offer_sku COLLATE utf8mb4_unicode_ci
+                    LEFT JOIN autooperate.newestdropship t1
+                      ON t1.SKU COLLATE utf8mb4_unicode_ci = m.warehouse_SKU COLLATE utf8mb4_unicode_ci
+                    LEFT JOIN autooperate.newestdropship_vevor t2
+                      ON t2.SKU COLLATE utf8mb4_unicode_ci = m.warehouse_SKU COLLATE utf8mb4_unicode_ci
+                    WHERE d.order_id REGEXP %s
+                       OR d.commercial_id REGEXP %s
+                       OR d.offer_sku REGEXP %s
+                       OR d.customer_email REGEXP %s
+                       OR d.shipping_tracking REGEXP %s
+                       OR d.product_title REGEXP %s"""
+                    for t in ("macy_order_data", "lowes_order_data",
+                              "bestbuy_order_data"))
+                cursor.execute(f"SELECT * FROM ({mirakl_union}) u LIMIT 200",
+                               [regex_pattern] * 18)
+                seen = {str(r.get("OrderID") or "") for r in results}
+                for r in (cursor.fetchall() or []):
+                    if str(r.get("OrderID") or "") not in seen:
+                        results.append(r)
                 return results
         finally:
             conn.close()
