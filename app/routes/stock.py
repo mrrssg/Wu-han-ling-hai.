@@ -1,4 +1,5 @@
 import os
+import threading
 from flask import Blueprint, render_template, request, flash, redirect, url_for, send_file, current_app
 from werkzeug.utils import secure_filename
 from app.models.db_manager import DBManager
@@ -6,6 +7,11 @@ from app.services.stock_service import StockService
 
 
 stock_bp = Blueprint('stock', __name__)
+
+# 供应商/HD 库存同步是分钟级重活——必须后台跑，否则占死gunicorn worker导致全站打不开
+# （2026-07-20事故：用户反复点"同步供应商"，2个worker全被占满，站点瘫痪）。
+_SYNC_STATE = {"suppliers": False, "hd": False}
+_SYNC_LOCK = threading.Lock()
 
 
 @stock_bp.route('/', methods=['GET', 'POST'])
@@ -69,15 +75,26 @@ def index():
 
 @stock_bp.route('/sync-suppliers', methods=['POST'])
 def sync_suppliers():
-    try:
-        success, message = StockService.sync_all_suppliers()
-        if success:
-            flash(f'Sync success: {message}', 'success')
-        else:
-            flash(f'Sync partial or failed: {message}', 'warning')
-    except Exception as e:
-        flash(f'System error: {str(e)}', 'danger')
+    with _SYNC_LOCK:
+        if _SYNC_STATE["suppliers"]:
+            flash('供应商库存正在后台同步中，请稍候，不要重复点击。', 'warning')
+            return redirect(url_for('stock.index'))
+        _SYNC_STATE["suppliers"] = True
 
+    app_obj = current_app._get_current_object()
+
+    def _bg():
+        try:
+            with app_obj.app_context():
+                ok, msg = StockService.sync_all_suppliers()
+                print(f"[stock.sync_suppliers] done: ok={ok} {msg}")
+        except Exception as exc:
+            print(f"[stock.sync_suppliers] failed: {exc}")
+        finally:
+            _SYNC_STATE["suppliers"] = False
+
+    threading.Thread(target=_bg, daemon=True).start()
+    flash('供应商库存同步已在后台开始（约几分钟），完成后自动回填，无需等待本页。', 'success')
     return redirect(url_for('stock.index'))
 
 
