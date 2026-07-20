@@ -110,20 +110,28 @@ def address_override(order_id):
         if request.method == 'GET':
             current = None
             with conn.cursor() as cur:
+                # Macy的shipping_city/state/zip列是空的(Lowes才有列值)——列和raw_json互为兜底；
+                # 电话Macy的shipping_address没有,再试billing_address
+                def _j(path):
+                    return ("CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN "
+                            f"NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_json,'{path}')),'null') END")
                 for t in ("macy_order_data", "lowes_order_data", "bestbuy_order_data"):
                     cur.execute(f"""
                         SELECT
-                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
-                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.firstname')) END AS first_name,
-                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
-                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.lastname')) END AS last_name,
-                          CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
-                            JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.phone')) END AS phone,
+                          {_j('$.customer.shipping_address.firstname')} AS first_name,
+                          {_j('$.customer.shipping_address.lastname')} AS last_name,
+                          COALESCE({_j('$.customer.shipping_address.phone')},
+                                   {_j('$.customer.billing_address.phone')}) AS phone,
                           CASE WHEN raw_json IS NOT NULL AND JSON_VALID(raw_json) THEN
                             CONCAT_WS(', ',
                               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.street_1')),''),
                               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.customer.shipping_address.street_2')),'')) END AS street,
-                          shipping_city AS city, shipping_state AS region, shipping_zip AS postcode
+                          COALESCE(NULLIF(shipping_city,''),
+                                   {_j('$.customer.shipping_address.city')}) AS city,
+                          COALESCE(NULLIF(shipping_state,''),
+                                   {_j('$.customer.shipping_address.state')}) AS region,
+                          COALESCE(NULLIF(shipping_zip,''),
+                                   {_j('$.customer.shipping_address.zip_code')}) AS postcode
                         FROM order_system.{t} WHERE order_id=%s LIMIT 1""", (order_id,))
                     row = cur.fetchone()
                     if row:
