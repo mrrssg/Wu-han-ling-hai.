@@ -263,7 +263,8 @@ def index():
                   AND payment_date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)"""):
             rows.append({
                 "platform": f"HD-{h['store_key']}", "shop_name": h["store_key"],
-                "order_id": h["invoice"] or h["txn_id"],
+                "order_id": h["txn_id"],            # 和打单页(HD Vevor发货)同口径
+                "order_id_sub": h["invoice"],       # HD后台Invoice，小字附注
                 "order_line_id": str(h["line_number"]),
                 "created_date": h["payment_date"],
                 "offer_sku": h["item_sku"], "product_title": h["item_desc"],

@@ -209,6 +209,7 @@
           <td class="small">{{ r.platform }}</td>
           <td class="small">{{ r.operator }}</td>
           <td class="font-monospace small">{{ r.order_id }}
+            {% if r.order_id_sub %}<div class="text-muted" style="font-size:.68rem">HD单号 {{ r.order_id_sub }}</div>{% endif %}
             {% if r.buyer_flag == 'black' %}
             <div><span class="badge text-bg-dark" title="买家在黑名单里，发货前建议复核">⛔ 黑名单买家</span></div>
             {% elif r.buyer_flag == 'risk' %}
