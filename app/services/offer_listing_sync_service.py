@@ -901,11 +901,24 @@ def run_offer_listing_sync(
     _save_cursor(store_key, new_cursor_value, tracking_id, len(offers),
                  "completed", new_count=upsert_stats["new_count"])
 
+    new_skus = upsert_stats.get("new_skus") or []
+
+    # 新offer自动补SKU映射（2026-07-21）：新shop_sku不在mapping_table的，
+    # 从该店飞书*-Mirakl表按店铺SKU精确匹配补供应商SKU+运营。五道校验防错,查不到就跳过。
+    mapping_backfill = None
+    if new_skus:
+        try:
+            from app.services.mapping_backfill_service import backfill_mapping_for_new_skus
+            mapping_backfill = backfill_mapping_for_new_skus(store_key, new_skus)
+            print(f"[OF52][{store_key}] mapping backfill: {mapping_backfill}")
+        except Exception as exc:
+            print(f"[OF52][{store_key}] mapping backfill aborted: {exc}")
+            mapping_backfill = {"error": str(exc)[:200]}
+
     # OF52 never returns category, so newly inserted SKUs land with NULL.
     # Catch them now via OF21 (one call per SKU, ~2s each, no Mirakl rate cap).
     # Steady-state this is a handful of calls/day per store.
     category_backfill = None
-    new_skus = upsert_stats.get("new_skus") or []
     if new_skus:
         print(f"[OF52][{store_key}] backfilling category for {len(new_skus)} new SKUs via OF21 ...")
         try:
@@ -932,4 +945,5 @@ def run_offer_listing_sync(
         "cursor_was": cursor_val or "(none, full mode)",
         "cursor_advanced_to": new_cursor_value,
         "category_backfill": category_backfill,
+        "mapping_backfill": mapping_backfill,
     }
