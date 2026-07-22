@@ -89,7 +89,8 @@ def _load_pricing_configs(store_key: str) -> Dict[str, Dict]:
         with conn.cursor() as cursor:
             cursor.execute(
                 """SELECT warehouse_sku, supplier, discount_factor, commission_rate,
-                          return_shipping_base, length_in, width_in, height_in, weight_lb
+                          return_shipping_base, length_in, width_in, height_in, weight_lb,
+                          cost_buffer
                      FROM order_system.offer_pricing_config
                     WHERE store_key=%s""",
                 (store_key,),
@@ -200,22 +201,26 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
     if supplier not in ("Costway", "Vevor"):
         return {"status": "alert_unsupported_supplier", "alert_type": "unsupported_supplier"}
 
+    _is_vevor = formula_variant == "lowes_vevor"   # Yasonic无退货运费/尺寸依赖
     rb = cfg.get("return_shipping_base")
-    if rb is None:
+    if rb is None and not _is_vevor:
         return {"status": "alert_no_return_shipping", "alert_type": "return_shipping_missing"}
-    rb = float(rb)
+    rb = float(rb or 0)
 
     L = cfg.get("length_in"); W = cfg.get("width_in")
     H = cfg.get("height_in"); wt = cfg.get("weight_lb")
-    if None in (L, W, H, wt) or any(float(v) == 0 for v in (L, W, H)):
+    if not _is_vevor and (None in (L, W, H, wt) or any(float(v) == 0 for v in (L, W, H))):
         return {"status": "alert_no_dim", "alert_type": "dim_missing"}
+    L, W, H, wt = float(L or 0), float(W or 0), float(H or 0), float(wt or 0)
 
     sp_info = sp_lookup.get((supplier, warehouse_sku))
     if not sp_info:
         return {"status": "alert_no_supplier_price", "alert_type": "cost_missing"}
     supplier_price, supplier_updated = sp_info
 
-    new_cost = cost_from_supplier_price(supplier_price, supplier)
+    cost_buffer = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
+    new_cost = ((supplier_price * 0.8 * 1.07) if _is_vevor
+                else cost_from_supplier_price(supplier_price, supplier))
     # Store-level override (e.g. macy_kuyotq fixed at 0.4) wins over Feishu
     # per-SKU value to neutralise stale/dirty Feishu data.
     if discount_factor_override is not None:
@@ -237,10 +242,11 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
         supplier_price=supplier_price,
         return_shipping_base=rb,
         discount_factor=df,
-        length_in=float(L), width_in=float(W),
-        height_in=float(H), weight_lb=float(wt),
+        length_in=L, width_in=W,
+        height_in=H, weight_lb=wt,
         formula_variant=formula_variant,
         divisor_override=divisor_override,
+        cost_buffer=cost_buffer,
     )
     target_origin = round(float(bd.origin_price), 2)
     target_discount = round(float(bd.discount_price), 2)

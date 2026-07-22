@@ -749,9 +749,10 @@ def push_one(shop_sku):
         if not ctx.warehouse_sku:
             return jsonify({"success": False, "msg": "no warehouse_sku mapping"}), 400
 
+        _is_vevor = formula_variant == "lowes_vevor"   # Yasonic无退货运费/尺寸依赖
         configs = fetch_pricing_configs(store_key)
         cfg = configs.get(ctx.warehouse_sku)
-        if not cfg or cfg.get("return_shipping_base") is None:
+        if not cfg or (not _is_vevor and cfg.get("return_shipping_base") is None):
             return jsonify({"success": False, "msg": "missing Feishu config or return_shipping_base"}), 400
 
         supplier = cfg["supplier"]
@@ -759,9 +760,10 @@ def push_one(shop_sku):
         if sp is None:
             return jsonify({"success": False, "msg": "no supplier price"}), 400
 
-        L = float(cfg["length_in"]); W = float(cfg["width_in"])
-        H = float(cfg["height_in"]); wt = float(cfg["weight_lb"])
-        rb = float(cfg["return_shipping_base"])
+        L = float(cfg.get("length_in") or 0); W = float(cfg.get("width_in") or 0)
+        H = float(cfg.get("height_in") or 0); wt = float(cfg.get("weight_lb") or 0)
+        rb = float(cfg.get("return_shipping_base") or 0)
+        cost_buffer = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
         df_override = scfg.get("discount_factor_override")
         if df_override is not None:
             df = float(df_override)
@@ -771,16 +773,17 @@ def push_one(shop_sku):
             return jsonify({"success": False, "msg": "missing discount_factor"}), 400
         cr = float(cfg["commission_rate"]) if cfg.get("commission_rate") is not None else 0.0
 
-        cost = cost_from_supplier_price(sp, supplier)
+        cost = (sp * 0.8 * 1.07) if _is_vevor else cost_from_supplier_price(sp, supplier)
         margin = realised_margin(
             current_origin_price=ctx.db_origin_price,
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df, commission_rate=cr,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant, cost_buffer=cost_buffer,
         )
-        # 分档定价：SKU在方案里有目标毛利的按档位算（lowes语义）+单步限幅
+        # 分档定价：SKU在方案里有目标毛利的按档位算
         tier_margin = None
-        if formula_variant == "lowes":
+        if formula_variant in ("lowes", "lowes_vevor"):
             trow = _query(
                 """SELECT target_margin FROM order_system.pricing_tier
                    WHERE store_key=%s AND shop_sku=%s AND target_margin IS NOT NULL
@@ -791,18 +794,20 @@ def push_one(shop_sku):
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
-            formula_variant=formula_variant,
+            formula_variant=formula_variant, cost_buffer=cost_buffer,
             divisor_override=(1.0 - cr - tier_margin) if tier_margin else None,
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
         # 2026-07-16定案：推价无限幅，纯公式价；推送前跑校验（只拦不改）
-        if formula_variant == "lowes":
+        if formula_variant in ("lowes", "lowes_vevor"):
             from app.services.push_price_guard import validate_push_price
-            divisor_used = (1.0 - cr - tier_margin) if tier_margin else 0.73
+            divisor_used = (1.0 - cr - tier_margin) if tier_margin else (1.0 - cr - 0.12)
+            # Yasonic：校验器按"定价成本(含buffer)"反算才对得上名义档；真实成本会让毛利虚高误拦
+            guard_cost = (sp * 0.8 * 1.07 * (cost_buffer or 1.0)) if _is_vevor else cost
             errs = validate_push_price(
                 target_origin=target, target_discount=target_discount,
-                cost=cost, return_cost_estimate=float(bd.return_cost_estimate),
+                cost=guard_cost, return_cost_estimate=float(bd.return_cost_estimate),
                 commission_rate=cr, discount_factor=df,
                 nominal_margin=(1.0 - cr - divisor_used),
                 supplier_updated_at=sp_upd,
@@ -1088,8 +1093,9 @@ def push_batch():
         if not ctx.warehouse_sku:
             rejections.append((sku, "no_warehouse_sku"))
             continue
+        _is_vevor = formula_variant == "lowes_vevor"   # Yasonic无退货运费/尺寸依赖
         cfg = configs.get(ctx.warehouse_sku)
-        if not cfg or cfg.get("return_shipping_base") is None:
+        if not cfg or (not _is_vevor and cfg.get("return_shipping_base") is None):
             rejections.append((sku, "missing_feishu_config"))
             continue
         supplier = cfg["supplier"]
@@ -1101,9 +1107,10 @@ def push_batch():
             rejections.append((sku, "no_supplier_price"))
             continue
         try:
-            L = float(cfg["length_in"]); W = float(cfg["width_in"])
-            H = float(cfg["height_in"]); wt = float(cfg["weight_lb"])
-            rb = float(cfg["return_shipping_base"])
+            L = float(cfg.get("length_in") or 0); W = float(cfg.get("width_in") or 0)
+            H = float(cfg.get("height_in") or 0); wt = float(cfg.get("weight_lb") or 0)
+            rb = float(cfg.get("return_shipping_base") or 0)
+            cost_buffer = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
             df_override = scfg.get("discount_factor_override")
             if df_override is not None:
                 df = float(df_override)
@@ -1117,30 +1124,32 @@ def push_batch():
             rejections.append((sku, "bad_numeric_cfg"))
             continue
 
-        cost = cost_from_supplier_price(sp, supplier)
+        cost = (sp * 0.8 * 1.07) if _is_vevor else cost_from_supplier_price(sp, supplier)
         margin = realised_margin(
             current_origin_price=ctx.db_origin_price,
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df, commission_rate=cr,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant, cost_buffer=cost_buffer,
         )
         tier_margin = tier_targets.get(sku)
         bd = calculate_breakdown(
             supplier=supplier, supplier_price=sp,
             return_shipping_base=rb, discount_factor=df,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
-            formula_variant=formula_variant,
+            formula_variant=formula_variant, cost_buffer=cost_buffer,
             divisor_override=(1.0 - cr - tier_margin) if tier_margin else None,
         )
         target = round(float(bd.origin_price), 2)
         target_discount = round(float(bd.discount_price), 2)
         # 2026-07-16定案：推价无限幅，纯公式价；推送前跑校验（只拦不改）
-        if formula_variant == "lowes":
+        if formula_variant in ("lowes", "lowes_vevor"):
             from app.services.push_price_guard import validate_push_price
-            divisor_used = (1.0 - cr - tier_margin) if tier_margin else 0.73
+            divisor_used = (1.0 - cr - tier_margin) if tier_margin else (1.0 - cr - 0.12)
+            guard_cost = (sp * 0.8 * 1.07 * (cost_buffer or 1.0)) if _is_vevor else cost
             errs = validate_push_price(
                 target_origin=target, target_discount=target_discount,
-                cost=cost, return_cost_estimate=float(bd.return_cost_estimate),
+                cost=guard_cost, return_cost_estimate=float(bd.return_cost_estimate),
                 commission_rate=cr, discount_factor=df,
                 nominal_margin=(1.0 - cr - divisor_used),
                 supplier_updated_at=sp_upd,

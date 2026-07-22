@@ -173,7 +173,8 @@ def fetch_pricing_configs(store_key: str = "macy_kuyotq") -> Dict[str, Dict]:
         with conn.cursor() as cursor:
             cursor.execute(
                 """SELECT warehouse_sku, supplier, discount_factor, commission_rate,
-                          return_shipping_base, length_in, width_in, height_in, weight_lb
+                          return_shipping_base, length_in, width_in, height_in, weight_lb,
+                          cost_buffer
                      FROM order_system.offer_pricing_config
                     WHERE store_key=%s""",
                 (store_key,),
@@ -597,10 +598,17 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             else _to_float(cfg.get("discount_factor"))
         )
         commission_rate = _to_float(cfg.get("commission_rate"))
+        cost_buffer = _to_float(cfg.get("cost_buffer"))
         L = _to_float(cfg.get("length_in"))
         W = _to_float(cfg.get("width_in"))
         H = _to_float(cfg.get("height_in"))
         wt = _to_float(cfg.get("weight_lb"))
+        # lowes_vevor(Yasonic)无退货运费项、不依赖尺寸——跳过 return_base/dim 门槛
+        _is_vevor = formula_variant == "lowes_vevor"
+        if _is_vevor:
+            return_base = return_base if return_base is not None else 0.0
+            if None in (L, W, H, wt):
+                L, W, H, wt = (L or 0), (W or 0), (H or 0), (wt or 0)
 
         if return_base is None:
             _save_alert(ctx.shop_sku, store_key, "return_shipping_missing",
@@ -640,7 +648,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             summary["alert_no_cost"] += 1
             continue
 
-        if None in (L, W, H, wt) or any(v == 0 for v in (L, W, H)):
+        if not _is_vevor and (None in (L, W, H, wt) or any(v == 0 for v in (L, W, H))):
             _save_alert(ctx.shop_sku, store_key, "dim_missing",
                         f"L/W/H/wt missing or zero: {L},{W},{H},{wt}")
             _log(store_key, run_id, "auto_monitor", ctx, {
@@ -695,6 +703,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             discount_factor=discount_factor,
             commission_rate=commission_rate,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
+            formula_variant=formula_variant, cost_buffer=cost_buffer,
         )
 
         common_log = {
@@ -767,6 +776,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             discount_factor=discount_factor,
             length_in=L, width_in=W, height_in=H, weight_lb=wt,
             formula_variant=formula_variant,
+            cost_buffer=cost_buffer,
             divisor_override=divisor_override,
         )
         target_origin = round(bd.origin_price, 2)

@@ -94,7 +94,7 @@ REPRICING_STORES: Dict[str, Dict] = {
         "shop_name": "yasonic",
         "mode": "non_dropship",
         "push_discount": True,                     # non_dropship + uses discount, same as autool
-        "formula_variant": "lowes",
+        "formula_variant": "lowes_vevor",          # 全司顺货,真实成本×buffer,无退货项(2026-07-22)
         "feishu_app_token": FEISHU_APP_TOKEN,
         "feishu_table_id": "tbldeuRJOoJBfX2g",     # Lowes-Yasonic-Mirakl
         "feishu_label": "Lowes-Yasonic-Mirakl",

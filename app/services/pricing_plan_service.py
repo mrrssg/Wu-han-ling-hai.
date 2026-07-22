@@ -37,15 +37,23 @@ DELIST_MIN_WINDOW_ORDERS = 25   # 判下架必须窗口内>=25单坐实（用户
 # 三档名义毛利（公式除数 = 1 − 佣金 − 名义毛利）；每档"能给多少毛利"逐SKU现算
 TIER_MARGINS = [("tier_12", 0.12), ("tier_15", 0.15), ("tier_18", 0.18)]
 
-OP_PREFIX = {"ATCO-MDLW": "刘梦蝶", "ATCO-MRLW": "明瑞瑞", "ATCO-YCLW": "朱以超"}
+# 运营段(MD/MR/YC + LW)——Autool是ATCO-MDLW，Yasonic是YSVE-MDLW，都含MDLW/MRLW/YCLW段
+OP_SEGMENTS = {"MDLW": "刘梦蝶", "MRLW": "明瑞瑞", "YCLW": "朱以超"}
 
 
 def sku_operator(sku: str) -> str:
-    return OP_PREFIX.get((sku or "")[:9], "未分配")
+    s = (sku or "").upper()
+    for seg, name in OP_SEGMENTS.items():
+        if seg in s:
+            return name
+    return "未分配"
 
 STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id, return_case店名)
     "lowes_autool": ("Lowes", "autool", 10, "Lowes-Autool"),
+    "lowes_yasonic": ("Lowes", "yasonic", 11, "Lowes-Yasonic"),
 }
+# 退实体店直接销毁、退货全损、不折减(p恒=0)的店铺（Yasonic，2026-07-22用户定）
+FULL_LOSS_STORES = {"lowes_yasonic"}
 
 
 def _qall(conn, sql, params=None):
@@ -68,8 +76,10 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
     """
     from app.services.repricing_monitor_service import fetch_pricing_configs
     from app.services.repricing_formula import calculate_breakdown
+    from app.services.repricing_stores import get_store
 
     platform, shop_name, shop_id, rc_store = STORE_MAP[store_key]
+    formula_variant = get_store(store_key)["formula_variant"]
     now = datetime.now(CN_TZ)
     conn = DBManager.get_connection()
     try:
@@ -135,6 +145,9 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
               AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""", (rc_store,))[0]
         total_v = float(prow["total_v"] or 0)
         p_recover = (float(prow["tracked_v"] or 0) / total_v) if total_v > 0 else 0.0
+        # Yasonic：退实体店销毁，退货全损，p恒=0不折减（用户2026-07-22定）
+        if store_key in FULL_LOSS_STORES:
+            p_recover = 0.0
         loss_factor = 1.0 - p_recover
 
         # ---- 实际毛利（展示列用：飞书利润实测，非退货毛利÷非退货销售额）----
@@ -284,22 +297,26 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         cfg = configs.get(o["warehouse_sku"]) if o["warehouse_sku"] else None
         supplier = ((cfg.get("supplier") or "Costway").strip() or "Costway") if cfg else None
         sp = price_map.get((supplier, o["warehouse_sku"])) if cfg else None
+        # lowes_vevor(Yasonic)无退货运费项，不要求 return_shipping_base
+        _need_rsb = formula_variant != "lowes_vevor"
         if cfg and sp and cfg.get("commission_rate") is not None \
-                and cfg.get("return_shipping_base") is not None \
-                and cfg.get("discount_factor") is not None:
+                and cfg.get("discount_factor") is not None \
+                and (not _need_rsb or cfg.get("return_shipping_base") is not None):
             cr = float(cfg["commission_rate"])
+            buf = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
             for key, nominal in TIER_MARGINS:
                 try:
                     bd = calculate_breakdown(
                         supplier=supplier, supplier_price=sp,
-                        return_shipping_base=float(cfg["return_shipping_base"]),
+                        return_shipping_base=float(cfg.get("return_shipping_base") or 0),
                         discount_factor=float(cfg["discount_factor"]),
                         length_in=float(cfg.get("length_in") or 0),
                         width_in=float(cfg.get("width_in") or 0),
                         height_in=float(cfg.get("height_in") or 0),
                         weight_lb=float(cfg.get("weight_lb") or 0),
-                        formula_variant="lowes",
-                        divisor_override=(1.0 - cr - nominal))
+                        formula_variant=formula_variant,
+                        divisor_override=(1.0 - cr - nominal),
+                        cost_buffer=buf)
                     P = float(bd.discount_price)
                     if P > 0:
                         tier_margin_map[key] = (P * (1 - cr) - float(bd.cost)) / P
@@ -442,7 +459,10 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
     from app.services.repricing_monitor_service import (
         fetch_active_offers, fetch_pricing_configs, _insert_log)
     from app.services.repricing_formula import calculate_breakdown, realised_margin
+    from app.services.repricing_stores import get_store
 
+    formula_variant = get_store(store_key)["formula_variant"]
+    _need_rsb = formula_variant != "lowes_vevor"   # Yasonic无退货运费项
     now = datetime.now(CN_TZ)
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     run_id = f"plan-{store_key}-{now.strftime('%Y%m%d%H%M%S')}"
@@ -487,7 +507,7 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         cfg = configs.get(ctx.warehouse_sku)
         if not cfg or cfg.get("discount_factor") is None \
                 or cfg.get("commission_rate") is None \
-                or cfg.get("return_shipping_base") is None:
+                or (_need_rsb and cfg.get("return_shipping_base") is None):
             summary["skip_no_cfg"] += 1
             continue
         supplier = (cfg.get("supplier") or "Costway").strip() or "Costway"
@@ -497,6 +517,7 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             continue
         discount_factor = float(cfg["discount_factor"])
         commission = float(cfg["commission_rate"])
+        cost_buffer = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
         target_margin = float(t["target_margin"])
         cur_discount = ctx.db_discount_price or (
             ctx.db_origin_price * discount_factor if ctx.db_origin_price else None)
@@ -507,13 +528,14 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         divisor = 1.0 - commission - target_margin
         bd = calculate_breakdown(
             supplier=supplier, supplier_price=float(supplier_price),
-            return_shipping_base=float(cfg["return_shipping_base"]),
+            return_shipping_base=float(cfg.get("return_shipping_base") or 0),
             discount_factor=discount_factor,
             length_in=float(cfg.get("length_in") or 0),
             width_in=float(cfg.get("width_in") or 0),
             height_in=float(cfg.get("height_in") or 0),
             weight_lb=float(cfg.get("weight_lb") or 0),
-            formula_variant="lowes", divisor_override=divisor)
+            formula_variant=formula_variant, divisor_override=divisor,
+            cost_buffer=cost_buffer)
         # 2026-07-16定案：不设限幅——价格只按用户公式算，涨跌幅在候选页展示，人工确认把关
         target_discount = round(bd.discount_price, 2)
         dev = (target_discount - cur_discount) / cur_discount
@@ -526,12 +548,13 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
         margin_before = realised_margin(
             current_origin_price=ctx.db_origin_price or target_origin,
             supplier=supplier, supplier_price=float(supplier_price),
-            return_shipping_base=float(cfg["return_shipping_base"]),
+            return_shipping_base=float(cfg.get("return_shipping_base") or 0),
             discount_factor=discount_factor, commission_rate=commission,
             length_in=float(cfg.get("length_in") or 0),
             width_in=float(cfg.get("width_in") or 0),
             height_in=float(cfg.get("height_in") or 0),
-            weight_lb=float(cfg.get("weight_lb") or 0))
+            weight_lb=float(cfg.get("weight_lb") or 0),
+            formula_variant=formula_variant, cost_buffer=cost_buffer)
 
         log_rows.append({
             "run_id": run_id, "run_type": "plan", "store_key": store_key,

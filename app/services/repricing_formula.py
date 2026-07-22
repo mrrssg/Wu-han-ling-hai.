@@ -38,8 +38,15 @@ DIM_FACTOR_VOLUME_WEIGHT = 225        # 体积重 = L*W*H / 225
 PRICE_FORMULA_VARIANTS = {
     "macy": {"cost_factor": 0.92, "divisor": 0.6444},
     "lowes": {"cost_factor": 1.0, "divisor": 0.73},
+    # lowes_vevor（Yasonic，2026-07-22）：全司顺货，退实体店销毁→无退货成本项；
+    #   真实成本 = 供应商价×0.8×1.07；定价成本 = 真实成本×上溢buffer(每SKU 1.05/1.08)；
+    #   实际毛利按真实成本算(所以高于名义)。cost_factor/divisor 仅占位。
+    "lowes_vevor": {"cost_factor": 1.0, "divisor": 0.73},
 }
 DEFAULT_FORMULA_VARIANT = "macy"
+
+# Yasonic真实成本系数（不含buffer；buffer是每SKU的上溢，另传）
+YASONIC_REAL_COST_FACTOR = 0.8 * 1.07   # = 0.856
 
 # legacy aliases kept so any old import still resolves
 PRICE_FORMULA_NUMERATOR_COST_FACTOR = PRICE_FORMULA_VARIANTS["macy"]["cost_factor"]
@@ -161,19 +168,38 @@ def calculate_breakdown(
     weight_lb: float,
     formula_variant: str = DEFAULT_FORMULA_VARIANT,
     divisor_override: Optional[float] = None,
+    cost_buffer: Optional[float] = None,
 ) -> PriceBreakdown:
     """Compute every intermediate value used by the Feishu formula chain.
     Returns a structured breakdown so callers can log every number to
     offer_price_change_log.
 
     formula_variant selects the "公式计算出来的Price" step:
-      - 'macy'  : (cost * 0.92 + return_cost_est) / 0.6444
-      - 'lowes' : (cost * 1.0  + return_cost_est) / 0.73   (= 总成本 / 0.73)
+      - 'macy'       : (cost * 0.92 + return_cost_est) / 0.6444
+      - 'lowes'      : (cost * 1.0  + return_cost_est) / 0.73   (= 总成本 / 0.73)
+      - 'lowes_vevor': (真实成本×buffer) / divisor，无退货项；cost=真实成本(Yasonic)
     Everything else (surcharges, discount_price, origin_price) is identical.
     """
     variant = PRICE_FORMULA_VARIANTS.get(formula_variant)
     if variant is None:
         raise ValueError(f"unknown formula_variant: {formula_variant!r}")
+
+    # ---- Yasonic：真实成本+buffer+无退货成本项（2026-07-22）----
+    if formula_variant == "lowes_vevor":
+        real_cost = supplier_price * YASONIC_REAL_COST_FACTOR
+        pricing_cost = real_cost * (cost_buffer if cost_buffer else 1.0)
+        div = divisor_override if divisor_override else variant["divisor"]
+        formula_price = pricing_cost / div
+        discount_price = round(formula_price, 0) - ROUNDED_OFFSET
+        origin_price = discount_price / discount_factor
+        return PriceBreakdown(
+            cost=real_cost,                    # 实际毛利按真实成本算
+            return_shipping_extra=0.0, return_shipping_total=0.0,
+            return_cost_estimate=0.0, total_cost=real_cost,
+            formula_calc_price=formula_price,
+            discount_price=discount_price, origin_price=origin_price,
+            is_oversize=False, is_dim=False, is_weight=False,
+        )
 
     cost = cost_from_supplier_price(supplier_price, supplier)
 
@@ -232,6 +258,8 @@ def realised_margin(
     width_in: float,
     height_in: float,
     weight_lb: float,
+    formula_variant: str = DEFAULT_FORMULA_VARIANT,
+    cost_buffer: Optional[float] = None,
 ) -> float:
     """Compute the CURRENT profit margin if we sold at the existing origin_price
     while paying the LATEST supplier cost. This is what the trigger checks.
@@ -244,7 +272,15 @@ def realised_margin(
 
     where total_cost = supplier_cost + return_cost_estimate, with the same
     surcharge logic as calculate_breakdown.
+    lowes_vevor（Yasonic）：total_cost=真实成本(无退货项)，毛利按真实成本算。
     """
+    if formula_variant == "lowes_vevor":
+        discount_price = current_origin_price * discount_factor
+        if discount_price == 0:
+            return 0.0
+        real_cost = supplier_price * YASONIC_REAL_COST_FACTOR
+        return (discount_price * (1 - commission_rate) - real_cost) / discount_price
+
     cost = cost_from_supplier_price(supplier_price, supplier)
     rs_total = return_shipping_total(
         return_shipping_base, length_in, width_in, height_in, weight_lb
