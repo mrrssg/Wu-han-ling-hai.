@@ -21,16 +21,18 @@
       <option value="Costway" {{ 'selected' if f_supplier=='Costway' }}>豪雅 ({{ counts.get('Costway',0) }})</option>
       <option value="Vevor" {{ 'selected' if f_supplier=='Vevor' }}>司顺 ({{ counts.get('Vevor',0) }})</option>
     </select>
-    <select name="leaf" class="form-select form-select-sm" style="width:auto;max-width:240px" onchange="this.form.submit()">
-      <option value="">全部Macy类目</option>
-      {% for lf in leaves %}<option value="{{ lf }}" {{ 'selected' if lf==f_leaf }}>{{ lf }}</option>{% endfor %}
-    </select>
+    <input name="leaf" value="{{ f_leaf }}" list="leaf-list" class="form-control form-control-sm"
+           style="width:230px" placeholder="Macy类目(可打字搜)" autocomplete="off"
+           onchange="this.form.submit()">
+    <datalist id="leaf-list">
+      {% for lf in leaves %}<option value="{{ lf }}">{% endfor %}
+    </datalist>
     <select name="img" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
       <option value="">图片总览(全部)</option>
       <option value="y" {{ 'selected' if f_img=='y' }}>✅总览有图 ({{ img_stat.y or 0 }})</option>
       <option value="n" {{ 'selected' if f_img=='n' }}>❌总览无图 ({{ img_stat.n or 0 }})</option>
     </select>
-    <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题">
+    <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题/类目">
     <button class="btn btn-sm btn-primary">搜索</button>
     {% if f_supplier or f_leaf or f_q or f_img %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page') }}">✕清除</a>{% endif %}
   </form>

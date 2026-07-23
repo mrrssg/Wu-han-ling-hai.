@@ -42,8 +42,8 @@ def page():
     if f_leaf:
         where.append("macy_leaf=%s"); params.append(f_leaf)
     if f_q:
-        where.append("(supplier_sku LIKE %s OR title LIKE %s)")
-        params += [f"%{f_q}%", f"%{f_q}%"]
+        where.append("(supplier_sku LIKE %s OR title LIKE %s OR supplier_cat LIKE %s OR macy_leaf LIKE %s)")
+        params += [f"%{f_q}%"] * 4
     if f_img == "y":
         where.append("has_overview_img=1")
     elif f_img == "n":
