@@ -83,7 +83,8 @@ def main() -> int:
         try:
             with conn.cursor() as cur:
                 # 已上过SKU灌临时表(多值INSERT,防RDS慢)
-                cur.execute("CREATE TEMPORARY TABLE _used_sku (sku VARCHAR(64) PRIMARY KEY)")
+                cur.execute("CREATE TEMPORARY TABLE _used_sku "
+                            "(sku VARCHAR(64) COLLATE utf8mb4_general_ci PRIMARY KEY)")
                 used_list = [s[:64] for s in used if s]
                 for i in range(0, len(used_list), 2000):
                     chunk = used_list[i:i + 2000]
@@ -94,7 +95,7 @@ def main() -> int:
                     SELECT c.category AS cat, COUNT(*) AS n
                     FROM order_system.safety_product_cache c
                     JOIN autooperate.newestdropship d ON d.SKU=c.sku
-                    LEFT JOIN _used_sku u ON u.sku=c.sku
+                    LEFT JOIN _used_sku u ON u.sku=c.sku COLLATE utf8mb4_general_ci
                     WHERE c.supplier='Costway' AND c.category<>'' AND d.Stock>50
                       AND u.sku IS NULL
                     GROUP BY c.category""")
@@ -103,7 +104,7 @@ def main() -> int:
                 cur.execute("""
                     SELECT v.product_type AS cat, COUNT(*) AS n
                     FROM autooperate.vevor_feed v
-                    LEFT JOIN _used_sku u ON u.sku=v.sku
+                    LEFT JOIN _used_sku u ON u.sku=v.sku COLLATE utf8mb4_general_ci
                     WHERE v.product_type<>'' AND v.inventory>50 AND u.sku IS NULL
                     GROUP BY v.product_type""")
                 vv = [(r["cat"], r["n"]) for r in cur.fetchall()]
