@@ -76,7 +76,7 @@
 {% if pages > 1 %}
 <div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
   <span class="text-muted">共 {{ total }} 候选</span>
-  {% set kp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None} %}
+  {% set kp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
   <div class="btn-group">
     <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page<=1 }}" href="{{ url_for('macy_selection.page', page=page-1, **kp) }}">‹ 上一页</a>
     <span class="btn btn-sm btn-light disabled">{{ page }}/{{ pages }}</span>

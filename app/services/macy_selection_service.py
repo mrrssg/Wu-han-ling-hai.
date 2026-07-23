@@ -152,9 +152,10 @@ def rebuild_pool() -> Dict[str, Any]:
                 c = ul[i:i + 2000]
                 cur.execute(f"INSERT IGNORE INTO _used (sku) VALUES {','.join(['(%s)']*len(c))}", c)
 
-            # Costway候选
+            # Costway候选（带供应商价Price）
             cur.execute("""
-                SELECT c.sku, c.title, c.image_url AS img, d.Stock AS stock, c.category AS cat
+                SELECT c.sku, c.title, c.image_url AS img, d.Stock AS stock,
+                       c.category AS cat, d.Price AS price
                 FROM order_system.safety_product_cache c
                 JOIN autooperate.newestdropship d ON d.SKU=c.sku
                 LEFT JOIN _used u ON u.sku=c.sku COLLATE utf8mb4_general_ci
@@ -228,6 +229,12 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
     ).json()["tenant_access_token"]
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
     # 供应商是单选(type3)，先探现有选项，值不在选项里就不写这个字段（防batch_create失败）
+    import re as _re
+
+    def _price_num(s):
+        m = _re.search(r"[\d.]+", str(s or ""))
+        return float(m.group()) if m else None
+
     records = []
     for it in items:
         full_path = leaf_path.get((it["macy_brand"], it["macy_leaf"])) or ""
@@ -239,6 +246,11 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             "品牌": it["macy_brand"] or "",
             "选品批次描述": batch_desc,
         }
+        if it.get("stock") is not None:
+            f["Stock"] = int(it["stock"])
+        pn = _price_num(it.get("price"))
+        if pn is not None:
+            f["供应商价格"] = pn
         # 供应商单选：Costway/Vevor 是表里已有的常见选项，直接写
         sup = {"Costway": "Costway", "Vevor": "Vevor"}.get(it["supplier"])
         if sup:
