@@ -29,6 +29,7 @@ def page():
     f_supplier = (request.args.get("supplier") or "").strip()
     f_leaf = (request.args.get("leaf") or "").strip()
     f_q = (request.args.get("q") or "").strip()
+    f_img = (request.args.get("img") or "").strip()   # ''全部 / 'y'有图 / 'n'无图
     try:
         pg = max(1, int(request.args.get("page") or 1))
     except (TypeError, ValueError):
@@ -43,6 +44,10 @@ def page():
     if f_q:
         where.append("(supplier_sku LIKE %s OR title LIKE %s)")
         params += [f"%{f_q}%", f"%{f_q}%"]
+    if f_img == "y":
+        where.append("has_overview_img=1")
+    elif f_img == "n":
+        where.append("has_overview_img=0")
     w = " AND ".join(where)
 
     total = int((_query(f"SELECT COUNT(*) n FROM order_system.macy_selection_pool WHERE {w}",
@@ -57,11 +62,14 @@ def page():
            GROUP BY macy_leaf ORDER BY n DESC""")]
     counts = {r["supplier"]: int(r["n"]) for r in _query(
         "SELECT supplier, COUNT(*) n FROM order_system.macy_selection_pool GROUP BY supplier")}
+    imgc = _query("""SELECT SUM(has_overview_img=1) y, SUM(has_overview_img=0) n
+                     FROM order_system.macy_selection_pool""")
+    img_stat = imgc[0] if imgc else {"y": 0, "n": 0}
     built = _query("SELECT MAX(rebuilt_at) t FROM order_system.macy_selection_pool")
     return render_template("macy_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per,
-                           f_supplier=f_supplier, f_leaf=f_leaf, f_q=f_q,
-                           leaves=leaves, counts=counts,
+                           f_supplier=f_supplier, f_leaf=f_leaf, f_q=f_q, f_img=f_img,
+                           leaves=leaves, counts=counts, img_stat=img_stat,
                            built_at=built[0]["t"] if built else None)
 
 

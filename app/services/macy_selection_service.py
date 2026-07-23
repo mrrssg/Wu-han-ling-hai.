@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS order_system.macy_selection_pool (
     macy_brand VARCHAR(32),
     price VARCHAR(32),
     heat_90d INT DEFAULT 0 COMMENT '该Macy叶子类目近90天Kuyotq订单数',
+    has_overview_img TINYINT DEFAULT 0 COMMENT '图片总览表tbl2IRXCLuiUBfk9里有此SKU的图',
     rebuilt_at DATETIME,
     UNIQUE KEY uq_sku (supplier, supplier_sku),
     KEY idx_leaf (macy_leaf), KEY idx_supplier (supplier)
@@ -71,12 +72,62 @@ CREATE TABLE IF NOT EXISTS order_system.macy_selection_pool (
 """
 
 
+def _feishu_overview_skus() -> set:
+    """图片总览表 tbl2IRXCLuiUBfk9 里「有主图或第1张」的 SKU 集合(有图=能上架取图)。"""
+    import requests
+    APP_ID = "cli_a940a2a1067adbd2"
+    SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
+    APP = "QEeubiXYGa83zXs3Zt8cSSJPnih"
+    TBL = "tbl2IRXCLuiUBfk9"
+    tok = requests.post(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        json={"app_id": APP_ID, "app_secret": SECRET}, timeout=30
+    ).json()["tenant_access_token"]
+    H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+
+    def gt(v):
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            return "".join(x.get("text", "") or x.get("link", "") for x in v)
+        if isinstance(v, dict):
+            return v.get("text") or v.get("link") or ""
+        return str(v) if v is not None else ""
+
+    have = set()
+    pt = ""
+    while True:
+        url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP}"
+               f"/tables/{TBL}/records?page_size=500" + (f"&page_token={pt}" if pt else ""))
+        r = requests.get(url, headers=H, timeout=60).json()
+        d = r.get("data") or {}
+        for it in d.get("items") or []:
+            f = it["fields"]
+            sku = gt(f.get("SKU")).strip()
+            img = gt(f.get("主图")).strip() or gt(f.get("第1张")).strip()
+            if sku and img.startswith("http"):
+                have.add(sku)
+        if not d.get("has_more"):
+            break
+        pt = d.get("page_token") or ""
+        if not pt:
+            break
+    return have
+
+
 def rebuild_pool() -> Dict[str, Any]:
     used = _feishu_used_skus()
+    overview = _feishu_overview_skus()
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(DDL)
+            try:
+                cur.execute("ALTER TABLE order_system.macy_selection_pool "
+                            "ADD COLUMN has_overview_img TINYINT DEFAULT 0")
+            except Exception as exc:
+                if "Duplicate column" not in str(exc):
+                    raise
             # 有效映射(供应商类目→Macy叶子)
             cur.execute("""SELECT supplier, supplier_cat, macy_leaf, macy_brand
                            FROM order_system.macy_cat_map WHERE macy_leaf IS NOT NULL""")
@@ -124,22 +175,25 @@ def rebuild_pool() -> Dict[str, Any]:
                 if not lb:
                     continue   # 类目没映射到Macy叶子 → 不进池
                 leaf, brand = lb
+                has_img = 1 if r["sku"] in overview else 0
                 rows.append((supplier, r["sku"], (r.get("title") or "")[:400],
                              (r.get("img") or "")[:600], int(r.get("stock") or 0),
                              (r["cat"] or "")[:400], leaf, brand,
-                             (str(r.get("price") or ""))[:32], 0))
+                             (str(r.get("price") or ""))[:32], 0, has_img))
 
         with conn.cursor() as cur:
             cur.execute("DELETE FROM order_system.macy_selection_pool")
             cols = ("supplier,supplier_sku,title,image,stock,supplier_cat,"
-                    "macy_leaf,macy_brand,price,heat_90d,rebuilt_at")
+                    "macy_leaf,macy_brand,price,heat_90d,has_overview_img,rebuilt_at")
             for i in range(0, len(rows), 1000):
                 chunk = rows[i:i + 1000]
-                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.macy_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
-        return {"used_skus": len(used), "candidates": len(rows),
+        return {"used_skus": len(used), "overview_skus": len(overview),
+                "candidates": len(rows),
+                "with_overview_img": sum(1 for r in rows if r[10]),
                 "costway": sum(1 for r in rows if r[0] == "Costway"),
                 "vevor": sum(1 for r in rows if r[0] == "Vevor")}
     finally:

@@ -25,9 +25,14 @@
       <option value="">全部Macy类目</option>
       {% for lf in leaves %}<option value="{{ lf }}" {{ 'selected' if lf==f_leaf }}>{{ lf }}</option>{% endfor %}
     </select>
+    <select name="img" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">图片总览(全部)</option>
+      <option value="y" {{ 'selected' if f_img=='y' }}>✅总览有图 ({{ img_stat.y or 0 }})</option>
+      <option value="n" {{ 'selected' if f_img=='n' }}>❌总览无图 ({{ img_stat.n or 0 }})</option>
+    </select>
     <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题">
     <button class="btn btn-sm btn-primary">搜索</button>
-    {% if f_supplier or f_leaf or f_q %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page') }}">✕清除</a>{% endif %}
+    {% if f_supplier or f_leaf or f_q or f_img %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page') }}">✕清除</a>{% endif %}
   </form>
   <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
 </div>
@@ -43,7 +48,8 @@
     <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
       <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th>
       <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
-      <th>供应商类目</th><th>建议Macy类目</th><th>品牌</th><th class="text-end">类目热度</th></tr></thead>
+      <th>供应商类目</th><th>建议Macy类目</th><th>品牌</th><th class="text-end">类目热度</th>
+      <th title="图片链接总览表里有没有这个SKU的图(上架取图用)">总览图</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
@@ -57,9 +63,10 @@
         <td class="small"><span class="badge text-bg-info">{{ r.macy_leaf }}</span></td>
         <td class="small">{{ r.macy_brand }}</td>
         <td class="text-end">{{ r.heat_90d }}</td>
+        <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="10" class="text-center text-muted py-4">候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
+      <tr><td colspan="11" class="text-center text-muted py-4">候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
       {% endfor %}
     </tbody>
   </table>
