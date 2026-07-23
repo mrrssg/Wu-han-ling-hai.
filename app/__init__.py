@@ -46,6 +46,9 @@ def create_app(config_name='default'):
     from app.routes.customer_risk import customer_risk_bp
     app.register_blueprint(customer_risk_bp, url_prefix='/customer-risk')  # 可疑客户分析
 
+    from app.routes.macy_selection import macy_selection_bp
+    app.register_blueprint(macy_selection_bp, url_prefix='/macy-selection')  # Macy选品
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

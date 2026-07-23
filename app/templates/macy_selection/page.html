@@ -1,0 +1,109 @@
+{% extends "base_v2.html" %}
+{% block title %}Macy选品{% endblock %}
+{% block page_title %}Macy-Kuyotq 选品{% endblock %}
+{% block page_sub %}从豪雅+司顺全量产品里，选没上过、库存&gt;50、供应商类目能归到Macy可上类目的候选；勾选后推送到 Macy-kuyotq-Mirakl 表{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="rebuild(this)">🔄 重建候选池</button>
+{% endblock %}
+
+{% block content %}
+<style>
+.sel-img { width:56px; height:56px; object-fit:cover; border-radius:5px; border:1px solid #e5e8ee; cursor:zoom-in; }
+#sel-preview { position:fixed; width:420px; height:420px; object-fit:contain; background:#fff;
+  border:1px solid #d5d9e0; border-radius:8px; box-shadow:0 10px 34px rgba(0,0,0,.35);
+  z-index:2000; display:none; pointer-events:none; }
+</style>
+
+<div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
+  <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('macy_selection.page') }}">
+    <select name="supplier" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">全部供应商</option>
+      <option value="Costway" {{ 'selected' if f_supplier=='Costway' }}>豪雅 ({{ counts.get('Costway',0) }})</option>
+      <option value="Vevor" {{ 'selected' if f_supplier=='Vevor' }}>司顺 ({{ counts.get('Vevor',0) }})</option>
+    </select>
+    <select name="leaf" class="form-select form-select-sm" style="width:auto;max-width:240px" onchange="this.form.submit()">
+      <option value="">全部Macy类目</option>
+      {% for lf in leaves %}<option value="{{ lf }}" {{ 'selected' if lf==f_leaf }}>{{ lf }}</option>{% endfor %}
+    </select>
+    <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题">
+    <button class="btn btn-sm btn-primary">搜索</button>
+    {% if f_supplier or f_leaf or f_q %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page') }}">✕清除</a>{% endif %}
+  </form>
+  <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
+</div>
+
+<div class="card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap" style="position:sticky;top:0;z-index:10;background:#fff">
+  <input id="batch-desc" class="form-control form-control-sm" style="width:280px" placeholder="选品批次描述（必填，如 0723-家具批）">
+  <button class="btn btn-sm btn-success" onclick="pushSel()">✅ 推送已选到 Kuyotq（<span id="sel-n">0</span>）</button>
+  <label class="small text-muted"><input type="checkbox" id="sel-all-page"> 全选本页</label>
+</div>
+
+<div class="card"><div class="table-responsive" style="max-height:70vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th>
+      <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
+      <th>供应商类目</th><th>建议Macy类目</th><th>品牌</th><th class="text-end">类目热度</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><input type="checkbox" class="sel-cb" value="{{ r.id }}"></td>
+        <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+        <td class="font-monospace small">{{ r.supplier_sku }}</td>
+        <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+        <td class="small"><div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="text-end">{{ r.stock }}</td>
+        <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
+        <td class="small"><span class="badge text-bg-info">{{ r.macy_leaf }}</span></td>
+        <td class="small">{{ r.macy_brand }}</td>
+        <td class="text-end">{{ r.heat_90d }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="text-center text-muted py-4">候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
+  <span class="text-muted">共 {{ total }} 候选</span>
+  {% set kp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None} %}
+  <div class="btn-group">
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page<=1 }}" href="{{ url_for('macy_selection.page', page=page-1, **kp) }}">‹ 上一页</a>
+    <span class="btn btn-sm btn-light disabled">{{ page }}/{{ pages }}</span>
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page>=pages }}" href="{{ url_for('macy_selection.page', page=page+1, **kp) }}">下一页 ›</a>
+  </div>
+</div>
+{% endif %}
+</div>
+
+<script>
+(function(){
+  const prev=document.createElement('img'); prev.id='sel-preview'; document.body.appendChild(prev);
+  function place(e){const W=420,pad=16;let x=e.clientX+pad;if(x+W>innerWidth-8)x=e.clientX-W-pad;
+    let y=Math.max(8,Math.min(e.clientY-W/2,innerHeight-W-8));prev.style.left=x+'px';prev.style.top=y+'px';}
+  document.querySelectorAll('.sel-img').forEach(img=>{
+    img.addEventListener('mouseenter',e=>{prev.src=img.src;prev.style.display='block';place(e);});
+    img.addEventListener('mousemove',place);
+    img.addEventListener('mouseleave',()=>prev.style.display='none');});
+})();
+function cbs(){return Array.from(document.querySelectorAll('.sel-cb'));}
+function refresh(){document.getElementById('sel-n').textContent=cbs().filter(c=>c.checked).length;}
+cbs().forEach(c=>c.addEventListener('change',refresh));
+document.getElementById('sel-all-page').addEventListener('change',function(){cbs().forEach(c=>c.checked=this.checked);refresh();});
+async function rebuild(btn){btn.disabled=true;btn.textContent='已开始…';
+  const r=await fetch('{{ url_for("macy_selection.rebuild") }}',{method:'POST'});alert((await r.json()).msg);}
+async function pushSel(){
+  const ids=cbs().filter(c=>c.checked).map(c=>c.value);
+  const batch=document.getElementById('batch-desc').value.trim();
+  if(!ids.length){alert('没有勾选');return;}
+  if(!batch){alert('请填选品批次描述');return;}
+  if(!confirm('推送 '+ids.length+' 个产品到 Macy-kuyotq-Mirakl，批次「'+batch+'」？'))return;
+  const r=await fetch('{{ url_for("macy_selection.push") }}',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids:ids,batch:batch})});
+  const d=await r.json();
+  alert(d.success?('已推送 '+d.pushed+' 个到飞书'):('失败：'+(d.msg||'')));
+  if(d.success)location.reload();
+}
+</script>
+{% endblock %}
