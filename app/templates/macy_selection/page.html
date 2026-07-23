@@ -41,6 +41,8 @@
   <input id="batch-desc" class="form-control form-control-sm" style="width:280px" placeholder="选品批次描述（必填，如 0723-家具批）">
   <button class="btn btn-sm btn-success" onclick="pushSel()">✅ 推送已选到 Kuyotq（<span id="sel-n">0</span>）</button>
   <label class="small text-muted"><input type="checkbox" id="sel-all-page"> 全选本页</label>
+  <span class="small text-muted">已跨页选中 <b id="sel-total">0</b> 个</span>
+  <button class="btn btn-sm btn-outline-secondary py-0" onclick="clearSel()">清空已选</button>
 </div>
 
 <div class="card"><div class="table-responsive" style="max-height:70vh;overflow-y:auto">
@@ -94,23 +96,39 @@
     img.addEventListener('mousemove',place);
     img.addEventListener('mouseleave',()=>prev.style.display='none');});
 })();
+// 跨页选择：勾选ID存sessionStorage，翻页保持
+const SK='macy_sel_ids';
+function selSet(){try{return new Set(JSON.parse(sessionStorage.getItem(SK)||'[]'));}catch(e){return new Set();}}
+function saveSet(s){sessionStorage.setItem(SK,JSON.stringify([...s]));}
 function cbs(){return Array.from(document.querySelectorAll('.sel-cb'));}
-function refresh(){document.getElementById('sel-n').textContent=cbs().filter(c=>c.checked).length;}
-cbs().forEach(c=>c.addEventListener('change',refresh));
-document.getElementById('sel-all-page').addEventListener('change',function(){cbs().forEach(c=>c.checked=this.checked);refresh();});
+function refresh(){
+  const s=selSet();
+  document.getElementById('sel-n').textContent=cbs().filter(c=>c.checked).length;
+  document.getElementById('sel-total').textContent=s.size;
+  const all=cbs();
+  document.getElementById('sel-all-page').checked=all.length>0 && all.every(c=>c.checked);
+}
+// 页面载入：按存储勾回本页
+(function(){const s=selSet();cbs().forEach(c=>{if(s.has(c.value))c.checked=true;});refresh();})();
+cbs().forEach(c=>c.addEventListener('change',function(){
+  const s=selSet();this.checked?s.add(this.value):s.delete(this.value);saveSet(s);refresh();}));
+document.getElementById('sel-all-page').addEventListener('change',function(){
+  const s=selSet();cbs().forEach(c=>{c.checked=this.checked;this.checked?s.add(c.value):s.delete(c.value);});
+  saveSet(s);refresh();});
+function clearSel(){sessionStorage.removeItem(SK);cbs().forEach(c=>c.checked=false);refresh();}
 async function rebuild(btn){btn.disabled=true;btn.textContent='已开始…';
   const r=await fetch('{{ url_for("macy_selection.rebuild") }}',{method:'POST'});alert((await r.json()).msg);}
 async function pushSel(){
-  const ids=cbs().filter(c=>c.checked).map(c=>c.value);
+  const ids=[...selSet()];   // 跨页全部已选
   const batch=document.getElementById('batch-desc').value.trim();
   if(!ids.length){alert('没有勾选');return;}
   if(!batch){alert('请填选品批次描述');return;}
-  if(!confirm('推送 '+ids.length+' 个产品到 Macy-kuyotq-Mirakl，批次「'+batch+'」？'))return;
+  if(!confirm('推送 '+ids.length+' 个产品到 Macy-kuyotq-Mirakl（含跨页选择），批次「'+batch+'」？'))return;
   const r=await fetch('{{ url_for("macy_selection.push") }}',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ids:ids,batch:batch})});
   const d=await r.json();
-  alert(d.success?('已推送 '+d.pushed+' 个到飞书'):('失败：'+(d.msg||'')));
-  if(d.success)location.reload();
+  if(d.success){sessionStorage.removeItem(SK);alert('已推送 '+d.pushed+' 个到飞书');location.reload();}
+  else alert('失败：'+(d.msg||''));
 }
 </script>
 {% endblock %}

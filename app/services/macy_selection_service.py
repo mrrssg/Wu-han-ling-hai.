@@ -217,6 +217,9 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             cur.execute(f"""SELECT * FROM order_system.macy_selection_pool
                             WHERE id IN ({ph})""", pool_ids)
             items = cur.fetchall()
+            # 叶子类目 → 完整Macy类目路径（写「店铺类目」字段用）
+            cur.execute("""SELECT brand, leaf, full_path FROM order_system.macy_leaf_category""")
+            leaf_path = {(r["brand"], r["leaf"]): r["full_path"] for r in cur.fetchall()}
     finally:
         conn.close()
     tok = requests.post(
@@ -227,10 +230,13 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
     # 供应商是单选(type3)，先探现有选项，值不在选项里就不写这个字段（防batch_create失败）
     records = []
     for it in items:
+        full_path = leaf_path.get((it["macy_brand"], it["macy_leaf"])) or ""
         f = {
             "供应商SKU": it["supplier_sku"],
             "Item Name": it["title"] or "",
             "供应商类目": it["supplier_cat"] or "",
+            "店铺类目": full_path,                 # 完整Macy类目路径
+            "品牌": it["macy_brand"] or "",
             "选品批次描述": batch_desc,
         }
         # 供应商单选：Costway/Vevor 是表里已有的常见选项，直接写
