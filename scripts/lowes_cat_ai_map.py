@@ -55,12 +55,21 @@ def _run_stage_a(client, sup_filter):
 【Lowes 一级类目】(共{len(l1s)}个)
 {l1_lines}
 
+【Lowes 分类习惯（重要，避免归错一级）】
+- **几乎所有室内家具都归到 Home Decor**（其下有完整 Furniture 子树：客厅/卧室/餐厅厨房/办公/儿童家具）。
+  例：Dining Chairs/Dining Tables/餐椅餐桌、Bar Stools吧凳、Nightstands、Dressers、TV Stands/Entertainment Centers电视柜、
+  File Cabinets文件柜、Sideboards餐边柜、Bookcases书架、Makeup Vanities梳妆台、Coffee/End Tables → 一律 **Home Decor**。
+- **Dining & Entertaining** 只放餐具/杯盘/上菜/派对一次性用品，**不放餐桌餐椅**。
+- **Office & School Supplies** 只放文具耗材，**办公家具(书桌/文件柜/办公椅)归 Home Decor**。
+- **Electronics** 只放电子设备本身，**电视柜/影音柜归 Home Decor**。
+- 户外家具/庭院 → Outdoors；工具箱/工具柜 → Tools；收纳箱/货架/衣物收纳 → Storage & Organization。
+
 【待判供应商类目】
 {cat_lines}
 
 规则：
 1. 每个供应商类目，选**唯一最合适**的一个 Lowes 一级类目；判不出/明显不属于任何一个→l1填null
-2. 只看类目名判断产品本质属于哪个大类（如"Patio Furniture"→Outdoors，"Tool Cabinets"→Tools）
+2. 看产品本质属于哪个大类，并遵循上面的 Lowes 分类习惯（家具优先 Home Decor）
 3. l1 必须是上面列表里**原样**的一级名
 只输出JSON: {{"results":[{{"i":序号,"l1":"一级名或null"}}]}}"""
         try:
