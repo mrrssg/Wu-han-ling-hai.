@@ -1,0 +1,164 @@
+{% extends "base_v2.html" %}
+{% block title %}Lowes选品{% endblock %}
+{% block page_title %}Lowes 选品{% endblock %}
+{% block page_sub %}Autool只上豪雅、Yasonic只上司顺；筛没上过、库存&gt;50、供应商类目能归到Lowes类目的候选，勾选后推送到对应 Lowes-Mirakl 表{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="rebuild(this)">🔄 重建「{{ stores[store] }}」候选池</button>
+{% endblock %}
+
+{% block content %}
+<style>
+.sel-img { width:56px; height:56px; object-fit:cover; border-radius:5px; border:1px solid #e5e8ee; cursor:zoom-in; }
+#sel-preview { position:fixed; width:420px; height:420px; object-fit:contain; background:#fff;
+  border:1px solid #d5d9e0; border-radius:8px; box-shadow:0 10px 34px rgba(0,0,0,.35);
+  z-index:2000; display:none; pointer-events:none; }
+.store-tab { text-decoration:none; }
+</style>
+
+<!-- 店铺切换：切换后重建/推送/选择都只针对当前店 -->
+<div class="btn-group mb-3" role="group">
+  {% for sk, sname in stores.items() %}
+  <a class="btn btn-sm store-tab {{ 'btn-primary' if store==sk else 'btn-outline-primary' }}"
+     href="{{ url_for('lowes_selection.page', store=sk) }}">
+    {{ sname }} <span class="badge bg-light text-dark ms-1">{{ store_totals.get(sk, 0) }}</span>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
+  <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('lowes_selection.page') }}">
+    <input type="hidden" name="store" value="{{ store }}">
+    <input name="leaf" value="{{ f_leaf }}" list="leaf-list" class="form-control form-control-sm"
+           style="width:250px" placeholder="Lowes类目(可打字搜)" autocomplete="off"
+           onchange="this.form.submit()">
+    <datalist id="leaf-list">
+      {% for lf in leaves %}<option value="{{ lf }}">{% endfor %}
+    </datalist>
+    <select name="img" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">图片总览(全部)</option>
+      <option value="y" {{ 'selected' if f_img=='y' }}>✅总览有图 ({{ img_stat.y or 0 }})</option>
+      <option value="n" {{ 'selected' if f_img=='n' }}>❌总览无图 ({{ img_stat.n or 0 }})</option>
+    </select>
+    <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题/类目">
+    <button class="btn btn-sm btn-primary">搜索</button>
+    {% if f_leaf or f_q or f_img %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('lowes_selection.page', store=store) }}">✕清除</a>{% endif %}
+  </form>
+  <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
+</div>
+
+<details class="mb-2" style="font-size:.82rem">
+  <summary style="cursor:pointer" class="text-primary">📜 {{ stores[store] }} 推送历史（{{ push_log|length }} 批）</summary>
+  <div class="card mt-1"><div class="table-responsive" style="max-height:300px;overflow-y:auto">
+    <table class="table table-sm mb-0" style="font-size:.8rem">
+      <thead class="table-light"><tr><th>时间</th><th>批次描述</th><th class="text-end">SKU数</th><th>类目分布</th></tr></thead>
+      <tbody>
+        {% for p in push_log %}
+        <tr>
+          <td class="small text-muted" style="white-space:nowrap">{{ p.pushed_at }}</td>
+          <td class="small">{{ p.batch_desc }}</td>
+          <td class="text-end fw-bold">{{ p.sku_count }}</td>
+          <td class="small text-muted" style="max-width:480px">{{ p.leaf_summary }}</td>
+        </tr>
+        {% else %}<tr><td colspan="4" class="text-center text-muted py-3">还没有推送记录</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+</details>
+
+<div class="card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap" style="position:sticky;top:0;z-index:10;background:#fff">
+  <input id="batch-desc" class="form-control form-control-sm" style="width:280px" placeholder="选品批次描述（必填，如 0723-工具批）">
+  <button class="btn btn-sm btn-success" onclick="pushSel()">✅ 推送已选到 {{ stores[store] }}（<span id="sel-n">0</span>）</button>
+  <label class="small text-muted"><input type="checkbox" id="sel-all-page"> 全选本页</label>
+  <span class="small text-muted">已跨页选中 <b id="sel-total">0</b> 个</span>
+  <button class="btn btn-sm btn-outline-secondary py-0" onclick="clearSel()">清空已选</button>
+</div>
+
+<div class="card"><div class="table-responsive" style="max-height:70vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th style="width:28px"></th><th>图</th><th>供应商SKU</th>
+      <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
+      <th>供应商类目</th><th>建议Lowes类目</th><th>品牌</th>
+      <th title="图片链接总览表里有没有这个SKU的图(上架取图用)">总览图</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><input type="checkbox" class="sel-cb" value="{{ r.id }}"></td>
+        <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+        <td class="font-monospace small">{{ r.supplier_sku }}</td>
+        <td class="small"><div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="text-end">{{ r.stock }}</td>
+        <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
+        <td class="small"><span class="badge text-bg-info" title="{{ r.lowes_path }}">{{ r.lowes_leaf }}</span></td>
+        <td class="small">{{ r.brand }}</td>
+        <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="text-center text-muted py-4">「{{ stores[store] }}」候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
+  <span class="text-muted">共 {{ total }} 候选</span>
+  {% set kp = {'store': store, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
+  <div class="btn-group">
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page<=1 }}" href="{{ url_for('lowes_selection.page', page=page-1, **kp) }}">‹ 上一页</a>
+    <span class="btn btn-sm btn-light disabled">{{ page }}/{{ pages }}</span>
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page>=pages }}" href="{{ url_for('lowes_selection.page', page=page+1, **kp) }}">下一页 ›</a>
+  </div>
+</div>
+{% endif %}
+</div>
+
+<script>
+const STORE = "{{ store }}";
+(function(){
+  const prev=document.createElement('img'); prev.id='sel-preview'; document.body.appendChild(prev);
+  function place(e){const W=420,pad=16;let x=e.clientX+pad;if(x+W>innerWidth-8)x=e.clientX-W-pad;
+    let y=Math.max(8,Math.min(e.clientY-W/2,innerHeight-W-8));prev.style.left=x+'px';prev.style.top=y+'px';}
+  document.querySelectorAll('.sel-img').forEach(img=>{
+    img.addEventListener('mouseenter',e=>{prev.src=img.src;prev.style.display='block';place(e);});
+    img.addEventListener('mousemove',place);
+    img.addEventListener('mouseleave',()=>prev.style.display='none');});
+})();
+// 跨页选择：每个店铺各自一套已选ID
+const SK='lowes_sel_ids_'+STORE;
+function selSet(){try{return new Set(JSON.parse(sessionStorage.getItem(SK)||'[]'));}catch(e){return new Set();}}
+function saveSet(s){sessionStorage.setItem(SK,JSON.stringify([...s]));}
+function cbs(){return Array.from(document.querySelectorAll('.sel-cb'));}
+function refresh(){
+  const s=selSet();
+  document.getElementById('sel-n').textContent=cbs().filter(c=>c.checked).length;
+  document.getElementById('sel-total').textContent=s.size;
+  const all=cbs();
+  document.getElementById('sel-all-page').checked=all.length>0 && all.every(c=>c.checked);
+}
+(function(){const s=selSet();cbs().forEach(c=>{if(s.has(c.value))c.checked=true;});refresh();})();
+cbs().forEach(c=>c.addEventListener('change',function(){
+  const s=selSet();this.checked?s.add(this.value):s.delete(this.value);saveSet(s);refresh();}));
+document.getElementById('sel-all-page').addEventListener('change',function(){
+  const s=selSet();cbs().forEach(c=>{c.checked=this.checked;this.checked?s.add(c.value):s.delete(c.value);});
+  saveSet(s);refresh();});
+function clearSel(){sessionStorage.removeItem(SK);cbs().forEach(c=>c.checked=false);refresh();}
+async function rebuild(btn){
+  if(!confirm('重建「{{ stores[store] }}」候选池？只重建这一个店铺。'))return;
+  btn.disabled=true;btn.textContent='已开始…';
+  const r=await fetch('{{ url_for("lowes_selection.rebuild") }}',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'store='+STORE});
+  alert((await r.json()).msg);}
+async function pushSel(){
+  const ids=[...selSet()];
+  const batch=document.getElementById('batch-desc').value.trim();
+  if(!ids.length){alert('没有勾选');return;}
+  if(!batch){alert('请填选品批次描述');return;}
+  if(!confirm('推送 '+ids.length+' 个产品到 {{ stores[store] }}（含跨页选择），批次「'+batch+'」？'))return;
+  const r=await fetch('{{ url_for("lowes_selection.push") }}',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids:ids,batch:batch})});
+  const d=await r.json();
+  if(d.success){sessionStorage.removeItem(SK);alert('已推送 '+d.pushed+' 个到飞书');location.reload();}
+  else alert('失败：'+(d.msg||''));
+}
+</script>
+{% endblock %}

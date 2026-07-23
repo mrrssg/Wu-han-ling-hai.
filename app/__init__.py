@@ -49,6 +49,9 @@ def create_app(config_name='default'):
     from app.routes.macy_selection import macy_selection_bp
     app.register_blueprint(macy_selection_bp, url_prefix='/macy-selection')  # Macy选品
 
+    from app.routes.lowes_selection import lowes_selection_bp
+    app.register_blueprint(lowes_selection_bp, url_prefix='/lowes-selection')  # Lowes选品
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""
