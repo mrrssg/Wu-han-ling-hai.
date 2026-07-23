@@ -39,6 +39,28 @@
   <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
 </div>
 
+<details class="mb-2" style="font-size:.82rem">
+  <summary style="cursor:pointer" class="text-primary">📜 推送历史（{{ push_log|length }} 批）</summary>
+  <div class="card mt-1"><div class="table-responsive" style="max-height:300px;overflow-y:auto">
+    <table class="table table-sm mb-0" style="font-size:.8rem">
+      <thead class="table-light"><tr><th>时间</th><th>批次描述</th><th class="text-end">SKU数</th>
+        <th class="text-end">豪雅</th><th class="text-end">司顺</th><th>类目分布</th></tr></thead>
+      <tbody>
+        {% for p in push_log %}
+        <tr>
+          <td class="small text-muted" style="white-space:nowrap">{{ p.pushed_at }}</td>
+          <td class="small">{{ p.batch_desc }}</td>
+          <td class="text-end fw-bold">{{ p.sku_count }}</td>
+          <td class="text-end">{{ p.costway_n }}</td>
+          <td class="text-end">{{ p.vevor_n }}</td>
+          <td class="small text-muted" style="max-width:420px">{{ p.leaf_summary }}</td>
+        </tr>
+        {% else %}<tr><td colspan="6" class="text-center text-muted py-3">还没有推送记录</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+</details>
+
 <div class="card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap" style="position:sticky;top:0;z-index:10;background:#fff">
   <input id="batch-desc" class="form-control form-control-sm" style="width:280px" placeholder="选品批次描述（必填，如 0723-家具批）">
   <button class="btn btn-sm btn-success" onclick="pushSel()">✅ 推送已选到 Kuyotq（<span id="sel-n">0</span>）</button>

@@ -264,4 +264,30 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             headers=H, data=json.dumps({"records": chunk}).encode("utf-8"), timeout=60).json()
         if r.get("code") == 0:
             ok += len(chunk)
+
+    # 落推送记录（推了什么类目/多少SKU/何时）
+    if ok > 0:
+        from collections import Counter
+        leaf_c = Counter(f"{it['macy_brand']}|{it['macy_leaf']}" for it in items)
+        leaf_summary = "; ".join(f"{k.split('|')[1]}×{v}" for k, v in leaf_c.most_common())
+        conn = DBManager.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""CREATE TABLE IF NOT EXISTS order_system.macy_push_log (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    batch_desc VARCHAR(255), sku_count INT,
+                    costway_n INT, vevor_n INT,
+                    leaf_summary VARCHAR(1000) COMMENT '类目×数量',
+                    pushed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    KEY idx_at (pushed_at)) CHARSET=utf8mb4""")
+                cur.execute("""INSERT INTO order_system.macy_push_log
+                    (batch_desc, sku_count, costway_n, vevor_n, leaf_summary)
+                    VALUES (%s,%s,%s,%s,%s)""",
+                    (batch_desc, ok,
+                     sum(1 for it in items if it["supplier"] == "Costway"),
+                     sum(1 for it in items if it["supplier"] == "Vevor"),
+                     leaf_summary[:1000]))
+            conn.commit()
+        finally:
+            conn.close()
     return {"success": ok > 0, "pushed": ok, "batch": batch_desc}

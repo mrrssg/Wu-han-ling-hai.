@@ -66,11 +66,16 @@ def page():
                      FROM order_system.macy_selection_pool""")
     img_stat = imgc[0] if imgc else {"y": 0, "n": 0}
     built = _query("SELECT MAX(rebuilt_at) t FROM order_system.macy_selection_pool")
+    push_log = _query("""SELECT batch_desc, sku_count, costway_n, vevor_n,
+                                leaf_summary, pushed_at
+                         FROM order_system.macy_push_log
+                         ORDER BY pushed_at DESC LIMIT 50""")
     return render_template("macy_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per,
                            f_supplier=f_supplier, f_leaf=f_leaf, f_q=f_q, f_img=f_img,
                            leaves=leaves, counts=counts, img_stat=img_stat,
-                           built_at=built[0]["t"] if built else None)
+                           built_at=built[0]["t"] if built else None,
+                           push_log=push_log)
 
 
 @macy_selection_bp.route("/rebuild", methods=["POST"])
