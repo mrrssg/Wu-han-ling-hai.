@@ -16,6 +16,10 @@ def _query(sql, params=None):
         with conn.cursor() as cur:
             cur.execute(sql, params) if params else cur.execute(sql)
             return cur.fetchall() or []
+    except Exception as exc:
+        if "doesn't exist" in str(exc):   # 候选池未建(未首次rebuild)——当空池
+            return []
+        raise
     finally:
         conn.close()
 
