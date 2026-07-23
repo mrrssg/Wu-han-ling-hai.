@@ -77,13 +77,15 @@ def _run_stage_a(client, sup_filter):
                 model=MODEL, response_format={"type": "json_object"},
                 messages=[{"role": "system", "content": "Output valid JSON only."},
                           {"role": "user", "content": prompt}])
-            res = json.loads(resp.choices[0].message.content).get("results", [])
+            res = json.loads(resp.choices[0].message.content or "{}").get("results", [])
         except Exception as exc:
             print(f"  [A] batch {i} failed: {exc}"); continue
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cur:
                 for item in res:
+                    if not isinstance(item, dict):
+                        continue
                     n = item.get("i")
                     if n is None or n >= len(chunk):
                         continue
@@ -156,13 +158,15 @@ def _run_stage_b(client, sup_filter):
                     model=MODEL, response_format={"type": "json_object"},
                     messages=[{"role": "system", "content": "Output valid JSON only."},
                               {"role": "user", "content": prompt}])
-                res = json.loads(resp.choices[0].message.content).get("results", [])
+                res = json.loads(resp.choices[0].message.content or "{}").get("results", [])
             except Exception as exc:
                 print(f"  [B] {l1} batch {i} failed: {exc}"); continue
             conn = DBManager.get_connection()
             try:
                 with conn.cursor() as cur:
                     for item in res:
+                        if not isinstance(item, dict):
+                            continue
                         n = item.get("i")
                         if n is None or n >= len(chunk):
                             continue
