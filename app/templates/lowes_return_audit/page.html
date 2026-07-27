@@ -62,7 +62,8 @@
           {% if r.match_type=='tracking' %}<span class="badge text-bg-success">✅跟踪号</span>
           {% elif r.match_type=='po' %}<span class="badge text-bg-success">✅PO</span>
           {% elif r.match_type=='manual' %}<span class="badge text-bg-primary">👤人工</span>
-          {% elif r.match_type=='inferred' %}<span class="badge text-bg-info text-dark">🔍推断</span>
+          {% elif r.match_type=='inferred' %}<span class="badge text-bg-info text-dark" style="cursor:pointer"
+             onclick="toggleCand('{{ r.tracking }}',this)">🔍推断 {{ r.candidates|length }}候选 ▾</span>
           {% else %}<span class="badge text-bg-secondary">❌未配</span>{% endif %}
         </td>
         <td class="font-monospace mini">
@@ -80,7 +81,7 @@
         <td class="mini text-muted">{{ '%.0f'|format(r.actual_weight or 0) }}lb<br>{{ r.dim }}</td>
       </tr>
       {% if r.match_type=='inferred' and r.candidates %}
-      <tr class="table-light"><td></td><td colspan="9">
+      <tr class="table-light cand-row" id="cand-{{ r.tracking }}" style="display:none"><td></td><td colspan="9">
         <div class="mini text-muted mb-1">🔍 可能匹配的订单(点"选定"确认)：</div>
         {% for c in r.candidates %}
         <div class="cand d-flex align-items-center gap-2">
@@ -104,6 +105,13 @@
 </div></div>
 
 <script>
+function toggleCand(t, el){
+  const row=document.getElementById('cand-'+t);
+  if(!row)return;
+  const show=row.style.display==='none';
+  row.style.display=show?'table-row':'none';
+  if(el)el.innerHTML=el.innerHTML.replace(show?'▾':'▴', show?'▴':'▾');
+}
 document.getElementById('up-form').addEventListener('submit', async function(e){
   e.preventDefault();
   const msg=document.getElementById('up-msg'); msg.textContent='上传解析中…'; msg.className='mini ms-2 text-muted';
