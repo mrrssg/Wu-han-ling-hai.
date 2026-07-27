@@ -1,0 +1,124 @@
+{% extends "base_v2.html" %}
+{% block title %}Lowes退货运费稽核{% endblock %}
+{% block page_title %}Lowes-Autool 退货运费稽核{% endblock %}
+{% block page_sub %}上传 FedEx 发票 → 每票退货匹配 Lowes 订单(跟踪号→PO→推断候选)，看清退货运费损失 + 豪雅已登记退货货值{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-secondary" onclick="rematch(this)">🔄 重新匹配</button>
+{% endblock %}
+
+{% block content %}
+<style>
+.mini{font-size:.72rem}
+.cand{font-size:.76rem;border-left:3px solid #6ea8fe;padding:2px 8px;margin:2px 0;background:#f6f9ff;border-radius:4px}
+</style>
+
+<div class="card p-3 mb-3">
+  <form id="up-form" class="d-flex align-items-center gap-2 flex-wrap">
+    <span class="fw-semibold" style="font-size:.9rem">上传 FedEx 发票 (CSV)：</span>
+    <input type="file" name="invoice" accept=".csv,.CSV" class="form-control form-control-sm" style="width:340px" required>
+    <button class="btn btn-sm btn-primary" type="submit">⬆️ 上传并匹配</button>
+    <span class="text-muted mini">可多次上传，按跟踪号累计去重</span>
+    <span id="up-msg" class="mini ms-2"></span>
+  </form>
+</div>
+
+<div class="row g-2 mb-3">
+  <div class="col"><div class="card p-2 text-center"><div class="mini text-muted">退货运费损失合计</div>
+    <div class="fs-5 fw-bold text-danger">${{ '%.2f'|format(s.ship_total or 0) }}</div>
+    <div class="mini text-muted">已匹配 ${{ '%.2f'|format(s.ship_matched or 0) }}</div></div></div>
+  <div class="col"><div class="card p-2 text-center"><div class="mini text-muted">豪雅已登记退货货值</div>
+    <div class="fs-5 fw-bold text-success">${{ '%.2f'|format(s.claim_cost or 0) }}</div>
+    <div class="mini text-muted">飞书退货登记表</div></div></div>
+  <div class="col"><div class="card p-2 text-center"><div class="mini text-muted">未登记货值(待追)</div>
+    <div class="fs-5 fw-bold text-warning">${{ '%.2f'|format(s.unclaim_cost or 0) }}</div>
+    <div class="mini text-muted">匹配到订单但豪雅未登记</div></div></div>
+  <div class="col"><div class="card p-2 text-center"><div class="mini text-muted">匹配率</div>
+    <div class="fs-5 fw-bold">{{ s.match_rate }}%</div>
+    <div class="mini text-muted">{{ s.matched_n or 0 }}/{{ total }} 票</div></div></div>
+</div>
+
+<div class="card p-2 mb-2 d-flex flex-row gap-2 align-items-center flex-wrap" style="font-size:.83rem">
+  <span class="text-muted mini">筛选匹配类型：</span>
+  {% set tabs = [('','全部 '~total),('tracking','✅跟踪号 '~(s.n_track or 0)),('po','✅PO '~(s.n_po or 0)),('manual','👤人工 '~(s.n_manual or 0)),('inferred','🔍推断 '~(s.n_infer or 0)),('none','❌未配 '~(s.n_none or 0))] %}
+  {% for val,label in tabs %}
+  <a class="btn btn-sm {{ 'btn-primary' if f_match==val else 'btn-outline-secondary' }}"
+     href="{{ url_for('lowes_return_audit.page', m=val or none) }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card"><div class="table-responsive" style="max-height:72vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th>寄出日</th><th>跟踪号</th><th class="text-end">退货运费</th><th>匹配</th>
+      <th>订单号</th><th>SKU</th><th class="text-end">货值(成本)</th><th>豪雅已登记</th>
+      <th>寄件人</th><th style="min-width:80px">重量/箱规</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="mini text-nowrap">{{ r.ship_date or '—' }}</td>
+        <td class="font-monospace mini">{{ r.tracking }}</td>
+        <td class="text-end fw-semibold text-danger">${{ '%.2f'|format(r.net_charge or 0) }}</td>
+        <td>
+          {% if r.match_type=='tracking' %}<span class="badge text-bg-success">✅跟踪号</span>
+          {% elif r.match_type=='po' %}<span class="badge text-bg-success">✅PO</span>
+          {% elif r.match_type=='manual' %}<span class="badge text-bg-primary">👤人工</span>
+          {% elif r.match_type=='inferred' %}<span class="badge text-bg-info text-dark">🔍推断</span>
+          {% else %}<span class="badge text-bg-secondary">❌未配</span>{% endif %}
+        </td>
+        <td class="font-monospace mini">
+          {{ r.order_id or '—' }}
+          {% if r.confirmed %}<span class="text-primary mini">✓</span>{% endif %}
+        </td>
+        <td class="mini">{{ r.shop_sku or '—' }}</td>
+        <td class="text-end">{% if r.cost is not none %}${{ '%.2f'|format(r.cost) }}{% else %}—{% endif %}</td>
+        <td>
+          {% if r.claim_filed==1 %}<span class="text-success">✅已登记</span>
+          {% elif r.claim_filed==0 %}<span class="text-warning">❌未登记</span>
+          {% else %}<span class="text-muted mini">—</span>{% endif %}
+        </td>
+        <td class="mini" style="max-width:180px"><div class="text-truncate" title="{{ r.shipper_name }} · {{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}">{{ r.shipper_name }}<br><span class="text-muted">{{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}</span></div></td>
+        <td class="mini text-muted">{{ '%.0f'|format(r.actual_weight or 0) }}lb<br>{{ r.dim }}</td>
+      </tr>
+      {% if r.match_type=='inferred' and r.candidates %}
+      <tr class="table-light"><td></td><td colspan="9">
+        <div class="mini text-muted mb-1">🔍 可能匹配的订单(点"选定"确认)：</div>
+        {% for c in r.candidates %}
+        <div class="cand d-flex align-items-center gap-2">
+          <span class="badge text-bg-light border">{{ c.score }}</span>
+          <span class="font-monospace">{{ c.order_id }}</span>
+          <span>{{ c.shop_sku or '' }}</span>
+          <span>货值 {% if c.cost is not none %}${{ '%.2f'|format(c.cost) }}{% else %}?{% endif %}</span>
+          <span>{% if c.claim_filed==1 %}<span class="text-success">已登记</span>{% elif c.claim_filed==0 %}<span class="text-warning">未登记</span>{% endif %}</span>
+          <span class="text-muted">{{ c.reason }}</span>
+          <button class="btn btn-outline-primary py-0 px-2" style="font-size:.72rem"
+                  onclick="confirmMatch('{{ r.tracking }}','{{ c.order_id }}')">选定</button>
+        </div>
+        {% endfor %}
+      </td></tr>
+      {% endif %}
+      {% else %}
+      <tr><td colspan="10" class="text-center text-muted py-4">还没有数据——上传一张 FedEx 发票 CSV</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+
+<script>
+document.getElementById('up-form').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const msg=document.getElementById('up-msg'); msg.textContent='上传解析中…'; msg.className='mini ms-2 text-muted';
+  const r=await fetch('{{ url_for("lowes_return_audit.upload") }}',{method:'POST',body:new FormData(this)});
+  const d=await r.json();
+  if(d.success){msg.textContent=`解析${d.parsed}票，新增/更新${d.new_or_updated}，已匹配`;msg.className='mini ms-2 text-success';setTimeout(()=>location.reload(),800);}
+  else{msg.textContent='失败：'+(d.msg||'');msg.className='mini ms-2 text-danger';}
+});
+async function rematch(btn){btn.disabled=true;btn.textContent='匹配中…';
+  const r=await fetch('{{ url_for("lowes_return_audit.rematch") }}',{method:'POST'});
+  const d=await r.json();alert(d.success?('重新匹配完成 '+(d.rematched||0)+' 票'):('失败:'+d.msg));location.reload();}
+async function confirmMatch(tracking,oid){
+  if(!confirm('把跟踪号 '+tracking+' 绑定到订单 '+oid+' ？'))return;
+  const r=await fetch('{{ url_for("lowes_return_audit.confirm") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking,order_id:oid})});
+  const d=await r.json();if(d.success)location.reload();else alert('失败:'+(d.msg||''));}
+</script>
+{% endblock %}
