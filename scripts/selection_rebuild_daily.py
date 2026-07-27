@@ -29,12 +29,12 @@ def _sync_vevor_feed():
         env.setdefault("PYTHONPATH", str(_ROOT))
         rc = subprocess.run(
             [sys.executable, str(_ROOT / "scripts" / "sync_vevor_feed.py")],
-            cwd=str(_ROOT), env=env, timeout=1800,
+            cwd=str(_ROOT), env=env, timeout=2400,
             capture_output=True, text=True)
         tail = (rc.stdout or "").strip().splitlines()[-1:] or [""]
         print(f"[feed] vevor_feed rc={rc.returncode} {time.time()-t:.0f}s {tail[0]}", flush=True)
     except subprocess.TimeoutExpired:
-        print(f"[feed] vevor_feed 超时>1800s，用旧 feed 继续重建", flush=True)
+        print(f"[feed] vevor_feed 超时>2400s，用旧 feed 继续重建", flush=True)
     except Exception as exc:
         print(f"[feed] vevor_feed 失败(用旧 feed 继续): {exc}", flush=True)
 
