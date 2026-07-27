@@ -86,22 +86,26 @@ def main(local_path=None) -> int:
                 _f(g(r, "Goods Weight")),
             ))
 
+        # 多值批量 INSERT（2000/条语句，单次 commit）——比 executemany 快百倍
+        # （老坑：executemany 逐行 RDS 往返 ~40ms/行，2万行要 ~13 分钟）
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cur:
-                for i in range(0, len(rows), 500):
-                    cur.executemany("""
+                for i in range(0, len(rows), 2000):
+                    chunk = rows[i:i + 2000]
+                    ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                    flat = [v for row in chunk for v in row]
+                    cur.execute(f"""
                         INSERT INTO autooperate.vevor_feed
                             (sku, product_type, title, inventory, price, image,
                              long_in, wide_in, high_in, weight_lb, synced_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        VALUES {ph}
                         ON DUPLICATE KEY UPDATE
                             product_type=VALUES(product_type), title=VALUES(title),
                             inventory=VALUES(inventory), price=VALUES(price),
                             image=VALUES(image), long_in=VALUES(long_in),
                             wide_in=VALUES(wide_in), high_in=VALUES(high_in),
-                            weight_lb=VALUES(weight_lb), synced_at=NOW()""",
-                        rows[i:i + 500])
+                            weight_lb=VALUES(weight_lb), synced_at=NOW()""", flat)
             conn.commit()
         finally:
             conn.close()
