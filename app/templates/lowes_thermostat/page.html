@@ -3,6 +3,10 @@
 {% block page_title %}达标恒温器·周体检{% endblock %}
 {% block page_sub %}每周测各 Lowes cell 的成熟净利率(退货到齐的真实数) vs 10%基线，给提价/下架建议。只体检不自动改价{% endblock %}
 {% block page_actions %}
+<a class="btn btn-sm btn-success" href="{{ url_for('repricing.full_export_page', store='lowes_autool') }}"
+   title="生成 Autool 全店最新目标价 Excel，下载后上传 Mirakl 后台(大批量执行提价)">📤 Autool 整体导出</a>
+<a class="btn btn-sm btn-success" href="{{ url_for('repricing.full_export_page', store='lowes_yasonic') }}"
+   title="生成 Yasonic 全店最新目标价 Excel，上传 Mirakl 后台">📤 Yasonic 整体导出</a>
 <button class="btn btn-sm btn-outline-primary" onclick="runCheck(this)">🔄 立即重新体检</button>
 {% endblock %}
 
@@ -40,7 +44,7 @@
         <td class="text-end {{ 'text-danger' if r.freight>0 else 'text-muted' }}">{% if r.freight>0 %}${{ '{:,.0f}'.format(r.freight) }}{% else %}—{% endif %}</td>
         <td class="text-end {{ 'text-danger fw-bold' if r.af_pct<r.margin_pct else '' }}">{{ r.af_pct }}%</td>
         <td class="text-end text-danger">{{ '%+.1f'|format(r.gap_pct) }}</td>
-        <td class="text-end">{% if r.reprice_skus %}<a href="/repricing" title="去待改价页">{{ r.reprice_skus }}</a>{% else %}0{% endif %}</td>
+        <td class="text-end">{% if r.reprice_skus %}<a href="{{ url_for('repricing.full_export_page', store='lowes_autool' if r.store=='Lowes-Autool' else 'lowes_yasonic') }}" title="去整体导出生成Excel上传Mirakl">{{ r.reprice_skus }} 📤</a>{% else %}0{% endif %}</td>
         <td>
           {% if r.verdict=='达标' %}<span class="badge text-bg-success">✅达标</span>
           {% elif '下架' in r.verdict %}<span class="badge text-bg-danger">🔴需下架/减量</span>
@@ -56,8 +60,9 @@
 </div></div>
 
 <p class="text-muted mt-2" style="font-size:.78rem">
-  每周一 07:15 自动体检(cron)。此页只读、只建议——提价/下架仍到
-  <a href="/repricing">定价方案·待改价页</a>人工确认执行,不自动改价。
+  每周一 07:15 自动体检(cron)。此页只诊断、给方向,<b>不自动改价</b>。发现要提价 →
+  点上方或行内 <b>📤整体导出</b> 生成全店最新目标价 Excel → 上传 Mirakl 后台(大批量执行);
+  小批量增量也可走 <a href="/repricing">待改价页</a>逐个确认推。价格都按最新 pricing_tier(已含实测回收/退货损失口径)。
 </p>
 
 <script>
