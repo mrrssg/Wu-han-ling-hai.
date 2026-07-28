@@ -50,16 +50,17 @@ def main() -> int:
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cur:
-                # ① 各cell成熟净利(前两个整月，退货基本到齐)
+                # ① 各cell成熟净利+退货损失(前两个整月，退货基本到齐)
                 cur.execute("""SELECT store, operator,
-                       ROUND(SUM(sale),2) sale, ROUND(SUM(net),2) net
+                       ROUND(SUM(sale),2) sale, ROUND(SUM(net),2) net,
+                       ROUND(SUM(loss_expected),2) loss
                     FROM order_system.profit_month_cohort
                     WHERE store IN ('Lowes-Autool','Lowes-Yasonic')
                       AND order_month IN (%s,%s)
                     GROUP BY store, operator""", (m1, m2))
                 cells = {(r["store"], r["operator"]):
                          {"sale": float(r["sale"] or 0), "net": float(r["net"] or 0),
-                          "up": 0.0, "n": 0, "sale90": 0.0}
+                          "loss": float(r["loss"] or 0), "up": 0.0, "n": 0, "sale90": 0.0}
                          for r in cur.fetchall()}
 
                 # ② 各cell近90天销售额(算提价加几个点的分母)
@@ -83,27 +84,32 @@ def main() -> int:
                     cells[key]["n"] += 1
 
                 # ④ 判定 + 写库
+                #   核心结构信号=成熟退货损失率 vs 顶档覆盖上限(顶档18%名义≈22%毛利−10%基线=12%)
+                #   退货率≤12%: 定价能覆盖,靠待改价提价+v5成熟单周转达标(不是靠现在这点补回一步到位)
+                #   退货率>12%: 顶档也盖不住,结构性亏,要减量/下架高退货SKU
+                TOP_COVER = 0.12
                 rows = []
                 for (store, op), c in sorted(cells.items()):
                     sale, net = c["sale"], c["net"]
                     margin = net / sale if sale > 0 else 0.0
                     gap = BASELINE - margin
+                    loss_rate = (c["loss"] / sale) if sale > 0 else 0.0
                     base90 = c["sale90"] or sale or 1.0
                     pts = c["up"] / base90
                     est_after = margin + pts
                     if gap <= 0.001:
                         verdict = "达标"
                         sug = f"成熟净利率{margin*100:.1f}%已达标，维持。"
-                    elif est_after >= BASELINE - 0.001:
-                        verdict = "提价即可达标"
-                        sug = (f"差{gap*100:.1f}个点；执行待改价页{c['n']}个SKU提价(可补回${c['up']:,.0f}"
-                               f"≈+{pts*100:.1f}点)后估达{est_after*100:.1f}%。去/repricing待改价页确认推送。")
+                    elif loss_rate > TOP_COVER:
+                        verdict = "退货率过高·需减量下架"
+                        sug = (f"缺口{gap*100:.1f}点；成熟退货损失率{loss_rate*100:.1f}%>顶档能覆盖的12%，"
+                               f"提价也盖不住(顶档18%名义≈22%毛利−损失{loss_rate*100:.1f}%<10%)。"
+                               f"必须下架/减量该运营高退货SKU，查pricing_tier该运营loss_rate最高的几个。")
                     else:
-                        verdict = "需上调档或下架"
-                        short = (BASELINE - est_after) * 100
-                        sug = (f"差{gap*100:.1f}个点；就算把{c['n']}个SKU全提价也只到{est_after*100:.1f}%"
-                               f"、仍差{short:.1f}点。说明退货损失太重，需把该cell高退货SKU目标档再上调一档"
-                               f"，顶档(18%)还盖不住的走下架。查 pricing_tier 里该运营 loss_rate 最高的SKU。")
+                        verdict = "定价可覆盖·提价+周转达标"
+                        sug = (f"缺口{gap*100:.1f}点；退货损失率{loss_rate*100:.1f}%在顶档可覆盖范围(<12%)。"
+                               f"成熟净利低是老定价遗留——①去/repricing待改价页把{c['n']}个待提价SKU推掉"
+                               f"(即补${c['up']:,.0f}≈+{pts*100:.1f}点)；②等v5成熟单周转到位,净利率会自然爬向10%。")
                     rows.append((check_date, store, op, f"{m2}+{m1}", round(sale, 2), round(net, 2),
                                  round(margin, 4), round(gap, 4), c["n"], round(c["up"], 2),
                                  round(pts, 4), round(est_after, 4), verdict, sug[:800]))
