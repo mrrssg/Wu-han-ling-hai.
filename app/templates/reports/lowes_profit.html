@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lowes 利润率诊断与保利润率方案</title>
+<style>
+  :root{
+    --ground:#F5F7F7; --surface:#FFFFFF; --surface-2:#EEF2F2;
+    --ink:#14201F; --ink-soft:#546160; --ink-faint:#8A9795; --line:#DFE6E5;
+    --primary:#0E5B57; --primary-tint:#E4F0EF;
+    --loss:#B0322A; --loss-tint:#F7E6E4; --warn:#9A6410; --warn-tint:#F8EEDD;
+    --good:#1B7550; --good-tint:#E1F1E9;
+    --shadow:0 1px 2px rgba(20,32,31,.06),0 8px 24px rgba(20,32,31,.05);
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0E1615; --surface:#16211F; --surface-2:#1D2A28;
+      --ink:#E9F0EE; --ink-soft:#9BAAA7; --ink-faint:#6B7A77; --line:#273533;
+      --primary:#3FB9B0; --primary-tint:#12332F;
+      --loss:#E4756B; --loss-tint:#38211E; --warn:#D5A24E; --warn-tint:#33291693;
+      --good:#4FBE8C; --good-tint:#14332690;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1615; --surface:#16211F; --surface-2:#1D2A28;
+    --ink:#E9F0EE; --ink-soft:#9BAAA7; --ink-faint:#6B7A77; --line:#273533;
+    --primary:#3FB9B0; --primary-tint:#12332F;
+    --loss:#E4756B; --loss-tint:#38211E; --warn:#D5A24E; --warn-tint:#332916;
+    --good:#4FBE8C; --good-tint:#143326;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --ground:#F5F7F7; --surface:#FFFFFF; --surface-2:#EEF2F2;
+    --ink:#14201F; --ink-soft:#546160; --ink-faint:#8A9795; --line:#DFE6E5;
+    --primary:#0E5B57; --primary-tint:#E4F0EF;
+    --loss:#B0322A; --loss-tint:#F7E6E4; --warn:#9A6410; --warn-tint:#F8EEDD;
+    --good:#1B7550; --good-tint:#E1F1E9;
+    --shadow:0 1px 2px rgba(20,32,31,.06),0 8px 24px rgba(20,32,31,.05);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.62;font-size:16px;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:940px;margin:0 auto;padding:0 24px 96px;}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono);}
+
+  /* masthead */
+  .mast{padding:64px 0 34px;border-bottom:2px solid var(--ink);}
+  .eyebrow{font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--primary);
+    font-weight:700;margin-bottom:14px;}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.08;margin:0 0 14px;font-weight:800;
+    letter-spacing:-.015em;text-wrap:balance;}
+  .sub{font-size:18px;color:var(--ink-soft);max-width:60ch;margin:0;}
+  .meta{display:flex;gap:20px;flex-wrap:wrap;margin-top:22px;font-size:13px;color:var(--ink-faint);}
+  .meta b{color:var(--ink-soft);font-weight:600;}
+
+  /* principle banner */
+  .principle{margin:26px 0 0;background:var(--primary);color:#fff;border-radius:12px;
+    padding:20px 24px;display:flex;gap:16px;align-items:flex-start;box-shadow:var(--shadow);}
+  :root[data-theme="dark"] .principle{color:#04120f;}
+  @media (prefers-color-scheme:dark){.principle{color:#04120f;}}
+  .principle .k{font-size:26px;line-height:1;}
+  .principle p{margin:0;font-size:16.5px;font-weight:600;}
+  .principle small{display:block;font-weight:500;opacity:.85;margin-top:4px;font-size:13.5px;}
+
+  section{padding-top:52px;}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+  .sec-no{font-family:var(--mono);font-size:14px;color:var(--primary);font-weight:700;
+    border:1.5px solid var(--primary);border-radius:6px;padding:2px 8px;flex:none;}
+  h2{font-size:25px;margin:0;font-weight:800;letter-spacing:-.01em;text-wrap:balance;}
+  .lede{color:var(--ink-soft);font-size:16px;margin:6px 0 22px;max-width:66ch;}
+  h3{font-size:17px;margin:26px 0 10px;font-weight:700;}
+  p{margin:12px 0;}
+  strong{font-weight:700;}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:20px 22px;box-shadow:var(--shadow);margin:16px 0;}
+  .grid{display:grid;gap:14px;}
+  @media(min-width:660px){.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:1fr 1fr}}
+
+  /* stat tiles */
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+    box-shadow:var(--shadow);}
+  .stat .lab{font-size:12px;letter-spacing:.04em;color:var(--ink-faint);text-transform:uppercase;font-weight:600;}
+  .stat .big{font-size:30px;font-weight:800;font-family:var(--mono);letter-spacing:-.02em;margin:4px 0 2px;}
+  .stat .cap{font-size:12.5px;color:var(--ink-soft);}
+  .stat.bad .big{color:var(--loss)} .stat.good .big{color:var(--good)} .stat.warn .big{color:var(--warn)}
+
+  /* problem card w/ severity stripe */
+  .prob{position:relative;padding-left:22px;}
+  .prob::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:5px;}
+  .prob.crit::before{background:var(--loss)} .prob.warn::before{background:var(--warn)}
+  .prob.info::before{background:var(--primary)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+    letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:999px;vertical-align:middle;}
+  .chip.crit{background:var(--loss-tint);color:var(--loss)} .chip.warn{background:var(--warn-tint);color:var(--warn)}
+  .chip.info{background:var(--primary-tint);color:var(--primary)} .chip.good{background:var(--good-tint);color:var(--good)}
+  .prob h3{margin:0 0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0;}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);}
+  th,td{padding:10px 13px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-faint);font-weight:700;
+    background:var(--surface-2);}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);}
+  tr:last-child td{border-bottom:none;}
+  .neg{color:var(--loss);font-weight:700} .pos{color:var(--good);font-weight:700}
+
+  /* formula block */
+  .formula{background:var(--ink);color:var(--ground);border-radius:12px;padding:24px 26px;margin:18px 0;
+    font-size:17px;line-height:1.9;}
+  :root[data-theme="dark"] .formula{background:var(--surface-2);color:var(--ink);border:1px solid var(--line);}
+  @media (prefers-color-scheme:dark){.formula{background:var(--surface-2);color:var(--ink);border:1px solid var(--line);}}
+  .formula .op{color:var(--primary);font-weight:800;}
+  .formula .half{color:#7fd6cf;font-weight:700;}
+  .formula .tag{display:block;font-size:12.5px;opacity:.7;margin-top:2px;font-family:var(--sans);}
+
+  /* action lever */
+  .lever{border:1px solid var(--line);border-radius:12px;background:var(--surface);margin:14px 0;
+    overflow:hidden;box-shadow:var(--shadow);}
+  .lever>summary{padding:16px 20px;cursor:pointer;font-weight:700;font-size:16px;display:flex;
+    gap:12px;align-items:center;list-style:none;}
+  .lever>summary::-webkit-details-marker{display:none}
+  .lever>summary .caret{margin-left:auto;color:var(--ink-faint);transition:transform .2s;}
+  .lever[open]>summary .caret{transform:rotate(90deg)}
+  .lever .body{padding:0 20px 18px;border-top:1px solid var(--line);}
+  .tag-prio{font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;letter-spacing:.03em;}
+  .p1{background:var(--loss);color:#fff} .p2{background:var(--warn);color:#fff} .p3{background:var(--primary);color:#fff}
+  ol,ul{padding-left:20px;} li{margin:7px 0;}
+
+  /* chain / loop */
+  .loop{display:grid;gap:10px;margin:18px 0;}
+  @media(min-width:720px){.loop{grid-template-columns:repeat(5,1fr);align-items:stretch;}}
+  .node{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px;
+    text-align:center;box-shadow:var(--shadow);position:relative;}
+  .node .ni{font-size:22px;} .node .nt{font-weight:700;font-size:14.5px;margin:6px 0 3px;}
+  .node .nd{font-size:12px;color:var(--ink-soft);line-height:1.45;}
+  .loop-note{text-align:center;font-size:13px;color:var(--ink-soft);margin-top:6px;}
+
+  .callout{background:var(--warn-tint);border:1px solid var(--warn);border-radius:10px;padding:14px 18px;
+    margin:16px 0;font-size:14.5px;}
+  .callout b{color:var(--warn);}
+  .goodout{background:var(--good-tint);border:1px solid var(--good);border-radius:10px;padding:14px 18px;
+    margin:16px 0;font-size:14.5px;}
+
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-faint);}
+  a{color:var(--primary);}
+  .toggle{position:fixed;top:16px;right:16px;background:var(--surface);border:1px solid var(--line);
+    color:var(--ink-soft);border-radius:999px;padding:7px 14px;font-size:12.5px;cursor:pointer;z-index:9;
+    box-shadow:var(--shadow);font-family:var(--sans);}
+  .toggle:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
+</style>
+
+</head>
+<body>
+<button class="toggle" id="tg" aria-label="切换深浅色">◑ 深/浅色</button>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">利润率专项 · 诊断与行动方案</div>
+    <h1>Lowes 利润率为什么保不住 10%，以及怎么保住它</h1>
+    <p class="sub">把"利润率≥10%"从事后才发现的结果，变成事前定死、事中可控的目标。核心结论：定价不是主要问题，<strong>退货的两半损失（货值 + 运费）没算全、也没收回</strong>才是。</p>
+    <div class="meta">
+      <span><b>范围</b> Lowes-Autool（豪雅）· 延伸 Lowes-Yasonic（司顺）</span>
+      <span><b>口径</b> 滚动90天考核 + 成熟月核对</span>
+      <span><b>日期</b> 2026-07-28</span>
+    </div>
+    <div class="principle">
+      <span class="k">🎯</span>
+      <p>最高原则：实际利润率永远优先，可以接受销量下降。
+        <small>一切方案以"净利率稳在 10% 以上"为硬约束；销量是可让渡的变量，利润率不是。</small></p>
+    </div>
+  </header>
+
+  <!-- 摘要 -->
+  <section id="summary">
+    <div class="sec-head"><span class="sec-no">00</span><h2>一页看懂</h2></div>
+    <p class="lede">Lowes-Autool 三个运营的 90 天考核净利率全部卡在 10% 线下一点点。毛利本身是好的，被"退货全损 + 运费漏算"两件事拖穿。</p>
+    <div class="grid g3">
+      <div class="stat bad"><div class="lab">Autool 三运营净利率</div><div class="big">8.9–9.8%</div><div class="cap">全部＜10% 基线（考核口径）</div></div>
+      <div class="stat good"><div class="lab">真实毛利率</div><div class="big">13.8–15.5%</div><div class="cap">在基线之上——定价不是主因</div></div>
+      <div class="stat warn"><div class="lab">被漏算的退货运费</div><div class="big">$8,624</div><div class="cap">FedEx 63 票实测，模型基本没进损失</div></div>
+    </div>
+    <div class="callout">
+      <b>一句话诊断：</b>毛利 14% 左右本可达标，但 <strong>退货货值按 100% 全损扣（回收=0）</strong> 砍掉约 5 个点、<strong>真实退货运费又没算进去</strong>（模型按 0 或"售价×10%"，实际远超），两件事叠加把净利压到 9%。二者都能救，且救回来不必牺牲销量。
+    </div>
+  </section>
+
+  <!-- 01 诊断 -->
+  <section id="diag">
+    <div class="sec-head"><span class="sec-no">01</span><h2>诊断：问题到底出在哪</h2></div>
+    <p class="lede">按 90 天考核口径拆解，三个运营的净利率是"好毛利被退货吃穿"，不是价定低了。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>运营（Autool·90天）</th><th class="n">销售额</th><th class="n">真实毛利率</th><th class="n">待追敞口·全损</th><th class="n">确认退损</th><th class="n">修正净利率</th><th class="n">距10%</th></tr></thead>
+        <tbody>
+          <tr><td>刘梦蝶</td><td class="n">$212,752</td><td class="n">15.5%</td><td class="n">$12,105 · 5.7%</td><td class="n">$128</td><td class="n">9.8%</td><td class="n neg">−0.2</td></tr>
+          <tr><td>明瑞瑞</td><td class="n">$268,140</td><td class="n">13.9%</td><td class="n">$13,092 · 4.9%</td><td class="n">$257</td><td class="n">8.9%</td><td class="n neg">−1.1</td></tr>
+          <tr><td>朱以超</td><td class="n">$341,961</td><td class="n">13.8%</td><td class="n">$15,456 · 4.5%</td><td class="n">$539</td><td class="n">9.1%</td><td class="n neg">−0.9</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13.5px;color:var(--ink-soft)">读法：<span class="num">真实毛利率 − 待追敞口全损率 − 确认退损率 ≈ 修正净利率</span>。例：明瑞瑞 13.9% − 4.9% − 0.1% = 8.9%。<strong>"待追敞口"就是这批还没定案的退货，被系统按回收率=0 全额预扣。</strong></p>
+
+    <div class="card prob crit">
+      <h3><span class="chip crit">根因 1 · 高危</span>退货货值按 100% 全损，因为回收率=0</h3>
+      <p>系统对 Lowes×豪雅退货的回收率写死为 <strong>0（全损）</strong>——依据是实测：豪雅对 Lowes 退货<strong>实际退款 $0</strong>，78 笔已登记追款里 <strong>77 笔"没动静"</strong>（连回应都没有）。于是每笔退货整成本全扣，约吃掉 4.5–5.7 个点净利。</p>
+      <p style="margin-bottom:0">对照：<strong>同样是豪雅供货，Macy 那边实测回收率 94.2%。</strong>没有道理 Lowes 一分都要不回——这是"没去做"，不是"做不到"。</p>
+    </div>
+
+    <div class="card prob crit">
+      <h3><span class="chip crit">根因 2 · 高危</span>退货运费严重漏算——你提醒的另一半</h3>
+      <p>损失从来不只是货值，还有把货运回来的<strong>退货运费</strong>。系统现在的处理几乎等于没算：</p>
+      <div class="tbl-wrap" style="margin-top:10px"><table>
+        <thead><tr><th>退货类型</th><th>模型假设运费</th><th>真实情况</th></tr></thead>
+        <tbody>
+          <tr><td>无跟踪号（买家退实体店）</td><td>= 0</td><td>确实不掏运费，OK</td></tr>
+          <tr><td>有跟踪号（FedEx 寄回仓）</td><td class="neg">= 售价 × 10%（估）</td><td class="neg">FedEx 实际扣费，常常远超</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:12px">FedEx 发票稽核实测：<strong>63 票退货共 $8,624 运费</strong>，其中出现"运费＞货值"的黑洞：</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>SKU / 单</th><th class="n">退货运费</th><th class="n">货值成本</th><th>箱规</th><th>问题</th></tr></thead>
+        <tbody>
+          <tr><td>遮阳伞（Altoona门店代退）</td><td class="n neg">$3,044</td><td class="n">~$60</td><td class="num">60×20×60</td><td>10磅塞进巨箱→抛重518磅</td></tr>
+          <tr><td>ATCO-MRLW588442（明）</td><td class="n neg">$535</td><td class="n">$157</td><td class="num">35×30×20</td><td>运费=货值的 3.4 倍</td></tr>
+          <tr><td>ATCO-MRLW183661（明）</td><td class="n neg">$156</td><td class="n">$97</td><td class="num">41×31×10</td><td>运费=货值的 1.6 倍</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-bottom:0"><strong>货就算 100% 要回来，这笔运费照样纯亏</strong>——回收救不了运费，这是独立的一半。</p>
+    </div>
+
+    <div class="card prob warn">
+      <h3><span class="chip warn">根因 3 · 中</span>五/六月单是老定价卖的，没预留退货</h3>
+      <p style="margin-bottom:0">v5 分档定价 7 月才上线（Autool 07-16、Yasonic 07-22）。之前的单毛利只有名义值、没把退货损失做进价格，退货一到齐净利就掉到 5–9%。<strong>v5 已经把退货损失做进目标价，但只对新单生效，要等订单周转。</strong></p>
+    </div>
+
+    <div class="card prob warn">
+      <h3><span class="chip warn">根因 4 · 中</span>个别"毒 SKU"集中拖累</h3>
+      <p style="margin-bottom:0"><strong>ATCO-MRLW746900（明瑞瑞）一个月退 4 笔、亏 $2,220</strong>，单这一个就压低她当月净利率 1.7 个点。这种连续退货、货又不回仓的品，定价救不了，只能下架。</p>
+    </div>
+
+    <div class="card prob info">
+      <h3><span class="chip info">连带 · Yasonic</span>司顺更狠：退货零回收 + 退店销毁</h3>
+      <p style="margin-bottom:0">Lowes-Yasonic（司顺/Vevor）退货<strong>退实体店直接销毁</strong>，货拿不回、也没跟踪号回仓，回收恒为 0——比 Autool 更没退路。六月朱以超退损率 10.8%，净利率 4.6%，是最危险的 cell。</p>
+    </div>
+  </section>
+
+  <!-- 02 损失模型 -->
+  <section id="model">
+    <div class="sec-head"><span class="sec-no">02</span><h2>完整的退货损失模型</h2></div>
+    <p class="lede">要保利润率，先得把损失算全。真实的退货损失是两半相加，系统现在只认了第一半的一部分。</p>
+    <div class="formula">
+      退货总损失 <span class="op">=</span>
+      <span class="half">货值 × (1 − 回收率)</span>
+      <span class="op">+</span>
+      <span class="half">真实退货运费</span>
+      <span class="tag">① 货值半边：靠"回收"缩小（追豪雅退款 / 货回仓二次卖）。现状回收=0，全损。</span>
+      <span class="tag">② 运费半边：纯支出，回收救不了。现状按 0 / 售价×10% 估，实际远超。</span>
+    </div>
+    <p>定价要盖住的，是这<strong>整个</strong>损失除以销售额得到的"完整退货损失率"，再加 10% 基线：</p>
+    <div class="formula" style="font-size:16px">
+      定价目标毛利 <span class="op">=</span> 10% 基线
+      <span class="op">+</span> <span class="half">货值全损率 × (1 − 回收率)</span>
+      <span class="op">+</span> <span class="half">真实运费率</span>
+    </div>
+    <div class="callout"><b>现在的口径缺了什么：</b>① 回收率写死 0（最保守，但意味着必须靠定价全额留够）；② 运费只按"售价×10%"估，把 $3,044 这种抛重爆炸和 $535 这种黑洞全漏掉了。<strong>两个洞不补，定出来的价永远盖不住真实损失，净利率就永远差那几个点。</strong></p>
+  </section>
+
+  <!-- 03 方案 -->
+  <section id="plan">
+    <div class="sec-head"><span class="sec-no">03</span><h2>方案：怎么把 10% 保回来</h2></div>
+    <p class="lede">按损失模型的两半 + 定价 + 闭环四条线动手。每条标了优先级（<span class="tag-prio p1">P1</span> 快且省钱 / <span class="tag-prio p2">P2</span> 结构性 / <span class="tag-prio p3">P3</span> 兜底）。原则不变：保利润率优先，销量可让。</p>
+
+    <h3>A · 货值半边 —— 把回收从 0 做起来（不牺牲销量）</h3>
+    <details class="lever" open>
+      <summary><span class="tag-prio p1">P1</span> A1 追豪雅退款：0 → 温和目标 ~20% <span class="caret">▸</span></summary>
+      <div class="body">
+        <p>关键算过的账：按现在的价，<strong>要到 10%，各运营只需要很小的回收率</strong>——</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>运营</th><th class="n">当前净利</th><th class="n">达10%只需回收</th></tr></thead>
+          <tbody>
+            <tr><td>刘梦蝶</td><td class="n">9.8%</td><td class="n pos">~4%（几乎已到）</td></tr>
+            <tr><td>明瑞瑞</td><td class="n">8.9%</td><td class="n">~23%</td></tr>
+            <tr><td>朱以超</td><td class="n">9.1%</td><td class="n">~20%</td></tr>
+          </tbody>
+        </table></div>
+        <p>Macy 同样豪雅供货能做到 94%。<strong>Lowes 只要做到 ~20%（Macy 的零头），明/朱 就达标，一分价都不用涨、销量不掉。</strong></p>
+        <p style="margin-bottom:0"><strong>动作：</strong>财务对那 78 笔已登记的退货逐笔跟豪雅追款并回填「供应商退款」字段。回收率一从 0 起来，所有月份净利自动上修——<em>这是全盘 ROI 最高、且不掉量的一件事。</em></p>
+      </div>
+    </details>
+    <details class="lever">
+      <summary><span class="tag-prio p2">P2</span> A2 货回仓务必二次卖，别写死账 <span class="caret">▸</span></summary>
+      <div class="body"><p style="margin:12px 0 0">有跟踪号退回海外仓的货是能二次卖的（成本可全额收回）。要确保这批货真的重新上架/清货，而不是躺仓库当损失。这部分回收是"货在手里"的确定性回收，比追豪雅更稳。</p></div>
+    </details>
+
+    <h3>B · 运费半边 —— 独立的一半，回收救不了它</h3>
+    <details class="lever" open>
+      <summary><span class="tag-prio p1">P1</span> B1 修过度包装 + 申诉 FedEx 抛重错误 <span class="caret">▸</span></summary>
+      <div class="body">
+        <p style="margin-top:12px">那把伞 $3,044 = 45 寸的伞被门店/仓塞进 60×60 的巨箱，被按抛重 518 磅计费。<strong>这类离谱运费可以：①向 FedEx 申诉计费错误；②给仓库定包装规范（按货真实尺寸装箱）。</strong>单这一项就能省几千刀，且立竿见影。</p>
+        <p style="margin-bottom:0">建立"运费＞货值"自动预警：一旦某票退货运费超过货值，立刻人工看是不是抛重/包装问题。</p>
+      </div>
+    </details>
+    <details class="lever">
+      <summary><span class="tag-prio p2">P2</span> B2 把真实运费喂进定价，别再用"售价×10%"估 <span class="caret">▸</span></summary>
+      <div class="body"><p style="margin:12px 0 0">定价/恒温器现在用"售价×10%"估退货运费，严重低估。改用 <a href="#tools">/lowes-return-audit</a> 稽核出的 <strong>FedEx 真实运费</strong>算各 SKU/类目的运费率，定价才真盖得住。大件（伞、桌）的运费率会明显偏高，定价会自动给它们留更厚毛利。</p></div>
+    </details>
+    <details class="lever">
+      <summary><span class="tag-prio p3">P3</span> B3 又贵运费又高退货的大件 SKU 下架 <span class="caret">▸</span></summary>
+      <div class="body"><p style="margin:12px 0 0">退一次运费就吃掉整单利润的大件（尤其抛重高的伞类、大桌），如果退货率也高，定价再厚也保不住——直接下架止损，不纠结。</p></div>
+    </details>
+
+    <h3>C · 定价半边 —— 目标毛利盖住"完整损失"，用温和而非极端的回收假设</h3>
+    <details class="lever" open>
+      <summary><span class="tag-prio p2">P2</span> C1 目标毛利 = 10% + 货值损失率×(1−温和回收) + 真实运费率 <span class="caret">▸</span></summary>
+      <div class="body">
+        <p style="margin-top:12px">不按"回收=0"极端定价（那会过度提价、掉太多量），也不按 Macy 90% 乐观。<strong>取一个温和的回收假设（如 ~20%，你能承诺去追的水平），价只盖住剩下的 80% 货值损失 + 真实运费。</strong></p>
+        <p style="margin-bottom:0">这样提价面最小、销量牺牲最少；剩下靠 A（追回收）和 B（控运费）补齐。</p>
+      </div>
+    </details>
+    <details class="lever">
+      <summary><span class="tag-prio p3">P3</span> C2 盖不住的档位上调，顶档也盖不住的下架 <span class="caret">▸</span></summary>
+      <div class="body"><p style="margin:12px 0 0">对完整损失率高的 cell/SKU，把目标档整体上调（明/朱各约 +1 点毛利）。若连顶档（18%名义≈22%毛利）都盖不住（完整损失率＞12%），走下架。这条判据已经写进恒温器。</p></div>
+    </details>
+    <div class="callout"><b>诚实的代价：</b>C 这条一定会掉一点销量（价定高了）。但按最高原则，<strong>利润率优先于销量</strong>——而且大部分缺口靠 A（追回收，不掉量）和 B（控运费，不掉量）能补，真需要靠 C 提价的面会很小。</div>
+
+    <h3>D · 闭环 —— 恒温器盯着真实净利，不达标自动报警</h3>
+    <details class="lever" open>
+      <summary><span class="tag-prio p1">P1</span> D1 恒温器周体检（已上线，需把真实运费接进去） <span class="caret">▸</span></summary>
+      <div class="body"><p style="margin:12px 0 0">每周测各 cell 成熟净利率 vs 10%，判"提价能救 / 退货率过高得下架"，谁贴近红线自动亮。<strong>下一步把 B2 的真实运费接进恒温器的损失口径</strong>，让它测的是"货值+运费"的完整净利，而不是漏了运费的乐观数。这样它一报"达标"就是真达标。</p></div>
+    </details>
+  </section>
+
+  <!-- 04 连接 -->
+  <section id="loop">
+    <div class="sec-head"><span class="sec-no">04</span><h2>每个环节怎么连成一个闭环</h2></div>
+    <p class="lede">你说的"每个环节之间都有连接"就是这条回路：定价设目标 → 退货产生损失 → 回收与运费控制缩小损失 → 恒温器量真实净利 → 反馈回定价/下架。转起来，利润率才可控。</p>
+    <div class="loop">
+      <div class="node"><div class="ni">🎯</div><div class="nt">定价</div><div class="nd">目标毛利=10%+完整损失率，把退货预留进价</div></div>
+      <div class="node"><div class="ni">↩︎</div><div class="nt">退货损失</div><div class="nd">货值×(1−回收) + 真实运费，两半</div></div>
+      <div class="node"><div class="ni">💰</div><div class="nt">回收+控运费</div><div class="nd">追豪雅/货回仓 + 修包装/申诉，缩小损失</div></div>
+      <div class="node"><div class="ni">🌡️</div><div class="nt">恒温器</div><div class="nd">周测真实净利 vs 10%，谁不达标亮红</div></div>
+      <div class="node"><div class="ni">🔁</div><div class="nt">反馈</div><div class="nd">不达标→提价/下架/加大追款，回到起点</div></div>
+    </div>
+    <p class="loop-note">— 每一环的数据都喂给下一环；恒温器把结果反馈回定价，形成负反馈锁定 10% —</p>
+    <div class="goodout"><strong>为什么这样才有"确定性"：</strong>单靠定价是开环（估一次、听天由命）；靠回收是赌（豪雅退不退不由你）。<strong>闭环的意义是——恒温器对着"真实结果"调，不管回收多少、运费多少，只要真实净利＜10% 就自动指出该动谁。</strong>回收的不确定性被闭环消化掉了。</div>
+  </section>
+
+  <!-- 05 优先级 -->
+  <section id="do">
+    <div class="sec-head"><span class="sec-no">05</span><h2>先做什么：优先级与预期</h2></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>顺序</th><th>动作</th><th>掉销量?</th><th>预期</th></tr></thead>
+      <tbody>
+        <tr><td class="n">1</td><td><b>B1 修过度包装 + 申诉 FedEx</b></td><td class="pos">不掉</td><td>立省几千刀，砍掉 $3,044 这类黑洞</td></tr>
+        <tr><td class="n">2</td><td><b>A1 追豪雅回收 0→~20%</b></td><td class="pos">不掉</td><td>明/朱 直接达标，刘早已达标</td></tr>
+        <tr><td class="n">3</td><td><b>B2 真实运费进定价/恒温器</b></td><td class="pos">不掉</td><td>定价和考核第一次算全损失，不再自欺</td></tr>
+        <tr><td class="n">4</td><td><b>B3+C2 毒SKU/大件下架</b></td><td>小掉</td><td>去掉救不回的亏损品，抬地板</td></tr>
+        <tr><td class="n">5</td><td><b>C1 温和回收假设定价 + 待改价执行</b></td><td>会掉</td><td>剩余缺口靠提价补，面已被 1-4 压到最小</td></tr>
+        <tr><td class="n">6</td><td><b>D1 恒温器周跟踪（接真实运费）</b></td><td>—</td><td>持续锁定，不达标自动亮红</td></tr>
+      </tbody>
+    </table></div>
+    <div class="goodout" style="margin-top:18px"><strong>关键判断：</strong>前 3 件（省运费、追回收、算全损失）<strong>都不掉销量</strong>，就能把明/朱 从 9% 拉到 10% 以上。真正需要"提价换利润率"的（第 5 件），面已经被压到很小。<strong>所以"保 10%"不必以大幅牺牲销量为代价——牺牲是兜底手段，不是主力。</strong></div>
+  </section>
+
+  <!-- 06 工具 -->
+  <section id="tools">
+    <div class="sec-head"><span class="sec-no">06</span><h2>支撑这套方案的工具（已建好）</h2></div>
+    <div class="grid g3">
+      <div class="card" style="margin:0"><h3 style="margin-top:0">🌡️ 达标恒温器</h3><p style="font-size:14px;margin-bottom:0"><code>/thermostat</code>·每周一自动测各 cell 成熟净利 vs 10%，给提价/下架建议。只体检不自动改价。<strong>待接入 B2 真实运费。</strong></p></div>
+      <div class="card" style="margin:0"><h3 style="margin-top:0">🧾 退货运费稽核</h3><p style="font-size:14px;margin-bottom:0"><code>/lowes-return-audit</code>·上传 FedEx 发票→逐票匹配订单，看清退货运费损失 + 已登记货值。<strong>B1/B2 的数据源。</strong></p></div>
+      <div class="card" style="margin:0"><h3 style="margin-top:0">💲 待改价执行清单</h3><p style="font-size:14px;margin-bottom:0"><code>/repricing</code>·每天自动生成待提价 SKU（现价→目标价），人工确认推 Mirakl。<strong>C1/C2 的执行臂。</strong></p></div>
+    </div>
+  </section>
+
+  <footer>
+    Lowes 利润率诊断与保利润率方案 · 2026-07-28 · 数据来源：profit_cell_daily / return_case / fedex_return_audit / pricing_tier。
+    口径详见 profit-control skill。本报告用于内部决策，数字随每日聚合与 FedEx 发票上传更新。
+  </footer>
+</div>
+
+<script>
+  (function(){
+    var b=document.getElementById('tg'), r=document.documentElement;
+    b.addEventListener('click',function(){
+      var cur=r.getAttribute('data-theme');
+      if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+      r.setAttribute('data-theme',cur==='dark'?'light':'dark');
+    });
+  })();
+</script>
+
+</body>
+</html>

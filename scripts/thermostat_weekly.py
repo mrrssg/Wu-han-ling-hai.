@@ -60,8 +60,17 @@ def main() -> int:
                     GROUP BY store, operator""", (m1, m2))
                 cells = {(r["store"], r["operator"]):
                          {"sale": float(r["sale"] or 0), "net": float(r["net"] or 0),
-                          "loss": float(r["loss"] or 0), "up": 0.0, "n": 0, "sale90": 0.0}
+                          "loss": float(r["loss"] or 0), "up": 0.0, "n": 0, "sale90": 0.0,
+                          "freight": 0.0}
                          for r in cur.fetchall()}
+
+                # ①b FedEx稽核真实退货运费(发票都是Autool退货) → 按SKU前缀归运营
+                cur.execute("""SELECT shop_sku, net_charge FROM order_system.fedex_return_audit
+                               WHERE shop_sku IS NOT NULL AND net_charge IS NOT NULL""")
+                for r in cur.fetchall():
+                    key = ("Lowes-Autool", _op_of(r["shop_sku"]))
+                    if key in cells:
+                        cells[key]["freight"] += float(r["net_charge"] or 0)
 
                 # ② 各cell近90天销售额(算提价加几个点的分母)
                 cur.execute("""SELECT store, shop_sku, sale FROM order_system.profit_sku_90d
@@ -97,6 +106,8 @@ def main() -> int:
                     base90 = c["sale90"] or sale or 1.0
                     pts = c["up"] / base90
                     est_after = margin + pts
+                    real_freight = c["freight"]
+                    margin_af = (net - real_freight) / sale if sale > 0 else margin
                     if gap <= 0.001:
                         verdict = "达标"
                         sug = f"成熟净利率{margin*100:.1f}%已达标，维持。"
@@ -110,19 +121,25 @@ def main() -> int:
                         sug = (f"缺口{gap*100:.1f}点；退货损失率{loss_rate*100:.1f}%在顶档可覆盖范围(<12%)。"
                                f"成熟净利低是老定价遗留——①去/repricing待改价页把{c['n']}个待提价SKU推掉"
                                f"(即补${c['up']:,.0f}≈+{pts*100:.1f}点)；②等v5成熟单周转到位,净利率会自然爬向10%。")
+                    if real_freight > 0:
+                        sug += (f" 另:已稽核真实退货运费${real_freight:,.0f}(模型多按'售价×10%'低估)，"
+                                f"扣掉后净利率降到{margin_af*100:.1f}%——运费半边要靠修包装/申诉FedEx/大件下架。")
                     rows.append((check_date, store, op, f"{m2}+{m1}", round(sale, 2), round(net, 2),
-                                 round(margin, 4), round(loss_rate, 4), round(gap, 4), c["n"],
+                                 round(margin, 4), round(loss_rate, 4), round(real_freight, 2),
+                                 round(margin_af, 4), round(gap, 4), c["n"],
                                  round(c["up"], 2), round(pts, 4), round(est_after, 4), verdict, sug[:800]))
 
                 for r in rows:
                     cur.execute("""INSERT INTO order_system.thermostat_weekly
                         (check_date,store,operator,mature_months,mature_sale,mature_net,
-                         mature_margin,loss_rate,gap,reprice_skus,reprice_uplift,reprice_points,
-                         est_margin_after,verdict,suggestion)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         mature_margin,loss_rate,real_freight,margin_after_freight,gap,reprice_skus,
+                         reprice_uplift,reprice_points,est_margin_after,verdict,suggestion)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON DUPLICATE KEY UPDATE mature_sale=VALUES(mature_sale),
                           mature_net=VALUES(mature_net), mature_margin=VALUES(mature_margin),
-                          loss_rate=VALUES(loss_rate), gap=VALUES(gap), reprice_skus=VALUES(reprice_skus),
+                          loss_rate=VALUES(loss_rate), real_freight=VALUES(real_freight),
+                          margin_after_freight=VALUES(margin_after_freight),
+                          gap=VALUES(gap), reprice_skus=VALUES(reprice_skus),
                           reprice_uplift=VALUES(reprice_uplift), reprice_points=VALUES(reprice_points),
                           est_margin_after=VALUES(est_margin_after), verdict=VALUES(verdict),
                           suggestion=VALUES(suggestion)""", r)
@@ -132,8 +149,8 @@ def main() -> int:
 
         print(f"=== 恒温器体检 {check_date} (成熟月 {m2}+{m1}) ===")
         for r in rows:
-            print(f"  {r[1]} {r[2]}: 成熟净利{r[6]*100:.1f}% 退损{r[7]*100:.1f}% 缺口{r[8]*100:+.1f} "
-                  f"[{r[13]}] 提价{r[9]}个/+{r[11]*100:.1f}点")
+            print(f"  {r[1]} {r[2]}: 成熟净利{r[6]*100:.1f}% 退损{r[7]*100:.1f}% 缺口{r[10]*100:+.1f} "
+                  f"真实运费${r[8]:,.0f}→扣后{r[9]*100:.1f}% [{r[15]}]")
     return 0
 
 

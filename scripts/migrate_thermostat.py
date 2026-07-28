@@ -47,12 +47,16 @@ def main() -> int:
         try:
             with conn.cursor() as cur:
                 cur.execute(DDL)
-                try:
-                    cur.execute("ALTER TABLE order_system.thermostat_weekly "
-                                "ADD COLUMN loss_rate DECIMAL(6,4) AFTER mature_margin")
-                except Exception as exc:
-                    if "Duplicate column" not in str(exc):
-                        raise
+                for alter in (
+                    "ADD COLUMN loss_rate DECIMAL(6,4) AFTER mature_margin",
+                    "ADD COLUMN real_freight DECIMAL(12,2) COMMENT 'FedEx稽核真实退货运费(该运营已匹配票)' AFTER loss_rate",
+                    "ADD COLUMN margin_after_freight DECIMAL(6,4) COMMENT '扣真实运费后净利率(保守下限)' AFTER real_freight",
+                ):
+                    try:
+                        cur.execute(f"ALTER TABLE order_system.thermostat_weekly {alter}")
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
             print("thermostat_weekly schema OK")
         finally:

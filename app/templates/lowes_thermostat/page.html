@@ -25,6 +25,8 @@
     <thead class="table-light"><tr>
       <th>店铺</th><th>运营</th><th class="text-end">成熟销售额</th>
       <th class="text-end">成熟净利率</th><th class="text-end">退货损失率</th>
+      <th class="text-end" title="FedEx发票稽核的真实退货运费(模型多按售价10%低估)">真实运费</th>
+      <th class="text-end" title="扣掉已稽核真实运费后的保守净利率">扣运费净利率</th>
       <th class="text-end">距10%缺口</th><th class="text-end">待提价SKU</th>
       <th>判定</th><th style="min-width:340px">建议</th></tr></thead>
     <tbody>
@@ -35,6 +37,8 @@
         <td class="text-end small">${{ '{:,.0f}'.format(r.mature_sale or 0) }}</td>
         <td class="text-end fw-bold {{ 'text-success' if r.margin_pct>=10 else 'text-danger' }}">{{ r.margin_pct }}%</td>
         <td class="text-end {{ 'text-danger fw-bold' if r.loss_pct>12 else '' }}">{{ r.loss_pct }}%</td>
+        <td class="text-end {{ 'text-danger' if r.freight>0 else 'text-muted' }}">{% if r.freight>0 %}${{ '{:,.0f}'.format(r.freight) }}{% else %}—{% endif %}</td>
+        <td class="text-end {{ 'text-danger fw-bold' if r.af_pct<r.margin_pct else '' }}">{{ r.af_pct }}%</td>
         <td class="text-end text-danger">{{ '%+.1f'|format(r.gap_pct) }}</td>
         <td class="text-end">{% if r.reprice_skus %}<a href="/repricing" title="去待改价页">{{ r.reprice_skus }}</a>{% else %}0{% endif %}</td>
         <td>
@@ -45,7 +49,7 @@
         <td class="small text-muted">{{ r.suggestion }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="9" class="text-center text-muted py-4">还没有体检数据——点右上"立即重新体检"</td></tr>
+      <tr><td colspan="11" class="text-center text-muted py-4">还没有体检数据——点右上"立即重新体检"</td></tr>
       {% endfor %}
     </tbody>
   </table>

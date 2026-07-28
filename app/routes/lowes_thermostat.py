@@ -36,12 +36,20 @@ def page():
         r["loss_pct"] = round(float(r["loss_rate"] or 0) * 100, 1)
         r["gap_pct"] = round(float(r["gap"] or 0) * 100, 1)
         r["est_pct"] = round(float(r["est_margin_after"] or 0) * 100, 1)
+        r["freight"] = float(r.get("real_freight") or 0)
+        r["af_pct"] = round(float(r["margin_after_freight"] or r["mature_margin"] or 0) * 100, 1)
     n_ok = sum(1 for r in rows if r["verdict"] == "达标")
     n_price = sum(1 for r in rows if "提价" in (r["verdict"] or ""))
     n_delist = sum(1 for r in rows if "下架" in (r["verdict"] or ""))
     return render_template("lowes_thermostat/page.html", rows=rows, check_date=check_date,
                            n_ok=n_ok, n_price=n_price, n_delist=n_delist,
                            running=_RUN["running"])
+
+
+@lowes_thermostat_bp.route("/report")
+def report():
+    """利润率诊断与保利润率方案报告（独立页，团队/财务看）。"""
+    return render_template("reports/lowes_profit.html")
 
 
 @lowes_thermostat_bp.route("/run", methods=["POST"])
