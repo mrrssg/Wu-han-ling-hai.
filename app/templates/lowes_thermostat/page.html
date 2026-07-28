@@ -1,0 +1,64 @@
+{% extends "base_v2.html" %}
+{% block title %}达标恒温器{% endblock %}
+{% block page_title %}达标恒温器·周体检{% endblock %}
+{% block page_sub %}每周测各 Lowes cell 的成熟净利率(退货到齐的真实数) vs 10%基线，给提价/下架建议。只体检不自动改价{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="runCheck(this)">🔄 立即重新体检</button>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex gap-2 mb-3 flex-wrap" style="font-size:.85rem">
+  <span class="badge text-bg-light border">体检日期 {{ check_date or '—' }}</span>
+  <span class="badge text-bg-success">达标 {{ n_ok }}</span>
+  <span class="badge text-bg-warning">定价可覆盖·提价+周转 {{ n_price }}</span>
+  <span class="badge text-bg-danger">退货率过高·需下架 {{ n_delist }}</span>
+</div>
+
+<div class="alert alert-light border mb-3" style="font-size:.82rem">
+  <b>怎么读:</b> <b>成熟净利率</b>=下单已满、退货到齐的两个月真实净利率(不被未成熟单虚高)。
+  <b>退货损失率&gt;12%</b>=顶档(18%)也盖不住 → 结构性亏,得下架/减量;
+  <b>≤12%</b>=定价能覆盖,低是老定价遗留 → 推待改价 + 等 v5 成熟单周转,会爬向10%。
+</div>
+
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.85rem">
+    <thead class="table-light"><tr>
+      <th>店铺</th><th>运营</th><th class="text-end">成熟销售额</th>
+      <th class="text-end">成熟净利率</th><th class="text-end">退货损失率</th>
+      <th class="text-end">距10%缺口</th><th class="text-end">待提价SKU</th>
+      <th>判定</th><th style="min-width:340px">建议</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="small">{{ r.store }}</td>
+        <td class="small fw-semibold">{{ r.operator }}</td>
+        <td class="text-end small">${{ '{:,.0f}'.format(r.mature_sale or 0) }}</td>
+        <td class="text-end fw-bold {{ 'text-success' if r.margin_pct>=10 else 'text-danger' }}">{{ r.margin_pct }}%</td>
+        <td class="text-end {{ 'text-danger fw-bold' if r.loss_pct>12 else '' }}">{{ r.loss_pct }}%</td>
+        <td class="text-end text-danger">{{ '%+.1f'|format(r.gap_pct) }}</td>
+        <td class="text-end">{% if r.reprice_skus %}<a href="/repricing" title="去待改价页">{{ r.reprice_skus }}</a>{% else %}0{% endif %}</td>
+        <td>
+          {% if r.verdict=='达标' %}<span class="badge text-bg-success">✅达标</span>
+          {% elif '下架' in r.verdict %}<span class="badge text-bg-danger">🔴需下架/减量</span>
+          {% else %}<span class="badge text-bg-warning text-dark">🟡提价+周转</span>{% endif %}
+        </td>
+        <td class="small text-muted">{{ r.suggestion }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="text-center text-muted py-4">还没有体检数据——点右上"立即重新体检"</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+
+<p class="text-muted mt-2" style="font-size:.78rem">
+  每周一 07:15 自动体检(cron)。此页只读、只建议——提价/下架仍到
+  <a href="/repricing">定价方案·待改价页</a>人工确认执行,不自动改价。
+</p>
+
+<script>
+async function runCheck(btn){btn.disabled=true;btn.textContent='体检中…';
+  const r=await fetch('{{ url_for("lowes_thermostat.run") }}',{method:'POST'});
+  const d=await r.json();alert(d.msg||'');if(d.success)setTimeout(()=>location.reload(),60000);}
+</script>
+{% endblock %}

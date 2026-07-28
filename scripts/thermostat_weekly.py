@@ -111,18 +111,18 @@ def main() -> int:
                                f"成熟净利低是老定价遗留——①去/repricing待改价页把{c['n']}个待提价SKU推掉"
                                f"(即补${c['up']:,.0f}≈+{pts*100:.1f}点)；②等v5成熟单周转到位,净利率会自然爬向10%。")
                     rows.append((check_date, store, op, f"{m2}+{m1}", round(sale, 2), round(net, 2),
-                                 round(margin, 4), round(gap, 4), c["n"], round(c["up"], 2),
-                                 round(pts, 4), round(est_after, 4), verdict, sug[:800]))
+                                 round(margin, 4), round(loss_rate, 4), round(gap, 4), c["n"],
+                                 round(c["up"], 2), round(pts, 4), round(est_after, 4), verdict, sug[:800]))
 
                 for r in rows:
                     cur.execute("""INSERT INTO order_system.thermostat_weekly
                         (check_date,store,operator,mature_months,mature_sale,mature_net,
-                         mature_margin,gap,reprice_skus,reprice_uplift,reprice_points,
+                         mature_margin,loss_rate,gap,reprice_skus,reprice_uplift,reprice_points,
                          est_margin_after,verdict,suggestion)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON DUPLICATE KEY UPDATE mature_sale=VALUES(mature_sale),
                           mature_net=VALUES(mature_net), mature_margin=VALUES(mature_margin),
-                          gap=VALUES(gap), reprice_skus=VALUES(reprice_skus),
+                          loss_rate=VALUES(loss_rate), gap=VALUES(gap), reprice_skus=VALUES(reprice_skus),
                           reprice_uplift=VALUES(reprice_uplift), reprice_points=VALUES(reprice_points),
                           est_margin_after=VALUES(est_margin_after), verdict=VALUES(verdict),
                           suggestion=VALUES(suggestion)""", r)
@@ -132,8 +132,8 @@ def main() -> int:
 
         print(f"=== 恒温器体检 {check_date} (成熟月 {m2}+{m1}) ===")
         for r in rows:
-            print(f"  {r[1]} {r[2]}: 成熟净利{r[6]*100:.1f}% 缺口{r[7]*100:+.1f} "
-                  f"[{r[12]}] 提价{r[8]}个/+{r[10]*100:.1f}点→{r[11]*100:.1f}%")
+            print(f"  {r[1]} {r[2]}: 成熟净利{r[6]*100:.1f}% 退损{r[7]*100:.1f}% 缺口{r[8]*100:+.1f} "
+                  f"[{r[13]}] 提价{r[9]}个/+{r[11]*100:.1f}点")
     return 0
 
 

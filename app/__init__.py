@@ -55,6 +55,9 @@ def create_app(config_name='default'):
     from app.routes.lowes_return_audit import lowes_return_audit_bp
     app.register_blueprint(lowes_return_audit_bp, url_prefix='/lowes-return-audit')  # Lowes退货运费稽核
 
+    from app.routes.lowes_thermostat import lowes_thermostat_bp
+    app.register_blueprint(lowes_thermostat_bp, url_prefix='/thermostat')  # 达标恒温器
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS order_system.thermostat_weekly (
     mature_sale DECIMAL(12,2),
     mature_net DECIMAL(12,2),
     mature_margin DECIMAL(6,4) COMMENT '成熟净利率',
+    loss_rate DECIMAL(6,4) COMMENT '成熟退货损失率',
     gap DECIMAL(6,4) COMMENT '10%基线−成熟净利率(>0=没达标)',
     reprice_skus INT DEFAULT 0 COMMENT '待提价SKU数',
     reprice_uplift DECIMAL(12,2) DEFAULT 0 COMMENT '90天可补回毛利$',
@@ -46,6 +47,12 @@ def main() -> int:
         try:
             with conn.cursor() as cur:
                 cur.execute(DDL)
+                try:
+                    cur.execute("ALTER TABLE order_system.thermostat_weekly "
+                                "ADD COLUMN loss_rate DECIMAL(6,4) AFTER mature_margin")
+                except Exception as exc:
+                    if "Duplicate column" not in str(exc):
+                        raise
             conn.commit()
             print("thermostat_weekly schema OK")
         finally:
