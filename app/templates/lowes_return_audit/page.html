@@ -35,6 +35,9 @@
   <div class="col"><div class="card p-2 text-center"><div class="mini text-muted">匹配率</div>
     <div class="fs-5 fw-bold">{{ s.match_rate }}%</div>
     <div class="mini text-muted">{{ s.matched_n or 0 }}/{{ total }} 票</div></div></div>
+  <div class="col"><div class="card p-2 text-center border border-danger"><div class="mini text-danger fw-bold">🔴 运费＞货值</div>
+    <div class="fs-5 fw-bold text-danger">{{ s.over_n or 0 }} 票</div>
+    <div class="mini text-danger">运回来比货还贵 多亏 ${{ '%.0f'|format(s.over_loss or 0) }}</div></div></div>
 </div>
 
 <div class="card p-2 mb-2 d-flex flex-row gap-2 align-items-center flex-wrap" style="font-size:.83rem">
@@ -44,6 +47,8 @@
   <a class="btn btn-sm {{ 'btn-primary' if f_match==val else 'btn-outline-secondary' }}"
      href="{{ url_for('lowes_return_audit.page', m=val or none) }}">{{ label }}</a>
   {% endfor %}
+  <a class="btn btn-sm ms-2 {{ 'btn-danger' if f_over else 'btn-outline-danger' }}"
+     href="{{ url_for('lowes_return_audit.page', over=none if f_over else '1') }}">🔴 只看运费＞货值 ({{ s.over_n or 0 }})</a>
 </div>
 
 <div class="card"><div class="table-responsive" style="max-height:72vh;overflow-y:auto">
@@ -57,7 +62,9 @@
       <tr>
         <td class="mini text-nowrap">{{ r.ship_date or '—' }}</td>
         <td class="font-monospace mini">{{ r.tracking }}</td>
-        <td class="text-end fw-semibold text-danger">${{ '%.2f'|format(r.net_charge or 0) }}</td>
+        <td class="text-end fw-semibold text-danger">${{ '%.2f'|format(r.net_charge or 0) }}
+          {% if r.over %}<br><span class="badge text-bg-danger mini" title="退货运费比货值成本还高{{ '(推断)' if r.over_suspect }}">🔴运费＞货值 +${{ '%.0f'|format(r.over_amt) }}{{ '?' if r.over_suspect }}</span>{% endif %}
+        </td>
         <td>
           {% if r.match_type=='tracking' %}<span class="badge text-bg-success">✅跟踪号</span>
           {% elif r.match_type=='po' %}<span class="badge text-bg-success">✅PO</span>

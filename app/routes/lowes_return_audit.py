@@ -26,16 +26,34 @@ def _query(sql, params=None):
 @lowes_return_audit_bp.route("/")
 def page():
     f_match = (request.args.get("m") or "").strip()   # tracking/po/inferred/none/''
-    where, params = ["1=1"], []
-    if f_match:
-        where.append("match_type=%s")
-        params.append(f_match)
-    w = " AND ".join(where)
+    f_over = request.args.get("over") == "1"           # 只看运费>货值
 
-    rows = _query(f"""SELECT * FROM order_system.fedex_return_audit
-                      WHERE {w} ORDER BY net_charge DESC""", tuple(params))
-    for r in rows:
+    # 全量载入(数据量小)，逐行算"运费>货值"：有成本用成本，推断行用候选最低成本
+    all_rows = _query("""SELECT * FROM order_system.fedex_return_audit
+                         ORDER BY net_charge DESC""")
+    over_n = 0
+    over_loss = 0.0
+    for r in all_rows:
         r["candidates"] = json.loads(r["candidates_json"]) if r.get("candidates_json") else []
+        nc = float(r.get("net_charge") or 0)
+        cost = r.get("cost")
+        r["over"], r["over_amt"], r["over_suspect"] = False, 0.0, False
+        if cost is not None and float(cost) > 0:
+            if nc > float(cost):
+                r["over"], r["over_amt"] = True, round(nc - float(cost), 2)
+        elif r["candidates"]:
+            costs = [float(c["cost"]) for c in r["candidates"] if c.get("cost") is not None]
+            if costs and nc > min(costs):
+                r["over"], r["over_amt"], r["over_suspect"] = True, round(nc - min(costs), 2), True
+        if r["over"]:
+            over_n += 1
+            over_loss += r["over_amt"]
+
+    rows = all_rows
+    if f_match:
+        rows = [r for r in rows if r["match_type"] == f_match]
+    if f_over:
+        rows = [r for r in rows if r["over"]]
 
     stat = _query("""SELECT
         COUNT(*) n, COALESCE(SUM(net_charge),0) ship_total,
@@ -52,8 +70,10 @@ def page():
     total = int(s.get("n") or 0)
     matched_n = int(s.get("matched_n") or 0)
     s["match_rate"] = round(matched_n * 100.0 / total, 1) if total else 0.0
+    s["over_n"] = over_n
+    s["over_loss"] = round(over_loss, 2)
     return render_template("lowes_return_audit/page.html", rows=rows, s=s,
-                           total=total, f_match=f_match)
+                           total=total, f_match=f_match, f_over=f_over)
 
 
 @lowes_return_audit_bp.route("/upload", methods=["POST"])
