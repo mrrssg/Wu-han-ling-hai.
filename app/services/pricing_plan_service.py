@@ -55,6 +55,10 @@ STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id, return_case�
 # 退实体店直接销毁、退货全损、不折减(p恒=0)的店铺（Yasonic，2026-07-22用户定）
 FULL_LOSS_STORES = {"lowes_yasonic"}
 
+# 回收保守系数（用户2026-07-28定"改回0.7更稳妥"）：不是假设货复卖不掉(货回仓能全复卖)，
+# 而是给"真实退货运费比估算高、回收率会往下浮动、复卖有时滞"这些不确定性留个整体安全垫。
+CONSERVATIVE_RECOVERY_FACTOR = 0.7
+
 
 def _qall(conn, sql, params=None):
     with conn.cursor() as cur:
@@ -147,9 +151,9 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
             WHERE store=%s AND state<>'not_charged'
               AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""", (rc_store,))[0]
         total_v = float(prow["total_v"] or 0)
-        p_recover = (((float(prow["tracked_v"] or 0) + float(prow["refund_v"] or 0)) / total_v)
-                     if total_v > 0 else 0.0)
-        p_recover = min(p_recover, 0.95)
+        measured = (((float(prow["tracked_v"] or 0) + float(prow["refund_v"] or 0)) / total_v)
+                    if total_v > 0 else 0.0)
+        p_recover = min(measured * CONSERVATIVE_RECOVERY_FACTOR, 0.85)
         # Yasonic：退实体店销毁，退货全损，p恒=0不折减（用户2026-07-22定）
         if store_key in FULL_LOSS_STORES:
             p_recover = 0.0
