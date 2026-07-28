@@ -55,6 +55,11 @@ STORE_MAP = {  # store_key -> (platform, shop_name, mirakl shop_id, return_case�
 # 退实体店直接销毁、退货全损、不折减(p恒=0)的店铺（Yasonic，2026-07-22用户定）
 FULL_LOSS_STORES = {"lowes_yasonic"}
 
+# 回收率保守系数（2026-07-28用户定）：回收率是实测、会浮动、我们控制不了，绝不写死某个数。
+# 定价用"实测回收 × 此系数"留下行缓冲——回收往下掉有余量、往上走是白赚；
+# 未来财务回填了供应商退款/货回仓复卖上来，实测自动升、定价自动放松。仅 Lowes×豪雅用。
+CONSERVATIVE_RECOVERY_FACTOR = 0.7
+
 
 def _qall(conn, sql, params=None):
     with conn.cursor() as cur:
@@ -136,15 +141,20 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         tail_m = min(tail_m, 2.5)   # 防样本小时系数爆炸
 
         # ---- p：可要回比例（有跟踪号退货货值占比，近90天退货）----
+        # 回收率 p = (货回仓可复卖[有跟踪号] + 实际供应商退款) ÷ 总退货货值，滚动90天**实测**，
+        # 再 × 保守系数（防下行浮动）。实测浮动、不写死；回填了自动升——用户2026-07-28定。
         prow = _qall(conn, """
             SELECT ROUND(SUM(cost),2) AS total_v,
                    ROUND(SUM(CASE WHEN claim_tracking IS NOT NULL AND claim_tracking<>''
-                                  THEN cost ELSE 0 END),2) AS tracked_v
+                                  THEN cost ELSE 0 END),2) AS tracked_v,
+                   ROUND(SUM(COALESCE(supplier_refund,0)),2) AS refund_v
             FROM order_system.return_case
             WHERE store=%s AND state<>'not_charged'
               AND return_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)""", (rc_store,))[0]
         total_v = float(prow["total_v"] or 0)
-        p_recover = (float(prow["tracked_v"] or 0) / total_v) if total_v > 0 else 0.0
+        measured_recover = (((float(prow["tracked_v"] or 0) + float(prow["refund_v"] or 0)) / total_v)
+                            if total_v > 0 else 0.0)
+        p_recover = min(measured_recover * CONSERVATIVE_RECOVERY_FACTOR, 0.85)
         # Yasonic：退实体店销毁，退货全损，p恒=0不折减（用户2026-07-22定）
         if store_key in FULL_LOSS_STORES:
             p_recover = 0.0
