@@ -296,7 +296,10 @@ TIER_META = {
     "tier_12":    ("12%档", "#1baf7a", "退货低：12%档公式价的毛利就盖得住需要的毛利——最低档保价格竞争力"),
     "tier_15":    ("15%档", "#2a78d6", "12%档盖不住、15%档公式价的毛利够——按15%档定价（含缺数据暂放）"),
     "tier_18":    ("18%档", "#d03b3b", "退货重：要顶到18%档；含\"各档都不够但窗口<25单，先观察\"的（原因列写明）"),
-    "delist":     ("下架档", "#52514e", "18%档也盖不住+窗口≥25单坐实，或 现价已=档位公式价仍持续净亏（负期望实证）——修价救不了，建议下架止血"),
+    "tier_20":    ("20%档·高货值", "#b02a5b", "高货值(成本≥$180)全损口径：退货全损+品类真实退率，18%顶不住→加到20%档"),
+    "tier_22":    ("22%档·高货值", "#8e2148", "高货值全损口径需要22%毛利才盖得住退货损失"),
+    "tier_25":    ("25%档·高货值", "#6d1839", "高货值全损口径需要25%毛利；25%仍盖不住则进下架档"),
+    "delist":     ("下架档", "#52514e", "顶档也盖不住+窗口≥25单坐实，或 现价已=档位公式价仍持续净亏（负期望实证）——修价救不了，建议下架止血"),
     "cold_watch": ("零销量·观察", "#98a1ad", "上架不足30天零销量，新品观察期，不动价"),
     "cold_12":    ("零销量·降档促活", "#eda100", "上架超30天零销量——降到最低档12%促活，出单即转正常评档"),
 }
@@ -341,7 +344,7 @@ def pricing_plan():
         where.append("tier=%s")
         params.append(tier_filter)
     wsql = " AND ".join(where)
-    order_sql = ("ORDER BY FIELD(tier,'delist','tier_18','tier_15',"
+    order_sql = ("ORDER BY FIELD(tier,'delist','tier_25','tier_22','tier_20','tier_18','tier_15',"
                  "'cold_12','cold_watch','tier_12'), orders_90d DESC")
 
     if request.args.get("format") == "csv":
@@ -787,7 +790,7 @@ def push_one(shop_sku):
             trow = _query(
                 """SELECT target_margin FROM order_system.pricing_tier
                    WHERE store_key=%s AND shop_sku=%s AND target_margin IS NOT NULL
-                     AND tier IN ('tier_12','tier_15','tier_18','cold_12')""", (store_key, shop_sku))
+                     AND tier IN ('tier_12','tier_15','tier_18','tier_20','tier_22','tier_25','cold_12')""", (store_key, shop_sku))
             if trow:
                 tier_margin = float(trow[0]["target_margin"])
         bd = calculate_breakdown(
@@ -1073,7 +1076,7 @@ def push_batch():
         tier_targets = {r["shop_sku"]: float(r["target_margin"]) for r in _query(
             """SELECT shop_sku, target_margin FROM order_system.pricing_tier
                WHERE store_key=%s AND target_margin IS NOT NULL
-                 AND tier IN ('tier_12','tier_15','tier_18','cold_12')""", (store_key,))}
+                 AND tier IN ('tier_12','tier_15','tier_18','tier_20','tier_22','tier_25','cold_12')""", (store_key,))}
 
     payloads = []
     rejections = []         # (sku, reason)
