@@ -58,6 +58,9 @@ def create_app(config_name='default'):
     from app.routes.lowes_thermostat import lowes_thermostat_bp
     app.register_blueprint(lowes_thermostat_bp, url_prefix='/thermostat')  # 达标恒温器
 
+    from app.routes.fedex_return_calc import fedex_return_calc_bp
+    app.register_blueprint(fedex_return_calc_bp, url_prefix='/fedex-return-calc')  # FedEx退货运费测算
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""
