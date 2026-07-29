@@ -44,6 +44,7 @@ def estimate():
             signature=(d.get("signature") or "none"),
             packaging_ahs=bool(d.get("packaging_ahs")),
             declared_value=d.get("declared_value"),
+            billing=("third-party" if d.get("third_party") else "sender"),
         )
         return jsonify(res)
     except Exception as exc:

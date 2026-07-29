@@ -34,6 +34,10 @@
         <input id="wt" type="number" step="0.1" class="form-control form-control-sm" placeholder="留空则按体积重算(触发不了超重附加费)">
         <div class="fx-mini">强烈建议填真实过磅重量：>50lb 触发附加处理费、>110lb 超大、>150lb 会被拒收</div>
       </div>
+      <div class="form-check mb-2">
+        <input id="tp" class="form-check-input" type="checkbox" checked>
+        <label class="form-check-label fx-lbl" for="tp">第三方计费 +5% <span class="fx-mini">（退货billing到你账户=对该票第三方，默认开）</span></label>
+      </div>
 
       <a class="fx-mini" data-bs-toggle="collapse" href="#more" role="button" style="cursor:pointer">▸ 更多选项（退货方式/签名/包装）</a>
       <div class="collapse" id="more">
@@ -88,7 +92,8 @@ async function calc(){
   $('err').textContent=''; const btn=event.target; btn.disabled=true; btn.textContent='测算中…';
   const body={origin_zip:$('zip').value, length:$('len').value, width:$('wid').value, height:$('hei').value,
     actual_weight:$('wt').value, return_method:$('rm').value, signature:$('sig').value,
-    declared_value:$('dv').value, packaging_ahs:$('pkg').checked, residential:$('res').checked};
+    declared_value:$('dv').value, packaging_ahs:$('pkg').checked, residential:$('res').checked,
+    third_party:$('tp').checked};
   try{
     const r=await fetch('{{ url_for("fedex_return_calc.estimate") }}',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
