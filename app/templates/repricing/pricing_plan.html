@@ -29,9 +29,8 @@
 .tier-card .d { font-size:.7rem; color:#6b7280; line-height:1.35; }
 .reason { font-size:.8rem; color:#374151; max-width:520px; }
 .suspect { background:#fff8ec; }
-.tier-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:.5rem; }
-@media (max-width:1400px) { .tier-grid { grid-template-columns:repeat(4,1fr); } }
-@media (max-width:768px)  { .tier-grid { grid-template-columns:repeat(2,1fr); } }
+.tier-grid { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(128px,1fr);
+  gap:.5rem; overflow-x:auto; padding-bottom:3px; }
 </style>
 
 {% if total == 0 %}
@@ -66,7 +65,7 @@
      href="{{ url_for('repricing.pricing_plan', store=store_key, **fkeep) }}">
     <div class="t">全部档位</div><div class="n">{{ total }}</div>
     <div class="d">{{ '当前筛选合计' if (f_operator or f_category or f_source or f_q) else 'active offer 总数' }}</div></a>
-  {% for key, meta in tier_meta.items() %}
+  {% for key, meta in tier_meta.items() %}{% if counts.get(key, 0) > 0 or tier_filter == key %}
   <a class="tier-card {{ 'active' if tier_filter == key }}" style="border-left-color:{{ meta[1] }}"
      href="{{ url_for('repricing.pricing_plan', store=store_key, tier=key, **fkeep) }}">
     <div class="t">{{ meta[0] }}</div>
@@ -77,7 +76,7 @@
       {%- if st.loss is not none %} · 退货损失率 {{ '%.1f%%' % st.loss }}{% endif %}</div>
     {% endif %}
     <div class="d">{{ meta[2] }}</div></a>
-  {% endfor %}
+  {% endif %}{% endfor %}
 </div>
 
 {# ---------- 筛选 / 搜索 ---------- #}
