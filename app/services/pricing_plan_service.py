@@ -37,6 +37,11 @@ DELIST_MIN_WINDOW_ORDERS = 25   # 判下架必须窗口内>=25单坐实（用户
 # 三档名义毛利（公式除数 = 1 − 佣金 − 名义毛利）；每档"能给多少毛利"逐SKU现算
 TIER_MARGINS = [("tier_12", 0.12), ("tier_15", 0.15), ("tier_18", 0.18)]
 
+# 高货值口径（用户2026-07-29定）：成本≥$180的SKU退一颗就是大额损失，
+# 用「品类真实退率×自己货值」全损定价(不折减回收) + 突破18%天花板；常规三档盖不住往上加档。
+HIGH_VALUE_THRESHOLD = 180.0
+TIER_MARGINS_HV = [("tier_20", 0.20), ("tier_22", 0.22), ("tier_25", 0.25)]
+
 # 运营段(MD/MR/YC + LW)——Autool是ATCO-MDLW，Yasonic是YSVE-MDLW，都含MDLW/MRLW/YCLW段
 OP_SEGMENTS = {"MDLW": "刘梦蝶", "MRLW": "明瑞瑞", "YCLW": "朱以超"}
 
@@ -283,6 +288,20 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
             return lr, am, "运营全池", orders_m
         return store_loss, store_am, "全店", orders_m
 
+    # ---- 品类真实退率（count口径，全运营；高货值薄样本兜底，不被便宜走量货的平均带偏，用户2026-07-29）----
+    cat_all_orders: Dict[str, int] = {}
+    cat_all_returns: Dict[str, int] = {}
+    for _sku, _pr in sku_profit.items():
+        _c = offer_cat.get(_sku, "(无类目)")
+        cat_all_orders[_c] = cat_all_orders.get(_c, 0) + int(_pr["orders"] or 0)
+        cat_all_returns[_c] = cat_all_returns.get(_c, 0) + int(_pr["returns_cnt"] or 0)
+    _store_rr = sum(cat_all_returns.values()) / (sum(cat_all_orders.values()) or 1)
+
+    def hv_cat_return_rate(cat):
+        """品类真实退货率；样本<30单的类目回退全店退货率兜底。"""
+        o = cat_all_orders.get(cat, 0)
+        return (cat_all_returns.get(cat, 0) / o) if o >= MIN_CAT_ORDERS else _store_rr
+
     rows = []
     counts: Dict[str, int] = {}
     for o in offers:
@@ -306,6 +325,23 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         cfg = configs.get(o["warehouse_sku"]) if o["warehouse_sku"] else None
         supplier = ((cfg.get("supplier") or "Costway").strip() or "Costway") if cfg else None
         sp = price_map.get((supplier, o["warehouse_sku"])) if cfg else None
+
+        # ---- 高货值全损口径（用户2026-07-29）：品类真实退率×自己货值，退一颗丢整货值，不折减回收 ----
+        is_hv = cost >= HIGH_VALUE_THRESHOLD
+        if is_hv:
+            sell_p = float(o["discount_price"] or 0)
+            if not sell_p and cfg and cfg.get("discount_factor") and o.get("origin_price"):
+                sell_p = float(o["origin_price"]) * float(cfg["discount_factor"])
+            if sell_p > 0:
+                crr = hv_cat_return_rate(cat)
+                own_rr = (returns90 / orders90) if (orders90 >= MIN_ORDERS_OWN and orders90 > 0) else 0.0
+                rr_use = max(crr, own_rr)          # 至少品类水位；自己更高(高风险单品)则用自己
+                lr = rr_use * (cost / sell_p)      # 全损：退一颗丢整货值占售价比（不折减回收）
+                src = "高货值·品类退率全损"
+                need = BASELINE + lr
+        # 高货值突破18%顶：常规三档盖不住时往上加 20/22/25 档
+        tier_set = TIER_MARGINS + (TIER_MARGINS_HV if is_hv else [])
+
         # lowes_vevor(Yasonic)无退货运费项，不要求 return_shipping_base
         _need_rsb = formula_variant != "lowes_vevor"
         if cfg and sp and cfg.get("commission_rate") is not None \
@@ -313,7 +349,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 and (not _need_rsb or cfg.get("return_shipping_base") is not None):
             cr = float(cfg["commission_rate"])
             buf = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
-            for key, nominal in TIER_MARGINS:
+            for key, nominal in tier_set:
                 try:
                     bd = calculate_breakdown(
                         supplier=supplier, supplier_price=sp,
@@ -357,32 +393,34 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                       "暂按15%标准档持有，数据补齐后自动重评")
         else:
             m_txt = " / ".join(f"{int(n*100)}档{tier_margin_map[k]*100:.1f}%"
-                               for k, n in TIER_MARGINS if k in tier_margin_map)
+                               for k, n in tier_set if k in tier_margin_map)
             tier = None
-            for key, nominal in TIER_MARGINS:
+            for key, nominal in tier_set:
                 m = tier_margin_map.get(key)
                 if m is not None and m >= need - KEEP_TOLERANCE:
                     tier, target = key, nominal
                     break
             if tier is not None:
+                _rec_txt = ("全损不折减回收）" if src.startswith("高货值")
+                            else f"可要回{p_recover*100:.1f}%已折减）")
                 reason = (f"需要毛利{need*100:.1f}%（10%基线+退货损失率{lr*100:.1f}%，{src}口径，"
-                          f"可要回{p_recover*100:.1f}%已折减）；本SKU各档公式价毛利 {m_txt}"
+                          + _rec_txt + f"；本SKU各档公式价毛利 {m_txt}"
                           f"——{int(target*100)}%档够住，取最低够用档（现实际毛利{am*100:.1f}%）")
             elif orders_m >= DELIST_MIN_WINDOW_ORDERS:
                 tier, target = "delist", None
                 reason = (f"退货损失率{lr*100:.1f}%（{src}，窗口{orders_m}单坐实），"
                           f"需要毛利{need*100:.1f}%；本SKU各档公式价毛利 {m_txt}"
-                          f"——顶到18%档也盖不住，提价救不了，建议下架止血")
+                          f"——顶到{int(tier_set[-1][1]*100)}%档也盖不住，提价救不了，建议下架止血")
             else:
-                tier, target = "tier_18", 0.18
+                tier, target = tier_set[-1]
                 reason = (f"退货损失率{lr*100:.1f}%（{src}）需要毛利{need*100:.1f}%，"
                           f"各档公式价毛利 {m_txt} 都不够——但窗口仅{orders_m}单"
-                          f"（<{DELIST_MIN_WINDOW_ORDERS}单不判死），先按18%档卖着攒数据再定")
+                          f"（<{DELIST_MIN_WINDOW_ORDERS}单不判死），先按{int(tier_set[-1][1]*100)}%档卖着攒数据再定")
 
         # ---- 负期望实证 → 下架档（用户2026-07-17定案：利润控制台的下架候选直接进下架档）----
         # 判据与行动清单一致：90天退货≥2且净亏>$50，且现价已=自己档位的公式价（修价救不了）；
         # 刚修完价的观察期（修价<30天且修后<10单）先放过，观察期满仍亏下一轮自动进来
-        if tier in ("tier_12", "tier_15", "tier_18") and pr \
+        if tier in ("tier_12", "tier_15", "tier_18", "tier_20", "tier_22", "tier_25") and pr \
                 and int(pr["returns_cnt"] or 0) >= 2 and float(pr["net"] or 0) < -50:
             p_t = tier_price_map.get(tier)
             # 现折扣价：DB折扣价缺失时用 原价×折扣系数 估（同候选生成器口径；
@@ -455,7 +493,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
 MIN_DEVIATION = 0.01     # 目标价和现价差1%以内不折腾
 COLD_BATCH = 500   # 零销量降档促活每轮最多放500个候选（分批观察激活率，防一次全动）
 
-ACTION_TIERS = ("tier_12", "tier_15", "tier_18", "cold_12")   # 现价偏离档位公式价≥1%才出候选
+ACTION_TIERS = ("tier_12", "tier_15", "tier_18", "tier_20", "tier_22", "tier_25", "cold_12")   # 现价偏离档位公式价≥1%才出候选
 
 
 def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
