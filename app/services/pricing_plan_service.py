@@ -41,6 +41,10 @@ TIER_MARGINS = [("tier_12", 0.12), ("tier_15", 0.15), ("tier_18", 0.18)]
 # 用「品类真实退率×自己货值」全损定价(不折减回收) + 突破18%天花板；常规三档盖不住往上加档。
 HIGH_VALUE_THRESHOLD = 240.0
 TIER_MARGINS_HV = [("tier_20", 0.20), ("tier_22", 0.22), ("tier_25", 0.25)]
+# 高退率品类也触发同一套保护（用户2026-07-29）：品类退率≥12% 且 样本≥100单
+# （够多才采信，防小样本噪声，如Gazebos 41单/Level-Head Rakes 33单）。当前主要命中 Patio Umbrellas。
+HIGH_RETURN_RATE = 0.12
+HIGH_RETURN_MIN_ORDERS = 100
 
 # 运营段(MD/MR/YC + LW)——Autool是ATCO-MDLW，Yasonic是YSVE-MDLW，都含MDLW/MRLW/YCLW段
 OP_SEGMENTS = {"MDLW": "刘梦蝶", "MRLW": "明瑞瑞", "YCLW": "朱以超"}
@@ -302,6 +306,11 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         o = cat_all_orders.get(cat, 0)
         return (cat_all_returns.get(cat, 0) / o) if o >= MIN_CAT_ORDERS else _store_rr
 
+    def is_high_return_cat(cat):
+        """高退率品类：退率≥12% 且 样本≥100单（够多才采信，防小样本噪声）。"""
+        o = cat_all_orders.get(cat, 0)
+        return o >= HIGH_RETURN_MIN_ORDERS and (cat_all_returns.get(cat, 0) / o) >= HIGH_RETURN_RATE
+
     rows = []
     counts: Dict[str, int] = {}
     for o in offers:
@@ -326,8 +335,9 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
         supplier = ((cfg.get("supplier") or "Costway").strip() or "Costway") if cfg else None
         sp = price_map.get((supplier, o["warehouse_sku"])) if cfg else None
 
-        # ---- 高货值全损口径（用户2026-07-29）：品类真实退率×自己货值，退一颗丢整货值，不折减回收 ----
-        is_hv = cost >= HIGH_VALUE_THRESHOLD
+        # ---- 全损保护口径（用户2026-07-29）：高货值(≥$240) 或 高退率品类(≥12%且≥100单) 触发同一套：
+        #      品类真实退率×自己货值，退一颗丢整货值，不折减回收 ----
+        is_hv = cost >= HIGH_VALUE_THRESHOLD or is_high_return_cat(cat)
         if is_hv:
             sell_p = float(o["discount_price"] or 0)
             if not sell_p and cfg and cfg.get("discount_factor") and o.get("origin_price"):
@@ -337,9 +347,10 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                 own_rr = (returns90 / orders90) if (orders90 >= MIN_ORDERS_OWN and orders90 > 0) else 0.0
                 rr_use = max(crr, own_rr)          # 至少品类水位；自己更高(高风险单品)则用自己
                 lr = rr_use * (cost / sell_p)      # 全损：退一颗丢整货值占售价比（不折减回收）
-                src = "高货值·品类退率全损"
+                src = ("高货值·品类退率全损" if cost >= HIGH_VALUE_THRESHOLD
+                       else "高退率品类·全损")
                 need = BASELINE + lr
-        # 高货值突破18%顶：常规三档盖不住时往上加 20/22/25 档
+        # 突破18%顶：常规三档盖不住时往上加 20/22/25 档
         tier_set = TIER_MARGINS + (TIER_MARGINS_HV if is_hv else [])
 
         # lowes_vevor(Yasonic)无退货运费项，不要求 return_shipping_base
@@ -401,7 +412,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                     tier, target = key, nominal
                     break
             if tier is not None:
-                _rec_txt = ("全损不折减回收）" if src.startswith("高货值")
+                _rec_txt = ("全损不折减回收）" if "全损" in src
                             else f"可要回{p_recover*100:.1f}%已折减）")
                 reason = (f"需要毛利{need*100:.1f}%（10%基线+退货损失率{lr*100:.1f}%，{src}口径，"
                           + _rec_txt + f"；本SKU各档公式价毛利 {m_txt}"
