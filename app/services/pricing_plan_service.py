@@ -37,9 +37,9 @@ DELIST_MIN_WINDOW_ORDERS = 25   # 判下架必须窗口内>=25单坐实（用户
 # 三档名义毛利（公式除数 = 1 − 佣金 − 名义毛利）；每档"能给多少毛利"逐SKU现算
 TIER_MARGINS = [("tier_12", 0.12), ("tier_15", 0.15), ("tier_18", 0.18)]
 
-# 高货值口径（用户2026-07-29定）：成本≥$180的SKU退一颗就是大额损失，
+# 高货值口径（用户2026-07-29定，门槛2026-07-29调240）：成本≥$240的SKU退一颗就是大额损失，
 # 用「品类真实退率×自己货值」全损定价(不折减回收) + 突破18%天花板；常规三档盖不住往上加档。
-HIGH_VALUE_THRESHOLD = 180.0
+HIGH_VALUE_THRESHOLD = 240.0
 TIER_MARGINS_HV = [("tier_20", 0.20), ("tier_22", 0.22), ("tier_25", 0.25)]
 
 # 运营段(MD/MR/YC + LW)——Autool是ATCO-MDLW，Yasonic是YSVE-MDLW，都含MDLW/MRLW/YCLW段
