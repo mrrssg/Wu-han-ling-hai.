@@ -1,10 +1,31 @@
 # -*- coding: utf-8 -*-
 """Lowes-Autool 退货把关页面(/lowes-return-gate)。货值 vs 退货运费 → 退不退建议。"""
 from collections import Counter
+from urllib.parse import urlparse
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import Blueprint, Response, current_app, jsonify, render_template, request
 
 lowes_return_gate_bp = Blueprint("lowes_return_gate", __name__)
+
+
+@lowes_return_gate_bp.route("/img")
+def img_proxy():
+    """图片中转:浏览器访问不到 res.cloudinary.com,由服务器代取(阿里云能直连)。"""
+    u = request.args.get("u", "")
+    host = urlparse(u).netloc.lower()
+    if not (u.startswith("https://") and host.endswith("res.cloudinary.com")):
+        return "", 400
+    try:
+        import requests
+        r = requests.get(u, timeout=20)
+        if r.status_code != 200:
+            return "", 404
+        resp = Response(r.content,
+                        content_type=r.headers.get("Content-Type", "image/jpeg"))
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
+    except Exception:
+        return "", 502
 
 
 @lowes_return_gate_bp.route("/")
