@@ -93,7 +93,7 @@ async function runAI(btn){
 async function recalc(i,sku,zip){
   const g=id=>document.getElementById(id+'-'+i).value;
   const out=document.getElementById('rc-'+i); out.textContent='算…';
-  const r=await fetch('{{ url_for("lowes_return_gate.recompute") }}',{method:'POST',
+  const r=await fetch('{{ url_for("lowes_return_gate.recompute_route") }}',{method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({sku:sku,zip:zip,L:g('L'),W:g('W'),H:g('H'),wt:g('WT')})});
   const d=await r.json();

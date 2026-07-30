@@ -39,23 +39,43 @@ def parse_components(wh):
     return [c.strip() for c in (wh or "").split("+") if c.strip()]
 
 
+import re
+
+_BOX_INDEX = None
+_SUFFIX_RE = re.compile(r"^(.+)-\d\d$")   # 多箱后缀 -箱号总数(如 -14),字母色号后缀(如 -PI)不算
+
+
+def _base_of(cpbh):
+    m = _SUFFIX_RE.match(cpbh or "")
+    return m.group(1) if m else cpbh
+
+
+def _box_index(conn):
+    """{组件基码 -> [箱]}。costway_box_dims 一次性载入进程缓存;多箱按'码-箱号'归到基码。"""
+    global _BOX_INDEX
+    if _BOX_INDEX is not None:
+        return _BOX_INDEX
+    idx = {}
+    for r in _q(conn, "SELECT cpbh,l_in,w_in,h_in,weight_lb FROM order_system.costway_box_dims"):
+        if not (r["l_in"] and r["w_in"] and r["h_in"]):
+            continue
+        idx.setdefault(_base_of(r["cpbh"]), []).append(
+            {"cpbh": r["cpbh"], "L": float(r["l_in"]), "W": float(r["w_in"]),
+             "H": float(r["h_in"]), "wt": float(r["weight_lb"] or 0)})
+    _BOX_INDEX = idx
+    return idx
+
+
 def _boxes_for_codes(conn, codes):
-    """返回 (boxes, missing)。boxes=[{cpbh,L,W,H,wt}];missing=查不到/尺寸缺的组件码。"""
+    """返回 (boxes, missing)。用内存索引:基码命中=该产品所有箱;命中不到=缺尺寸(不猜)。"""
+    idx = _box_index(conn)
     boxes, missing = [], []
     for code in codes:
-        rows = _q(conn, """SELECT cpbh,l_in,w_in,h_in,weight_lb
-                           FROM order_system.costway_box_dims
-                           WHERE cpbh=%s OR cpbh LIKE %s ORDER BY cpbh""",
-                  (code, code + "-%"))
-        if not rows:
+        b = idx.get(code)
+        if b:
+            boxes.extend(b)
+        else:
             missing.append(code)
-            continue
-        for r in rows:
-            if r["l_in"] and r["w_in"] and r["h_in"]:
-                boxes.append({"cpbh": r["cpbh"], "L": float(r["l_in"]), "W": float(r["w_in"]),
-                              "H": float(r["h_in"]), "wt": float(r["weight_lb"] or 0)})
-            else:
-                missing.append(r["cpbh"])
     return boxes, missing
 
 
@@ -125,6 +145,17 @@ def list_pending(limit=200):
             WHERE r.shop_name=%s AND r.state='IN_PROGRESS'
             ORDER BY r.date_created DESC LIMIT %s""",
                   (SHOP_NAME, STORE_KEY, SHOP_NAME, limit))
+        # AI缓存一次性批量取
+        skus = list({r["offer_sku"] for r in rows if r["offer_sku"]})
+        ai_map = {}
+        if skus:
+            ph = ",".join(["%s"] * len(skus))
+            for a in _q(conn, f"""SELECT shop_sku,est_l,est_w,est_h,est_wt
+                                  FROM order_system.lowes_return_ai_dims
+                                  WHERE shop_sku IN ({ph})""", tuple(skus)):
+                if a["est_l"]:
+                    ai_map[a["shop_sku"]] = {"L": float(a["est_l"]), "W": float(a["est_w"]),
+                                             "H": float(a["est_h"]), "wt": float(a["est_wt"] or 0)}
         out = []
         for r in rows:
             sku = r["offer_sku"]
@@ -156,8 +187,8 @@ def list_pending(limit=200):
             if missing and not boxes:
                 item["verdict"], item["verdict_text"] = "missing", f"缺尺寸·需人工({','.join(missing)})"
                 out.append(item); continue
-            # AI 上限(用缓存;没缓存留 need_ai)
-            ai = get_ai_dims(conn, sku)
+            # AI 上限(用批量缓存;没缓存留 need_ai)
+            ai = ai_map.get(sku)
             ai_f = None
             if ai and orig is not None:
                 ai_f, _, aierr = _freight(zipc, [{"cpbh": "AI", "L": ai["L"], "W": ai["W"],
