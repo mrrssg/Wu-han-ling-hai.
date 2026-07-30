@@ -238,13 +238,67 @@ def list_pending(limit=200):
         conn.close()
 
 
+_IMG_APP_TOKEN = "QEeubiXYGa83zXs3Zt8cSSJPnih"
+_IMG_TABLE = "tbl2IRXCLuiUBfk9"   # 图片总览,SKU=warehouse_sku,尺寸图=第3张
+
+
+def _feishu_token(base_dir):
+    import os
+    import requests
+    with open(os.path.join(base_dir, "instance", "feishu_app.json"), encoding="utf-8") as f:
+        c = json.load(f)
+    r = requests.post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                      json={"app_id": c["app_id"].strip(), "app_secret": c["app_secret"].strip()},
+                      timeout=15).json()
+    return r.get("tenant_access_token")
+
+
+def _dim_image_url(token, warehouse_sku):
+    """图片总览按 warehouse_sku 查尺寸图(第3张)URL;缺退主图;查不到 None。"""
+    if not token or not warehouse_sku:
+        return None
+    import requests
+    body = {"filter": {"conjunction": "and", "conditions": [
+        {"field_name": "SKU", "operator": "is", "value": [warehouse_sku]}]},
+        "field_names": ["第3张", "主图"], "page_size": 1}
+    try:
+        r = requests.post(
+            f"https://open.feishu.cn/open-apis/bitable/v1/apps/{_IMG_APP_TOKEN}/tables/{_IMG_TABLE}/records/search",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            data=json.dumps(body), timeout=20).json()
+        items = (r.get("data") or {}).get("items") or []
+        if not items:
+            return None
+        f = items[0]["fields"]
+        for fld in ("第3张", "主图"):
+            v = f.get(fld)
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                v = v[0].get("text") or v[0].get("link")
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+    except Exception:
+        return None
+    return None
+
+
+def _ai_one(client, model, prompt, img):
+    content = [{"type": "text", "text": prompt}]
+    if img:
+        content.append({"type": "image_url", "image_url": {"url": img}})
+    resp = client.chat.completions.create(
+        model=model, response_format={"type": "json_object"},
+        messages=[{"role": "user", "content": content}])
+    return json.loads(resp.choices[0].message.content)
+
+
 def ai_estimate_skus(base_dir, items):
-    """对给定SKU调gpt估"组装/伸缩后退回尺寸",缓存 lowes_return_ai_dims。
-    items=[{sku, warehouse_sku, category}]。返回新估算的条数。"""
+    """估"组装/退回尺寸"缓存 lowes_return_ai_dims。读【图片总览第3张=尺寸图】喂gpt视觉
+    (只发一张图省token),取组装尺寸与原箱较大者。items=[{sku,warehouse_sku,category}]。"""
     from app.services.listing_sentinel_service import (
         _openai_client, _ensure_openai_key, MODEL_NAME,
     )
     _ensure_openai_key(base_dir)
+    token = _feishu_token(base_dir)
     conn = DBManager.get_connection()
     n = 0
     try:
@@ -261,24 +315,34 @@ def ai_estimate_skus(base_dir, items):
             boxes, _m = _boxes_for_codes(conn, parse_components(it.get("warehouse_sku")))
             box_txt = "; ".join(f'{b["L"]:.0f}x{b["W"]:.0f}x{b["H"]:.0f}in {b["wt"]:.0f}lb'
                                 for b in boxes) or "未知"
+            img = _dim_image_url(token, it.get("warehouse_sku"))
             prompt = (
-                f"产品SKU {sku},类目 {it.get('category') or '未知'}。"
-                f"原始发货为平板包装,共{len(boxes)}箱:{box_txt}。"
-                "客户退货时产品可能已组装、或是可伸缩/开合件(如遮阳伞、可延展餐桌、组装家具),"
-                "退回包装通常比发货更大。请估算【最坏情况下退回时的单个包装尺寸】(英寸)和重量(磅)。"
-                "只输出JSON:{\"L\":数字,\"W\":数字,\"H\":数字,\"weight_lb\":数字,\"reason\":\"一句中文理由\"}。"
-                "尺寸用整数英寸,合理保守偏大但不夸张。"
+                f"产品「{sku}」类目 {it.get('category') or '未知'}。原始平板发货共{len(boxes)}箱:{box_txt}。"
+                + ("附图是该产品的尺寸标注图,请①从图读出产品组装后整体外形尺寸(长×宽×高英寸);"
+                   if img else "请")
+                + "②估算客户退货时的单个包装尺寸——取「组装后尺寸」与「原始发货箱最大包络」中较大者,"
+                "再留少量缓冲(伸缩/开合/组装件退回通常更大)。"
+                "只输出JSON:{\"L\":数字,\"W\":数字,\"H\":数字,\"weight_lb\":数字,\"assembled\":\"读到的组装尺寸或空\",\"reason\":\"一句中文理由\"}。"
+                "整数英寸,保守但不夸张。图看不清就基于类目+原箱估。"
             )
             try:
-                resp = client.chat.completions.create(
-                    model=MODEL_NAME, response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": prompt}])
-                d = json.loads(resp.choices[0].message.content)
-                L, W, H = float(d["L"]), float(d["W"]), float(d["H"])
-                wt = float(d.get("weight_lb") or sum(b["wt"] for b in boxes) or 0)
-                reason = str(d.get("reason") or "")[:480]
+                d = _ai_one(client, MODEL_NAME, prompt, img)
+                tag = "｜据尺寸图" if img else "｜文字估"
             except Exception:
+                if not img:
+                    continue
+                try:
+                    d = _ai_one(client, MODEL_NAME, prompt, None)   # 图失效→文字重试
+                    tag = "｜图失效·文字估"
+                except Exception:
+                    continue
+            try:
+                L, W, H = float(d["L"]), float(d["W"]), float(d["H"])
+            except (KeyError, TypeError, ValueError):
                 continue
+            wt = float(d.get("weight_lb") or sum(b["wt"] for b in boxes) or 0)
+            asm = str(d.get("assembled") or "").strip()
+            reason = ((f"[组装{asm}] " if asm else "") + str(d.get("reason") or "") + tag)[:490]
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO order_system.lowes_return_ai_dims
                     (shop_sku,est_l,est_w,est_h,est_wt,reason) VALUES (%s,%s,%s,%s,%s,%s)
