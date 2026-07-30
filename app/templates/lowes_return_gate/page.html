@@ -47,6 +47,7 @@
         <td class="g-mini text-nowrap">{{ r.date }}</td>
         <td class="font-monospace g-mini text-nowrap">{{ r.order_id or '—' }}</td>
         <td class="font-monospace" style="font-size:.78rem">{{ r.sku or '—' }}
+          {% if r.boxes or r.ai_dims %}<span style="cursor:pointer;color:#2563eb;font-weight:700" onclick="toggleDetail(this)" title="看包装尺寸/组装尺寸">▾</span>{% endif %}
           {% if r.missing %}<br><span class="g-box text-danger" title="查不到尺寸的组件">🚩缺:{{ r.missing|join(',') }}</span>{% endif %}
         </td>
         <td class="g-mini">{{ (r.category or '')[:16] }}</td>
@@ -79,6 +80,22 @@
           {% else %}<span class="g-mini">—</span>{% endif %}
         </td>
       </tr>
+      <tr class="detail" style="display:none"><td colspan="10" class="table-light">
+        <div class="d-flex gap-5 flex-wrap px-2 py-1" style="font-size:.78rem">
+          <div>
+            <b>📦 包装尺寸(发货态)</b>
+            {% if r.boxes %}{% for b in r.boxes %}<div class="g-mini">{{ b.cpbh }}: {{ b.dims }} in → ${{ b.freight }}</div>{% endfor %}
+            <div class="mt-1">合计 <b class="text-danger">${{ r.orig_freight }}</b>（{{ r.boxes|length }}箱）</div>
+            {% else %}<div class="g-mini text-danger">缺尺寸{% if r.missing %}:{{ r.missing|join(',') }}{% endif %}</div>{% endif %}
+          </div>
+          <div>
+            <b>🤖 组装尺寸(AI估退回态·上限)</b>
+            {% if r.ai_dims %}<div>{{ r.ai_dims.L|int }}×{{ r.ai_dims.W|int }}×{{ r.ai_dims.H|int }} in · {{ r.ai_dims.wt|int }} lb → <b class="text-danger">${{ r.ai_freight }}</b></div>
+            <div class="g-mini" style="max-width:440px">{{ r.ai_dims.reason }}</div>
+            {% else %}<div class="g-mini">未估算(点右上"跑AI估算")</div>{% endif %}
+          </div>
+        </div>
+      </td></tr>
       {% else %}
       <tr><td colspan="10" class="text-center text-muted py-4">没有待决策(IN_PROGRESS)的退货</td></tr>
       {% endfor %}
@@ -112,7 +129,12 @@ function setFlt(btn){
   document.querySelectorAll('.flt').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active'); curFlt=btn.dataset.f; applyFilter();
 }
+function toggleDetail(el){
+  const tr=el.closest('tr'), d=tr.nextElementSibling;
+  if(d&&d.classList.contains('detail')) d.style.display=(d.style.display==='none'?'':'none');
+}
 function applyFilter(){
+  document.querySelectorAll('tr.detail').forEach(d=>d.style.display='none');
   const q=(document.getElementById('q').value||'').toLowerCase().trim();
   let shown=0;
   document.querySelectorAll('tr[data-v]').forEach(tr=>{

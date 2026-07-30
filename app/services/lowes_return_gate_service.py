@@ -150,12 +150,13 @@ def list_pending(limit=200):
         ai_map = {}
         if skus:
             ph = ",".join(["%s"] * len(skus))
-            for a in _q(conn, f"""SELECT shop_sku,est_l,est_w,est_h,est_wt
+            for a in _q(conn, f"""SELECT shop_sku,est_l,est_w,est_h,est_wt,reason
                                   FROM order_system.lowes_return_ai_dims
                                   WHERE shop_sku IN ({ph})""", tuple(skus)):
                 if a["est_l"]:
                     ai_map[a["shop_sku"]] = {"L": float(a["est_l"]), "W": float(a["est_w"]),
-                                             "H": float(a["est_h"]), "wt": float(a["est_wt"] or 0)}
+                                             "H": float(a["est_h"]), "wt": float(a["est_wt"] or 0),
+                                             "reason": a["reason"]}
         out = []
         for r in rows:
             sku = r["offer_sku"]
@@ -167,7 +168,7 @@ def list_pending(limit=200):
                 "sku": sku, "zip": zipc, "state": r["shipping_state"], "city": r["shipping_city"],
                 "warehouse_sku": r["warehouse_sku"], "category": r["category"],
                 "goods_value": (f"{gv:.2f}" if gv else None),
-                "orig_freight": None, "ai_freight": None,
+                "orig_freight": None, "ai_freight": None, "ai_dims": None,
                 "boxes": [], "missing": [], "err": None,
                 "verdict": None, "verdict_text": None,
             }
@@ -189,6 +190,7 @@ def list_pending(limit=200):
                 out.append(item); continue
             # AI 上限(用批量缓存;没缓存留 need_ai)
             ai = ai_map.get(sku)
+            item["ai_dims"] = ai
             ai_f = None
             if ai and orig is not None:
                 ai_f, _, aierr = _freight(zipc, [{"cpbh": "AI", "L": ai["L"], "W": ai["W"],
