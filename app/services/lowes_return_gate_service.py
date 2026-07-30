@@ -144,7 +144,7 @@ def list_pending(limit=200):
             SELECT r.return_id, r.order_id, r.date_created, r.reason_code,
                    o.offer_sku, o.shipping_zip, o.shipping_state, o.shipping_city,
                    ol.warehouse_sku,
-                   pt.cost_price, pt.category,
+                   pt.cost_price, pt.category, rc.cost AS rc_cost,
                    cfg.length_in, cfg.width_in, cfg.height_in, cfg.weight_lb,
                    pool.return_id AS pooled
             FROM order_system.mirakl_returns r
@@ -153,6 +153,8 @@ def list_pending(limit=200):
                    ON ol.shop_sku=o.offer_sku AND ol.platform='Lowes' AND ol.shop_name=%s
             LEFT JOIN order_system.pricing_tier pt
                    ON pt.shop_sku=o.offer_sku AND pt.store_key=%s
+            LEFT JOIN (SELECT shop_sku, MAX(cost) cost FROM order_system.return_case
+                       WHERE store='Lowes-Autool' GROUP BY shop_sku) rc ON rc.shop_sku=o.offer_sku
             LEFT JOIN order_system.offer_pricing_config cfg
                    ON cfg.warehouse_sku=ol.warehouse_sku AND cfg.store_key=%s
             LEFT JOIN order_system.lowes_byemail_pool pool ON pool.return_id=r.return_id
@@ -175,7 +177,8 @@ def list_pending(limit=200):
         for r in rows:
             sku = r["offer_sku"]
             zipc = (r["shipping_zip"] or "").strip()
-            gv = Decimal(str(r["cost_price"])) if r["cost_price"] else None
+            _cost = r["cost_price"] or r["rc_cost"]
+            gv = Decimal(str(_cost)) if _cost else None
             pooled = bool(r["pooled"])
             item = {
                 "return_id": r["return_id"], "order_id": r["order_id"],
