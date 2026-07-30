@@ -272,8 +272,10 @@ def _dim_image_url(token, warehouse_sku):
         f = items[0]["fields"]
         for fld in ("第3张", "主图"):
             v = f.get(fld)
-            if isinstance(v, list) and v and isinstance(v[0], dict):
-                v = v[0].get("text") or v[0].get("link")
+            if isinstance(v, list) and v:
+                v = v[0]
+            if isinstance(v, dict):
+                v = v.get("link") or v.get("text")
             if isinstance(v, str) and v.startswith("http"):
                 return v
     except Exception:
