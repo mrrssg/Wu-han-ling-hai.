@@ -132,7 +132,56 @@ def get_ai_dims(conn, shop_sku):
             "wt": float(x["est_wt"] or 0), "reason": x["reason"]}
 
 
-def list_pending(limit=200):
+_IMG_CACHE = {}   # warehouse_sku -> 主图URL(进程缓存)
+
+
+def _url_of(v):
+    if isinstance(v, list) and v:
+        v = v[0]
+    if isinstance(v, dict):
+        v = v.get("link") or v.get("text")
+    return v if (isinstance(v, str) and v.startswith("http")) else None
+
+
+def _txt_of(v):
+    if isinstance(v, list) and v:
+        v = v[0]
+    if isinstance(v, dict):
+        return v.get("text") or v.get("link")
+    return v if isinstance(v, str) else None
+
+
+def _fetch_main_images(base_dir, warehouse_skus):
+    """图片总览按 warehouse_sku 批量取主图URL(缺退第3张),进程缓存。"""
+    whs = [w for w in warehouse_skus if w]
+    need = [w for w in set(whs) if w not in _IMG_CACHE]
+    if need and base_dir:
+        import requests
+        token = _feishu_token(base_dir)
+        if token:
+            H = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            for i in range(0, len(need), 40):
+                chunk = need[i:i + 40]
+                body = {"filter": {"conjunction": "or", "conditions": [
+                    {"field_name": "SKU", "operator": "is", "value": [w]} for w in chunk]},
+                    "field_names": ["SKU", "主图", "第3张"], "page_size": 100}
+                try:
+                    r = requests.post(
+                        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{_IMG_APP_TOKEN}/tables/{_IMG_TABLE}/records/search",
+                        headers=H, data=json.dumps(body), timeout=30).json()
+                    for it in (r.get("data") or {}).get("items") or []:
+                        f = it["fields"]
+                        k = _txt_of(f.get("SKU"))
+                        if k:
+                            _IMG_CACHE[k] = _url_of(f.get("主图")) or _url_of(f.get("第3张"))
+                except Exception:
+                    pass
+                for w in chunk:
+                    _IMG_CACHE.setdefault(w, None)
+    return {w: _IMG_CACHE.get(w) for w in whs}
+
+
+def list_pending(limit=200, base_dir=None):
     """待决策退货(IN_PROGRESS)逐笔:SKU/客户ZIP/货值/原始尺寸→运费→三档建议。"""
     conn = DBManager.get_connection()
     try:
@@ -185,7 +234,7 @@ def list_pending(limit=200):
                 "date": str(r["date_created"])[:10], "reason": r["reason_code"],
                 "sku": sku, "zip": zipc, "state": r["shipping_state"], "city": r["shipping_city"],
                 "warehouse_sku": r["warehouse_sku"], "category": r["category"],
-                "goods_value": (f"{gv:.2f}" if gv else None), "pooled": pooled,
+                "goods_value": (f"{gv:.2f}" if gv else None), "pooled": pooled, "image": None,
                 "orig_freight": None, "ai_freight": None, "ai_dims": None,
                 "boxes": [], "missing": [], "err": None, "dim_src": None,
                 "verdict": None, "verdict_text": None,
@@ -233,6 +282,10 @@ def list_pending(limit=200):
             v, vt = _decide(orig, ai_f, gv)
             item["verdict"], item["verdict_text"] = v, vt
             out.append(item)
+        if base_dir:
+            imgs = _fetch_main_images(base_dir, [it["warehouse_sku"] for it in out])
+            for it in out:
+                it["image"] = imgs.get(it.get("warehouse_sku"))
         return out
     finally:
         conn.close()

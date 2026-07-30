@@ -10,7 +10,7 @@ lowes_return_gate_bp = Blueprint("lowes_return_gate", __name__)
 @lowes_return_gate_bp.route("/")
 def page():
     from app.services.lowes_return_gate_service import list_pending
-    rows = list_pending(limit=200)
+    rows = list_pending(limit=200, base_dir=current_app.config["BASE_DIR"])
     counts = Counter(r["verdict"] for r in rows)
     pooled_count = sum(1 for r in rows if r.get("pooled"))
     return render_template("lowes_return_gate/page.html",

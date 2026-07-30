@@ -38,7 +38,7 @@
 <div class="card"><div class="table-responsive" style="max-height:74vh;overflow-y:auto">
   <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
     <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
-      <th>日期</th><th>订单号</th><th>SKU</th><th>类目</th><th>客户ZIP</th>
+      <th>日期</th><th>订单号</th><th>图</th><th>SKU</th><th>类目</th><th>客户ZIP</th>
       <th class="text-end">货值$</th><th class="text-end">原始运费$</th><th class="text-end">AI估算运费$</th>
       <th>建议</th><th>byemail池</th><th style="min-width:230px">人工核(填真实退回尺寸)</th></tr></thead>
     <tbody>
@@ -46,6 +46,7 @@
       <tr data-v="{{ r.verdict }}" data-pooled="{{ 1 if r.pooled else 0 }}" data-search="{{ r.sku or '' }} {{ r.order_id or '' }} {{ r.zip or '' }}">
         <td class="g-mini text-nowrap">{{ r.date }}</td>
         <td class="font-monospace g-mini text-nowrap">{{ r.order_id or '—' }}</td>
+        <td>{% if r.image %}<img src="{{ r.image }}" style="width:42px;height:42px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="window.open('{{ r.image }}','_blank')" onerror="this.style.display='none'" title="点开大图">{% else %}<span class="g-mini">—</span>{% endif %}</td>
         <td class="font-monospace" style="font-size:.78rem">{{ r.sku or '—' }}
           {% if r.boxes or r.ai_dims %}<span style="cursor:pointer;color:#2563eb;font-weight:700" onclick="toggleDetail(this)" title="看包装尺寸/组装尺寸">▾</span>{% endif %}
           {% if r.missing %}<br><span class="g-box text-danger" title="查不到尺寸的组件">🚩缺:{{ r.missing|join(',') }}</span>{% endif %}
@@ -87,7 +88,7 @@
           {% else %}<span class="g-mini">—</span>{% endif %}
         </td>
       </tr>
-      <tr class="detail" style="display:none"><td colspan="11" class="table-light">
+      <tr class="detail" style="display:none"><td colspan="12" class="table-light">
         <div class="d-flex gap-5 flex-wrap px-2 py-1" style="font-size:.78rem">
           <div>
             <b>📦 包装尺寸(发货态)</b>
@@ -104,7 +105,7 @@
         </div>
       </td></tr>
       {% else %}
-      <tr><td colspan="11" class="text-center text-muted py-4">没有待决策(IN_PROGRESS)的退货</td></tr>
+      <tr><td colspan="12" class="text-center text-muted py-4">没有待决策(IN_PROGRESS)的退货</td></tr>
       {% endfor %}
     </tbody>
   </table>
