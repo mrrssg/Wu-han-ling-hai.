@@ -74,7 +74,7 @@
           <div class="poolmsg g-mini"></div>
         </td>
         <td>
-          {% if r.verdict in ['ask_dims','pending_pool','need_ai','missing','no_cost'] and r.sku and r.zip %}
+          {% if r.sku and r.zip %}
           <div class="d-flex gap-1 align-items-center flex-wrap" style="font-size:.72rem">
             <input class="form-control form-control-sm" style="width:44px" placeholder="长" id="L-{{ loop.index }}">
             <input class="form-control form-control-sm" style="width:44px" placeholder="宽" id="W-{{ loop.index }}">
