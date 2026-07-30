@@ -1,0 +1,105 @@
+{% extends "base_v2.html" %}
+{% block title %}退货把关{% endblock %}
+{% block page_title %}Lowes-Autool 退货把关{% endblock %}
+{% block page_sub %}平台发邮件确认"退不退" → 对比【货值成本】vs【退货运费】决策。目的地固定退货仓 92337，货值>运费就退{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="runAI(this)">🤖 跑AI估算(待估的)</button>
+<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('lowes_return_gate.page') }}">🔄 刷新</a>
+{% endblock %}
+
+{% block content %}
+<style>
+.g-badge{font-size:.72rem;padding:.18rem .5rem;border-radius:6px;font-weight:600;white-space:nowrap}
+.g-mini{font-size:.72rem;color:#6b7280}
+.g-box{font-size:.68rem;color:#6b7280}
+.num{font-variant-numeric:tabular-nums}
+</style>
+
+<div class="d-flex gap-2 mb-3 flex-wrap" style="font-size:.82rem">
+  <span class="badge text-bg-light border">待决策 {{ total }}</span>
+  <span class="badge text-bg-success">🟢 直接给账号 {{ counts.get('return',0) }}</span>
+  <span class="badge text-bg-warning text-dark">🟡 去要真实尺寸 {{ counts.get('ask_dims',0) }}</span>
+  <span class="badge text-bg-danger">🔴 不退 {{ counts.get('no_return',0) }}</span>
+  <span class="badge text-bg-secondary">🤖 待AI估算 {{ counts.get('need_ai',0) }}</span>
+  <span class="badge text-bg-warning text-dark">🚩 缺数据·人工 {{ (counts.get('missing',0) + counts.get('no_cost',0)) }}</span>
+</div>
+
+<div class="alert alert-light border mb-3" style="font-size:.82rem">
+  <b>怎么读:</b> <b>原始运费</b>=平板发货尺寸逐箱算(多箱加总,下限);<b>AI估算运费</b>=组装/伸缩后退回尺寸(上限)。
+  两个都&lt;货值 → 🟢<b>直接给账号</b>;原始&lt;货值但AI估算≥货值 → 🟡<b>去问客户真实退回尺寸</b>(填下方重算);原始就≥货值 → 🔴<b>不退</b>。
+  <span class="g-mini">🤖待AI估算的点右上"跑AI估算"。第三方计费+5%已含。</span>
+</div>
+
+<div class="card"><div class="table-responsive" style="max-height:74vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.83rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th>日期</th><th>SKU</th><th>类目</th><th>客户ZIP</th>
+      <th class="text-end">货值$</th><th class="text-end">原始运费$</th><th class="text-end">AI估算运费$</th>
+      <th>建议</th><th style="min-width:230px">人工核(填真实退回尺寸)</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="g-mini text-nowrap">{{ r.date }}</td>
+        <td class="font-monospace" style="font-size:.78rem">{{ r.sku or '—' }}
+          {% if r.missing %}<br><span class="g-box text-danger" title="查不到尺寸的组件">🚩缺:{{ r.missing|join(',') }}</span>{% endif %}
+        </td>
+        <td class="g-mini">{{ (r.category or '')[:16] }}</td>
+        <td class="g-mini">{{ r.zip or '—' }} {{ r.state or '' }}</td>
+        <td class="text-end num fw-semibold">{{ r.goods_value or '—' }}</td>
+        <td class="text-end num">
+          {% if r.orig_freight %}${{ r.orig_freight }}
+            {% if r.boxes %}<br><span class="g-box" title="{% for b in r.boxes %}{{ b.cpbh }} {{ b.dims }} ${{ b.freight }}&#10;{% endfor %}">{{ r.boxes|length }}箱 ▾</span>{% endif %}
+          {% elif r.err %}<span class="text-danger g-mini">{{ r.err }}</span>{% else %}—{% endif %}
+        </td>
+        <td class="text-end num">{% if r.ai_freight %}${{ r.ai_freight }}{% else %}<span class="g-mini">—</span>{% endif %}</td>
+        <td>
+          {% if r.verdict=='return' %}<span class="g-badge text-bg-success">🟢 {{ r.verdict_text }}</span>
+          {% elif r.verdict=='ask_dims' %}<span class="g-badge text-bg-warning text-dark">🟡 {{ r.verdict_text }}</span>
+          {% elif r.verdict=='no_return' %}<span class="g-badge text-bg-danger">🔴 {{ r.verdict_text }}</span>
+          {% elif r.verdict=='need_ai' %}<span class="g-badge text-bg-secondary">🤖 {{ r.verdict_text }}</span>
+          {% else %}<span class="g-badge text-bg-warning text-dark">🚩 {{ r.verdict_text }}</span>{% endif %}
+        </td>
+        <td>
+          {% if r.verdict in ['ask_dims','need_ai','missing','no_cost'] and r.sku and r.zip %}
+          <div class="d-flex gap-1 align-items-center flex-wrap" style="font-size:.72rem">
+            <input class="form-control form-control-sm" style="width:44px" placeholder="长" id="L-{{ loop.index }}">
+            <input class="form-control form-control-sm" style="width:44px" placeholder="宽" id="W-{{ loop.index }}">
+            <input class="form-control form-control-sm" style="width:44px" placeholder="高" id="H-{{ loop.index }}">
+            <input class="form-control form-control-sm" style="width:48px" placeholder="磅" id="WT-{{ loop.index }}">
+            <button class="btn btn-outline-primary py-0 px-2" style="font-size:.72rem"
+              onclick="recalc({{ loop.index }},'{{ r.sku }}','{{ r.zip }}')">算</button>
+            <span id="rc-{{ loop.index }}" class="g-mini"></span>
+          </div>
+          {% else %}<span class="g-mini">—</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="text-center text-muted py-4">没有待决策(IN_PROGRESS)的退货</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+
+<script>
+async function runAI(btn){
+  btn.disabled=true; btn.textContent='AI估算中…(每个SKU约几秒)';
+  try{
+    const r=await fetch('{{ url_for("lowes_return_gate.ai_estimate") }}',{method:'POST'});
+    const d=await r.json();
+    if(d.success){ alert(`AI估算完成:${d.estimated}个(候选${d.candidates||0})。刷新看结果`); location.reload(); }
+    else{ alert('失败:'+(d.msg||'')); btn.disabled=false; btn.textContent='🤖 跑AI估算(待估的)'; }
+  }catch(e){ alert('请求失败:'+e); btn.disabled=false; btn.textContent='🤖 跑AI估算(待估的)'; }
+}
+async function recalc(i,sku,zip){
+  const g=id=>document.getElementById(id+'-'+i).value;
+  const out=document.getElementById('rc-'+i); out.textContent='算…';
+  const r=await fetch('{{ url_for("lowes_return_gate.recompute") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sku:sku,zip:zip,L:g('L'),W:g('W'),H:g('H'),wt:g('WT')})});
+  const d=await r.json();
+  if(!d.ok){ out.innerHTML='<span class="text-danger">'+(d.msg||'错')+'</span>'; return; }
+  const col=d.verdict==='return'?'text-success':'text-danger';
+  out.innerHTML=`运费$${d.freight} vs 货值$${d.goods_value||'?'} → <b class="${col}">${d.verdict_text}</b>`;
+}
+</script>
+{% endblock %}

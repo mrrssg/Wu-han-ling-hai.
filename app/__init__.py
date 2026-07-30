@@ -61,6 +61,9 @@ def create_app(config_name='default'):
     from app.routes.fedex_return_calc import fedex_return_calc_bp
     app.register_blueprint(fedex_return_calc_bp, url_prefix='/fedex-return-calc')  # FedEx退货运费测算
 
+    from app.routes.lowes_return_gate import lowes_return_gate_bp
+    app.register_blueprint(lowes_return_gate_bp, url_prefix='/lowes-return-gate')  # Lowes-Autool退货把关
+
     @app.before_request
     def require_login():
         endpoint = request.endpoint or ""
