@@ -12,8 +12,10 @@ def page():
     from app.services.lowes_return_gate_service import list_pending
     rows = list_pending(limit=200)
     counts = Counter(r["verdict"] for r in rows)
+    pooled_count = sum(1 for r in rows if r.get("pooled"))
     return render_template("lowes_return_gate/page.html",
-                           rows=rows, counts=counts, total=len(rows))
+                           rows=rows, counts=counts, total=len(rows),
+                           pooled_count=pooled_count)
 
 
 @lowes_return_gate_bp.route("/ai-estimate", methods=["POST"])
@@ -29,6 +31,31 @@ def ai_estimate():
         return jsonify({"success": True, "estimated": n, "candidates": len(need)})
     except Exception as exc:
         return jsonify({"success": False, "msg": str(exc)[:300]}), 500
+
+
+@lowes_return_gate_bp.route("/pool/add", methods=["POST"])
+def pool_add_route():
+    from app.services.lowes_return_gate_service import pool_add
+    d = request.get_json(silent=True) or {}
+    rid = (d.get("return_id") or "").strip()
+    if not rid:
+        return jsonify({"ok": False, "msg": "缺return_id"}), 400
+    try:
+        res = pool_add(current_app.config["BASE_DIR"], rid, d.get("order_id"),
+                       d.get("sku"), d.get("warehouse_sku"), d.get("category"))
+        return jsonify(res)
+    except Exception as exc:
+        return jsonify({"ok": False, "msg": str(exc)[:300]}), 500
+
+
+@lowes_return_gate_bp.route("/pool/remove", methods=["POST"])
+def pool_remove_route():
+    from app.services.lowes_return_gate_service import pool_remove
+    d = request.get_json(silent=True) or {}
+    rid = (d.get("return_id") or "").strip()
+    if not rid:
+        return jsonify({"ok": False, "msg": "缺return_id"}), 400
+    return jsonify(pool_remove(rid))
 
 
 @lowes_return_gate_bp.route("/recompute", methods=["POST"])

@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS order_system.lowes_return_ai_dims (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
+POOL_DDL = """
+CREATE TABLE IF NOT EXISTS order_system.lowes_byemail_pool (
+  return_id VARCHAR(64) NOT NULL PRIMARY KEY,
+  order_id VARCHAR(40), shop_sku VARCHAR(80),
+  added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
 
 def _q(conn, sql, params=None):
     with conn.cursor() as cur:
@@ -130,21 +138,27 @@ def list_pending(limit=200):
     try:
         with conn.cursor() as cur:
             cur.execute(AI_CACHE_DDL)
+            cur.execute(POOL_DDL)
         conn.commit()
         rows = _q(conn, """
             SELECT r.return_id, r.order_id, r.date_created, r.reason_code,
                    o.offer_sku, o.shipping_zip, o.shipping_state, o.shipping_city,
                    ol.warehouse_sku,
-                   pt.cost_price, pt.category
+                   pt.cost_price, pt.category,
+                   cfg.length_in, cfg.width_in, cfg.height_in, cfg.weight_lb,
+                   pool.return_id AS pooled
             FROM order_system.mirakl_returns r
             LEFT JOIN order_system.lowes_order_data o ON o.order_id=r.order_id
             LEFT JOIN order_system.offerprice_listing ol
                    ON ol.shop_sku=o.offer_sku AND ol.platform='Lowes' AND ol.shop_name=%s
             LEFT JOIN order_system.pricing_tier pt
                    ON pt.shop_sku=o.offer_sku AND pt.store_key=%s
+            LEFT JOIN order_system.offer_pricing_config cfg
+                   ON cfg.warehouse_sku=ol.warehouse_sku AND cfg.store_key=%s
+            LEFT JOIN order_system.lowes_byemail_pool pool ON pool.return_id=r.return_id
             WHERE r.shop_name=%s AND r.state='IN_PROGRESS'
-            ORDER BY r.date_created DESC LIMIT %s""",
-                  (SHOP_NAME, STORE_KEY, SHOP_NAME, limit))
+            ORDER BY pool.return_id IS NOT NULL DESC, r.date_created DESC LIMIT %s""",
+                  (SHOP_NAME, STORE_KEY, STORE_KEY, SHOP_NAME, limit))
         # AI缓存一次性批量取
         skus = list({r["offer_sku"] for r in rows if r["offer_sku"]})
         ai_map = {}
@@ -162,45 +176,58 @@ def list_pending(limit=200):
             sku = r["offer_sku"]
             zipc = (r["shipping_zip"] or "").strip()
             gv = Decimal(str(r["cost_price"])) if r["cost_price"] else None
+            pooled = bool(r["pooled"])
             item = {
                 "return_id": r["return_id"], "order_id": r["order_id"],
                 "date": str(r["date_created"])[:10], "reason": r["reason_code"],
                 "sku": sku, "zip": zipc, "state": r["shipping_state"], "city": r["shipping_city"],
                 "warehouse_sku": r["warehouse_sku"], "category": r["category"],
-                "goods_value": (f"{gv:.2f}" if gv else None),
+                "goods_value": (f"{gv:.2f}" if gv else None), "pooled": pooled,
                 "orig_freight": None, "ai_freight": None, "ai_dims": None,
-                "boxes": [], "missing": [], "err": None,
+                "boxes": [], "missing": [], "err": None, "dim_src": None,
                 "verdict": None, "verdict_text": None,
             }
             if not sku or not zipc:
                 item["verdict"], item["verdict_text"] = "missing", "缺SKU或客户ZIP·需人工"
                 out.append(item); continue
-            codes = parse_components(r["warehouse_sku"])
-            boxes, missing = _boxes_for_codes(conn, codes)
+            boxes, missing = _boxes_for_codes(conn, parse_components(r["warehouse_sku"]))
+            item["dim_src"] = "豪雅尺寸表"
+            # 兜底:豪雅表全查不到 → 用 offer_pricing_config 单箱聚合尺寸(Lowes-Autool 100%有)
+            if not boxes and r["length_in"] and r["width_in"] and r["height_in"]:
+                boxes = [{"cpbh": "config聚合", "L": float(r["length_in"]), "W": float(r["width_in"]),
+                          "H": float(r["height_in"]), "wt": float(r["weight_lb"] or 0)}]
+                item["dim_src"], missing = "config兜底(单箱)", []
             item["missing"] = missing
             orig = None
             if boxes:
                 orig, details, err = _freight(zipc, boxes)
-                item["boxes"] = details
-                item["err"] = err
+                item["boxes"], item["err"] = details, err
                 if orig is not None:
                     item["orig_freight"] = f"{orig:.2f}"
-            if missing and not boxes:
-                item["verdict"], item["verdict_text"] = "missing", f"缺尺寸·需人工({','.join(missing)})"
+            if orig is None:
+                item["verdict"], item["verdict_text"] = "missing", (item["err"] or f"缺尺寸·需人工({','.join(missing)})")
                 out.append(item); continue
-            # AI 上限(用批量缓存;没缓存留 need_ai)
+            if gv is None:
+                item["verdict"], item["verdict_text"] = "no_cost", "缺货值·需人工"
+                out.append(item); continue
+            # 原始运费(下限)都≥货值 → 明确不退,不用AI
+            if orig >= gv:
+                item["verdict"], item["verdict_text"] = "no_return", "不退(原始运费≥货值)"
+                out.append(item); continue
+            # orig<货值:要看AI上限。未入池不跑AI(省token),提示入池
+            if not pooled:
+                item["verdict"], item["verdict_text"] = "pending_pool", "待入池(原始<货值,入池后AI核上限)"
+                out.append(item); continue
+            # 已入池:用AI缓存(入池时已估)
             ai = ai_map.get(sku)
             item["ai_dims"] = ai
             ai_f = None
-            if ai and orig is not None:
-                ai_f, _, aierr = _freight(zipc, [{"cpbh": "AI", "L": ai["L"], "W": ai["W"],
-                                                  "H": ai["H"], "wt": ai["wt"]}])
+            if ai:
+                ai_f, _, _e = _freight(zipc, [{"cpbh": "AI", "L": ai["L"], "W": ai["W"],
+                                               "H": ai["H"], "wt": ai["wt"]}])
                 if ai_f is not None:
                     item["ai_freight"] = f"{ai_f:.2f}"
             v, vt = _decide(orig, ai_f, gv)
-            # 有缺件但也有能算的箱:提示
-            if missing and v == "return":
-                vt += f"(注:{len(missing)}个组件缺尺寸未计入)"
             item["verdict"], item["verdict_text"] = v, vt
             out.append(item)
         return out
@@ -278,5 +305,38 @@ def recompute(shop_sku, origin_zip, L, W, H, wt):
                 "goods_value": (f"{gv:.2f}" if gv else None), "verdict": verdict,
                 "verdict_text": ("退(真实运费<货值)" if verdict == "return"
                                  else "不退(真实运费≥货值)")}
+    finally:
+        conn.close()
+
+
+def pool_add(base_dir, return_id, order_id, shop_sku, warehouse_sku, category):
+    """入byemail池 + 立即对该SKU跑AI估退回尺寸(入池才跑=省token)。"""
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(POOL_DDL)
+            cur.execute("""INSERT IGNORE INTO order_system.lowes_byemail_pool
+                (return_id,order_id,shop_sku) VALUES (%s,%s,%s)""",
+                        (return_id, order_id, shop_sku))
+        conn.commit()
+    finally:
+        conn.close()
+    ai_n = 0
+    if shop_sku:
+        try:
+            ai_n = ai_estimate_skus(base_dir, [{"sku": shop_sku, "warehouse_sku": warehouse_sku,
+                                                "category": category}])
+        except Exception as exc:
+            return {"ok": True, "ai_error": str(exc)[:200]}
+    return {"ok": True, "ai_estimated": ai_n}
+
+
+def pool_remove(return_id):
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM order_system.lowes_byemail_pool WHERE return_id=%s", (return_id,))
+        conn.commit()
+        return {"ok": True}
     finally:
         conn.close()
