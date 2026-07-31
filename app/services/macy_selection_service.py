@@ -128,6 +128,14 @@ def rebuild_pool() -> Dict[str, Any]:
             except Exception as exc:
                 if "Duplicate column" not in str(exc):
                     raise
+            # 本地推送明细并入"已上过"：刚推的SKU立刻排除，不依赖飞书传播/整表读全
+            cur.execute("""CREATE TABLE IF NOT EXISTS order_system.macy_pushed_sku (
+                supplier_sku VARCHAR(64) PRIMARY KEY,
+                supplier VARCHAR(16), batch_desc VARCHAR(255),
+                pushed_at DATETIME DEFAULT CURRENT_TIMESTAMP) CHARSET=utf8mb4""")
+            cur.execute("SELECT supplier_sku FROM order_system.macy_pushed_sku")
+            local_pushed = {r["supplier_sku"] for r in cur.fetchall() if r["supplier_sku"]}
+            used |= local_pushed
             # 有效映射(供应商类目→Macy叶子)
             cur.execute("""SELECT supplier, supplier_cat, macy_leaf, macy_brand
                            FROM order_system.macy_cat_map WHERE macy_leaf IS NOT NULL""")
@@ -192,7 +200,8 @@ def rebuild_pool() -> Dict[str, Any]:
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.macy_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
-        return {"used_skus": len(used), "overview_skus": len(overview),
+        return {"used_skus": len(used), "local_pushed_skus": len(local_pushed),
+                "overview_skus": len(overview),
                 "candidates": len(rows),
                 "with_overview_img": sum(1 for r in rows if r[10]),
                 "costway": sum(1 for r in rows if r[0] == "Costway"),
@@ -257,6 +266,7 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             f["供应商"] = sup
         records.append({"fields": f})
     ok = 0
+    pushed = []   # 成功推送的 (供应商SKU, 供应商, 批次)，落本地防飞书写入延迟/整表读取抖动漏排
     for i in range(0, len(records), 100):
         chunk = records[i:i + 100]
         r = requests.post(
@@ -264,6 +274,9 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             headers=H, data=json.dumps({"records": chunk}).encode("utf-8"), timeout=60).json()
         if r.get("code") == 0:
             ok += len(chunk)
+            for it in items[i:i + 100]:
+                if it.get("supplier_sku"):
+                    pushed.append((it["supplier_sku"][:64], it["supplier"], batch_desc[:255]))
 
     # 落推送记录（推了什么类目/多少SKU/何时）
     if ok > 0:
@@ -287,6 +300,16 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
                      sum(1 for it in items if it["supplier"] == "Costway"),
                      sum(1 for it in items if it["supplier"] == "Vevor"),
                      leaf_summary[:1000]))
+                # 本地推送明细：重建时并入"已上过"，刚推的SKU立刻被排除，不等飞书传播
+                cur.execute("""CREATE TABLE IF NOT EXISTS order_system.macy_pushed_sku (
+                    supplier_sku VARCHAR(64) PRIMARY KEY,
+                    supplier VARCHAR(16), batch_desc VARCHAR(255),
+                    pushed_at DATETIME DEFAULT CURRENT_TIMESTAMP) CHARSET=utf8mb4""")
+                if pushed:
+                    cur.executemany("""INSERT INTO order_system.macy_pushed_sku
+                        (supplier_sku, supplier, batch_desc) VALUES (%s,%s,%s)
+                        ON DUPLICATE KEY UPDATE batch_desc=VALUES(batch_desc),
+                        pushed_at=CURRENT_TIMESTAMP""", pushed)
             conn.commit()
         finally:
             conn.close()
