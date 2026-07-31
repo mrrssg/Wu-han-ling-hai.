@@ -14,8 +14,9 @@ from typing import Any, Dict, List
 
 from app.models.db_manager import DBManager
 
-# 只同步这两个HD店（用户2026-07-18定：只要TOP和DEL；BOS/无标识的不要）
-HD_ALLOWED_STORES = {"TOP", "DEL"}
+# 同步的HD店（2026-07-18定TOP+DEL；2026-07-31用户新增BOS店，纳入）
+# 仍排除：无标识(空)、hd(通用桶)、POY 等
+HD_ALLOWED_STORES = {"TOP", "DEL", "BOS"}
 
 
 def _allowed(o: Dict) -> bool:
