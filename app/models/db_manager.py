@@ -568,7 +568,6 @@ class DBManager:
     def update_costway_stock(data_tuples):
         if not data_tuples:
             return
-        run_ts = data_tuples[0][3]   # 本次同步统一时间戳
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cursor:
@@ -583,11 +582,23 @@ class DBManager:
                 cursor.executemany(sql, data_tuples)
                 # 本次 feed 没带的 SKU = Costway 已下架/断货 → 库存置 0，
                 # 否则幽灵库存会在"更新店铺库存"时被推给平台造成超卖砍单。
+                # 用「本次 feed 的 SKU 临时表」精确判定缺失（不用时间戳，避免
+                # datetime 截断微秒把刚 upsert 的行误判为旧行而清空整表）。
                 # 安全闸：下载条数达到合理量才置零，防某次下载截断/失败误清全表。
                 if len(data_tuples) >= 30000:
+                    cursor.execute("DROP TEMPORARY TABLE IF EXISTS _cw_feed")
                     cursor.execute(
-                        "UPDATE newestdropship SET Stock=0 "
-                        "WHERE Updated_At < %s AND Stock <> 0", (run_ts,))
+                        "CREATE TEMPORARY TABLE _cw_feed (SKU VARCHAR(191) "
+                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci PRIMARY KEY)")
+                    feed_skus = [(t[0],) for t in data_tuples if t[0]]
+                    for i in range(0, len(feed_skus), 5000):
+                        cursor.executemany(
+                            "INSERT IGNORE INTO _cw_feed (SKU) VALUES (%s)",
+                            feed_skus[i:i + 5000])
+                    cursor.execute(
+                        "UPDATE newestdropship n LEFT JOIN _cw_feed f ON f.SKU = n.SKU "
+                        "SET n.Stock = 0 WHERE f.SKU IS NULL AND n.Stock <> 0")
+                    cursor.execute("DROP TEMPORARY TABLE IF EXISTS _cw_feed")
             conn.commit()
         except Exception as e:
             conn.rollback()
