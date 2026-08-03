@@ -78,7 +78,8 @@
           {% if r.confirmed %}<span class="text-primary mini">✓</span>{% endif %}
         </td>
         <td class="mini">{{ r.shop_sku or '—' }}</td>
-        <td class="text-end">{% if r.cost is not none %}${{ '%.2f'|format(r.cost) }}{% else %}—{% endif %}</td>
+        <td class="text-end">{% if r.cost is not none %}${{ '%.2f'|format(r.cost) }}{% else %}<span class="text-muted">—</span>{% endif %}
+          <button class="btn btn-link p-0 mini align-baseline" style="text-decoration:none" onclick="toggleEdit('{{ r.tracking }}')" title="人工填/改 订单·SKU·货值">✏️</button></td>
         <td>
           {% if r.claim_filed==1 %}<span class="text-success">✅已登记</span>
           {% elif r.claim_filed==0 %}<span class="text-warning">❌未登记</span>
@@ -87,6 +88,17 @@
         <td class="mini" style="max-width:180px"><div class="text-truncate" title="{{ r.shipper_name }} · {{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}">{{ r.shipper_name }}<br><span class="text-muted">{{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}</span></div></td>
         <td class="mini text-muted">{{ '%.0f'|format(r.actual_weight or 0) }}lb<br>{{ r.dim }}</td>
       </tr>
+      <tr class="edit-row" id="edit-{{ r.tracking }}" style="display:none"><td></td><td colspan="9">
+        <div class="d-flex align-items-center gap-2 flex-wrap mini py-1">
+          <span class="fw-semibold">👤 人工填/改：</span>
+          <span>订单号</span><input class="form-control form-control-sm" style="width:140px" id="mo-{{ r.tracking }}" value="{{ r.order_id or '' }}" placeholder="411…-A">
+          <span>SKU</span><input class="form-control form-control-sm" style="width:160px" id="ms-{{ r.tracking }}" value="{{ r.shop_sku or '' }}" placeholder="ATCO-…/YSVE-…">
+          <span>货值$</span><input type="number" step="0.01" class="form-control form-control-sm" style="width:100px" id="mc-{{ r.tracking }}" value="{{ '%.2f'|format(r.cost) if r.cost is not none else '' }}" placeholder="成本">
+          <button class="btn btn-primary btn-sm py-0 px-2" onclick="manualFill('{{ r.tracking }}')">💾 保存</button>
+          {% if r.confirmed %}<button class="btn btn-outline-secondary btn-sm py-0 px-2" onclick="unbind2('{{ r.tracking }}')">↺ 撤销人工·回自动</button>{% endif %}
+          <span class="text-muted">留空的字段照旧；保存后标「人工」，重新匹配不会覆盖</span>
+        </div>
+      </td></tr>
       {% if r.match_type=='inferred' and r.candidates %}
       <tr class="table-light cand-row" id="cand-{{ r.tracking }}" style="display:none"><td></td><td colspan="9">
         <div class="mini text-muted mb-1">🔍 可能匹配的订单(点"选定"确认)：</div>
@@ -134,6 +146,20 @@ async function confirmMatch(tracking,oid){
   if(!confirm('把跟踪号 '+tracking+' 绑定到订单 '+oid+' ？'))return;
   const r=await fetch('{{ url_for("lowes_return_audit.confirm") }}',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking,order_id:oid})});
+  const d=await r.json();if(d.success)location.reload();else alert('失败:'+(d.msg||''));}
+function toggleEdit(t){const r=document.getElementById('edit-'+t);if(r)r.style.display=r.style.display==='none'?'table-row':'none';}
+async function manualFill(t){
+  const oid=document.getElementById('mo-'+t).value.trim();
+  const sku=document.getElementById('ms-'+t).value.trim();
+  const cost=document.getElementById('mc-'+t).value.trim();
+  const r=await fetch('{{ url_for("lowes_return_audit.manual") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracking:t,order_id:oid,shop_sku:sku,cost:cost})});
+  const d=await r.json();if(d.success)location.reload();else alert('失败:'+(d.msg||''));}
+async function unbind2(t){
+  if(!confirm('撤销人工填写，回到自动匹配？'))return;
+  const r=await fetch('{{ url_for("lowes_return_audit.unbind_route") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:t})});
   const d=await r.json();if(d.success)location.reload();else alert('失败:'+(d.msg||''));}
 </script>
 {% endblock %}

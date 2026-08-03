@@ -281,6 +281,31 @@ def confirm_match(tracking: str, order_id: str) -> Dict[str, Any]:
     return {"success": True, "tracking": tracking, "order_id": order_id}
 
 
+def manual_fill(tracking: str, order_id: Optional[str] = None,
+                shop_sku: Optional[str] = None, cost: Any = None,
+                sale: Any = None) -> Dict[str, Any]:
+    """人工直接填 订单号/SKU/货值(候选都不对、或成本查不到时用)。
+    落 match_type='manual' + confirmed=1，rematch 不会覆盖；unbind 可撤销回自动。"""
+    def _f(v):
+        try:
+            return float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE order_system.fedex_return_audit
+                SET match_type='manual', order_id=%s, shop_sku=%s, cost=%s, sale=%s,
+                    confirmed=1, matched_at=NOW()
+                WHERE tracking=%s""",
+                ((order_id or None), (shop_sku or None), _f(cost), _f(sale), tracking))
+            n = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": n > 0, "tracking": tracking}
+
+
 def unbind(tracking: str) -> Dict[str, Any]:
     """撤销人工确认，回到自动匹配。"""
     conn = DBManager.get_connection()

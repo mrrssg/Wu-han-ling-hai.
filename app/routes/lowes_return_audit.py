@@ -112,6 +112,23 @@ def confirm():
         return jsonify({"success": False, "msg": str(exc)[:300]}), 500
 
 
+@lowes_return_audit_bp.route("/manual", methods=["POST"])
+def manual():
+    from app.services.lowes_return_audit_service import manual_fill
+    data = request.get_json(silent=True) or {}
+    tracking = (data.get("tracking") or "").strip()
+    if not tracking:
+        return jsonify({"success": False, "msg": "缺跟踪号"})
+    try:
+        return jsonify(manual_fill(
+            tracking,
+            (data.get("order_id") or "").strip() or None,
+            (data.get("shop_sku") or "").strip() or None,
+            data.get("cost"), data.get("sale")))
+    except Exception as exc:
+        return jsonify({"success": False, "msg": str(exc)[:300]}), 500
+
+
 @lowes_return_audit_bp.route("/unbind", methods=["POST"])
 def unbind_route():
     from app.services.lowes_return_audit_service import unbind
