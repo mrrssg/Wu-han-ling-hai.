@@ -566,6 +566,9 @@ class DBManager:
     # =======================
     @staticmethod
     def update_costway_stock(data_tuples):
+        if not data_tuples:
+            return
+        run_ts = data_tuples[0][3]   # 本次同步统一时间戳
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cursor:
@@ -578,6 +581,13 @@ class DBManager:
                         Updated_At = VALUES(Updated_At);
                 """
                 cursor.executemany(sql, data_tuples)
+                # 本次 feed 没带的 SKU = Costway 已下架/断货 → 库存置 0，
+                # 否则幽灵库存会在"更新店铺库存"时被推给平台造成超卖砍单。
+                # 安全闸：下载条数达到合理量才置零，防某次下载截断/失败误清全表。
+                if len(data_tuples) >= 30000:
+                    cursor.execute(
+                        "UPDATE newestdropship SET Stock=0 "
+                        "WHERE Updated_At < %s AND Stock <> 0", (run_ts,))
             conn.commit()
         except Exception as e:
             conn.rollback()

@@ -692,7 +692,7 @@ class StockService:
 
         df['Price'] = pd.to_numeric(df['Price'], errors='coerce').fillna(999).astype(float)
 
-        df['Stock'] = pd.to_numeric(df['Stock'], errors='coerce').fillna(999).astype(int)
+        df['Stock'] = pd.to_numeric(df['Stock'], errors='coerce').fillna(0).astype(int)
 
         df = df[df['SKU'] != '']
 
