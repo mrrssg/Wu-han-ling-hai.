@@ -50,9 +50,12 @@
   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('profit_control.sentinel', status=status, **keep) }}">全部</a>
   <span class="ms-3"></span>
   {% for s, lab in [('open','待处理'), ('fixed','已修复'), ('false_positive','误报'), ('all','全部状态')] %}
-  <a class="btn btn-sm {{ 'btn-secondary' if status==s else 'btn-outline-secondary' }}"
+  <a class="btn btn-sm {{ 'btn-secondary' if status==s and not f_pq else 'btn-outline-secondary' }}"
      href="{{ url_for('profit_control.sentinel', status=s, verdict=verdict, **keep) }}">{{ lab }}</a>
   {% endfor %}
+  <span class="ms-3"></span>
+  <a class="btn btn-sm {{ 'btn-primary' if f_pq else 'btn-outline-primary' }}"
+     href="{{ url_for('profit_control.sentinel', pq='1', **keep) }}">📤 推送队列 <span id="pq-count" class="badge bg-light text-dark">{{ queued_count }}</span></a>
 </div>
 
 {% for r in rows %}
@@ -207,9 +210,17 @@ async function queueFix(id, action, btn) {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id:id, action:action})});
     const res = await r.json();
-    if (res.ok) location.reload();
-    else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
-  } catch (e) { alert('请求失败'); btn.disabled = false; }
+    if (res.ok) {
+      const add = (action === 'add');
+      btn.textContent = add ? '移出推送队列' : '📤 加入推送队列';
+      btn.onclick = function(){ queueFix(id, add ? 'remove' : 'add', btn); };
+      btn.classList.toggle('btn-primary', add);
+      btn.classList.toggle('btn-outline-primary', !add);
+      const cnt = document.getElementById('pq-count');
+      if (cnt && res.queued_total != null) cnt.textContent = res.queued_total;
+      btn.disabled = false;
+    } else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
+  } catch (e) { alert('请求失败: ' + e); btn.disabled = false; }
 }
 </script>
 {% endblock %}

@@ -266,11 +266,14 @@ def sentinel():
     status = request.args.get("status", "open")
     f_store = (request.args.get("store") or "").strip()
     f_op = (request.args.get("operator") or "").strip()
+    f_pq = request.args.get("pq") == "1"          # 只看已入推送队列
     conds, params = [], []
+    if f_pq:
+        conds.append("push_status='queued'")
     if verdict:
         conds.append("verdict=%s")
         params.append(verdict)
-    if status and status != "all":
+    if status and status != "all" and not f_pq:   # 看队列时不叠加status筛选
         conds.append("status=%s")
         params.append(status)
     if f_store:
@@ -327,9 +330,13 @@ def sentinel():
     stores = [r["store"] for r in _query(
         """SELECT DISTINCT store FROM order_system.listing_sentinel_findings
            ORDER BY store""")]
+    qtot = _query("SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings "
+                  "WHERE push_status='queued'")
+    queued_count = int(qtot[0]["n"]) if qtot else 0
     return render_template("profit_control/sentinel.html",
                            rows=rows, verdict=verdict, status=status, counts=counts,
-                           f_store=f_store, f_op=f_op, stores=stores,
+                           f_store=f_store, f_op=f_op, stores=stores, f_pq=f_pq,
+                           queued_count=queued_count,
                            operators=list(SENTINEL_OPS.keys()))
 
 
@@ -451,7 +458,10 @@ def sentinel_queue():
     new_status = None if action == "remove" else "queued"
     _exec("UPDATE order_system.listing_sentinel_findings SET push_status=%s WHERE id=%s",
           (new_status, fid))
-    return jsonify({"ok": True, "push_status": new_status})
+    tot = _query("SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings "
+                 "WHERE push_status='queued'")
+    return jsonify({"ok": True, "push_status": new_status,
+                    "queued_total": int(tot[0]["n"]) if tot else 0})
 
 
 # ---------------------------------------------------------------
