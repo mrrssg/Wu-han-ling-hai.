@@ -377,8 +377,8 @@ def sentinel_issue_fp():
     action = (data.get("action") or "add").strip()
     if not fid or not isinstance(idx, int):
         return jsonify({"ok": False, "msg": "缺参数"}), 400
-    row = _query("""SELECT issues_json, fp_issues FROM order_system.listing_sentinel_findings
-                    WHERE id=%s""", (fid,))
+    row = _query("""SELECT issues_json, fp_issues, shop_sku, store, status
+                    FROM order_system.listing_sentinel_findings WHERE id=%s""", (fid,))
     if not row:
         return jsonify({"ok": False, "msg": "找不到该finding"}), 404
     try:
@@ -399,7 +399,22 @@ def sentinel_issue_fp():
     _exec("UPDATE order_system.listing_sentinel_findings SET fp_issues=%s WHERE id=%s",
           (json.dumps(sorted(cur), ensure_ascii=False), fid))
     open_left = sum(1 for i in issues if _issue_sig(i) not in cur)
-    return jsonify({"ok": True, "open_issues": open_left})
+    # 逐条全标误报 → 整条自动归为误报并关首页红条；撤销任一条 → 自动重开
+    status = row[0].get("status")
+    status_changed = None
+    entity = f"{row[0]['shop_sku']}@{row[0]['store']}"
+    if issues and open_left == 0 and status != "false_positive":
+        _exec("UPDATE order_system.listing_sentinel_findings SET status='false_positive' WHERE id=%s", (fid,))
+        _exec("""UPDATE order_system.issue_log SET status='resolved'
+                 WHERE issue_type='listing_mismatch' AND entity=%s AND status='open'""", (entity,))
+        status_changed = "false_positive"
+    elif open_left > 0 and status == "false_positive":
+        _exec("UPDATE order_system.listing_sentinel_findings SET status='open' WHERE id=%s", (fid,))
+        _exec("""UPDATE order_system.issue_log SET status='open'
+                 WHERE issue_type='listing_mismatch' AND entity=%s AND status='resolved'
+                 ORDER BY id DESC LIMIT 1""", (entity,))
+        status_changed = "open"
+    return jsonify({"ok": True, "open_issues": open_left, "status_changed": status_changed})
 
 
 # ---------------------------------------------------------------
