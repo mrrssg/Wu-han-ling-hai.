@@ -251,6 +251,11 @@ def _sku_operator_any(sku: str) -> str:
     return "未知"
 
 
+def _issue_sig(issue: dict) -> str:
+    """单条问题的稳定签名（类型+我方原文前60字），用于逐条误报去重、跨重审保留。"""
+    return f"{(issue.get('type') or '')}|{(issue.get('ours') or '')[:60]}"
+
+
 @profit_control_bp.route("/sentinel")
 def sentinel():
     verdict = request.args.get("verdict", "")
@@ -283,6 +288,16 @@ def sentinel():
             r["issues"] = json.loads(r["issues_json"] or "[]")
         except Exception:
             r["issues"] = []
+        try:
+            fp = set(json.loads(r.get("fp_issues") or "[]"))
+        except Exception:
+            fp = set()
+        for idx, i in enumerate(r["issues"]):
+            if isinstance(i, dict):
+                i["_idx"] = idx
+                i["_fp"] = _issue_sig(i) in fp
+        r["_open_issues"] = sum(1 for i in r["issues"]
+                                if isinstance(i, dict) and not i.get("_fp"))
         try:
             r["fix"] = json.loads(r["fix_json"]) if r.get("fix_json") else None
         except Exception:
@@ -351,6 +366,40 @@ def sentinel_mark():
                      WHERE issue_type='listing_mismatch' AND entity=%s AND status='resolved'
                      ORDER BY id DESC LIMIT 1""", (entity,))
     return jsonify({"ok": True})
+
+
+@profit_control_bp.route("/sentinel/issue-fp", methods=["POST"])
+def sentinel_issue_fp():
+    """逐条问题标/撤销误报：按问题内容签名存入 fp_issues(重审不覆盖)。"""
+    data = request.get_json(silent=True) or {}
+    fid = int(data.get("id") or 0)
+    idx = data.get("index")
+    action = (data.get("action") or "add").strip()
+    if not fid or not isinstance(idx, int):
+        return jsonify({"ok": False, "msg": "缺参数"}), 400
+    row = _query("""SELECT issues_json, fp_issues FROM order_system.listing_sentinel_findings
+                    WHERE id=%s""", (fid,))
+    if not row:
+        return jsonify({"ok": False, "msg": "找不到该finding"}), 404
+    try:
+        issues = json.loads(row[0].get("issues_json") or "[]")
+    except Exception:
+        issues = []
+    if idx < 0 or idx >= len(issues):
+        return jsonify({"ok": False, "msg": "问题下标越界"}), 400
+    sig = _issue_sig(issues[idx])
+    try:
+        cur = set(json.loads(row[0].get("fp_issues") or "[]"))
+    except Exception:
+        cur = set()
+    if action == "remove":
+        cur.discard(sig)
+    else:
+        cur.add(sig)
+    _exec("UPDATE order_system.listing_sentinel_findings SET fp_issues=%s WHERE id=%s",
+          (json.dumps(sorted(cur), ensure_ascii=False), fid))
+    open_left = sum(1 for i in issues if _issue_sig(i) not in cur)
+    return jsonify({"ok": True, "open_issues": open_left})
 
 
 # ---------------------------------------------------------------

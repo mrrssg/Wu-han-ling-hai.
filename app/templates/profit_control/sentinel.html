@@ -12,6 +12,8 @@
 .iss td { font-size:.82rem; vertical-align:top; }
 .quote { background:#fff6f6; border-radius:4px; padding:2px 6px; display:inline-block; }
 .quote2 { background:#f2f8f2; border-radius:4px; padding:2px 6px; display:inline-block; }
+.iss-fp { opacity:.45; }
+.iss-fp .quote, .iss-fp .quote2 { text-decoration:line-through; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
@@ -73,12 +75,12 @@
   {% if r.image_note %}<div class="kpi-sub">图片对比: {{ r.image_note }}</div>{% endif %}
   {% if r.issues %}
   <details class="mt-1" {{ 'open' if r.verdict == 'severe' and r.status == 'open' }}>
-    <summary class="small text-primary" style="cursor:pointer">📋 问题对照（{{ r.issues|length }}条）</summary>
+    <summary class="small text-primary" style="cursor:pointer">📋 问题对照（{{ r.issues|length }}条{% if r._open_issues < r.issues|length %}，{{ r.issues|length - r._open_issues }}条已标误报{% endif %}）</summary>
     <table class="table table-sm mt-1 mb-0 iss">
-      <thead class="table-light"><tr><th>类型</th><th>级别</th><th>我方写的</th><th>供应商依据</th><th>说明</th></tr></thead>
+      <thead class="table-light"><tr><th>类型</th><th>级别</th><th>我方写的</th><th>供应商依据</th><th>说明</th><th style="width:64px">操作</th></tr></thead>
       <tbody>
         {% for i in r.issues %}
-        <tr>
+        <tr class="{{ 'iss-fp' if i._fp }}">
           <td class="text-nowrap">{{ i.type }}</td>
           <td>{% if i.severity == 'high' %}<span class="badge bg-danger">高</span>
               {% elif i.severity == 'mid' %}<span class="badge bg-warning text-dark">中</span>
@@ -86,6 +88,13 @@
           <td><span class="quote">{{ i.ours }}</span></td>
           <td><span class="quote2">{{ i.supplier }}</span></td>
           <td>{{ i.note }}</td>
+          <td class="text-nowrap">
+            {% if i._fp %}<span class="badge bg-secondary">误报</span>
+              <button class="btn btn-link btn-sm p-0" style="font-size:.72rem" onclick="issueFp({{ r.id }},{{ i._idx }},'remove',this)">撤销</button>
+            {% else %}
+              <button class="btn btn-link btn-sm p-0 text-secondary" style="font-size:.72rem;text-decoration:none" onclick="issueFp({{ r.id }},{{ i._idx }},'add',this)" title="只把这一条标为误报，其它保留">🚫误报</button>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -151,6 +160,17 @@ async function mark(id, status, btn) {
     body:JSON.stringify({id:id, status:status})});
   const res = await r.json();
   if (res.ok) location.reload(); else { btn.disabled=false; alert('失败'); }
+}
+async function issueFp(id, index, action, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch('{{ url_for("profit_control.sentinel_issue_fp") }}', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id, index:index, action:action})});
+    const res = await r.json();
+    if (res.ok) location.reload();
+    else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
+  } catch (e) { alert('请求失败'); btn.disabled = false; }
 }
 </script>
 {% endblock %}
