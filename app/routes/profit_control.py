@@ -260,6 +260,33 @@ def _issue_sig(issue: dict) -> str:
 SENTINEL_FIX_FIELDS = {"标题", "fnb1", "fnb2", "fnb3", "fnb4", "fnb5", "长描述"}
 
 
+def _sentinel_filter(args):
+    """哨兵列表的筛选条件（导出与页面共用同一套）。返回 (where, params)。"""
+    verdict = args.get("verdict", "")
+    status = args.get("status", "open")
+    f_store = (args.get("store") or "").strip()
+    f_op = (args.get("operator") or "").strip()
+    f_pq = args.get("pq") == "1"
+    conds, params = [], []
+    if f_pq:
+        conds.append("push_status='queued'")
+    if verdict:
+        conds.append("verdict=%s")
+        params.append(verdict)
+    if status and status != "all" and not f_pq:
+        conds.append("status=%s")
+        params.append(status)
+    if f_store:
+        conds.append("store=%s")
+        params.append(f_store)
+    if f_op in SENTINEL_OPS:
+        seg, head = SENTINEL_OPS[f_op]
+        conds.append("(shop_sku LIKE %s OR shop_sku LIKE %s)")
+        params.extend([f"%{seg}%", f"{head}%"])
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    return where, params
+
+
 @profit_control_bp.route("/sentinel")
 def sentinel():
     verdict = request.args.get("verdict", "")
@@ -462,6 +489,51 @@ def sentinel_queue():
                  "WHERE push_status='queued'")
     return jsonify({"ok": True, "push_status": new_status,
                     "queued_total": int(tot[0]["n"]) if tot else 0})
+
+
+@profit_control_bp.route("/sentinel/export")
+def sentinel_export():
+    """把当前筛选里有修复的 finding 的【改后标题+五点】批量导出 Excel(只内容,人工手动更新用)。"""
+    from io import BytesIO
+    from datetime import datetime
+    from openpyxl import Workbook
+    from flask import send_file
+    where, params = _sentinel_filter(request.args)
+    rows = _query(f"""SELECT shop_sku, store, verdict, fix_json, fix_edited_json
+                      FROM order_system.listing_sentinel_findings {where}
+                      ORDER BY store, shop_sku""", tuple(params) if params else None)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "改后内容"
+    ws.append(["Shop SKU", "店铺", "标题(改后)", "五点1", "五点2", "五点3", "五点4", "五点5"])
+    n = 0
+    for r in rows:
+        if not r.get("fix_json"):
+            continue
+        try:
+            steps = {s["field"]: (s.get("fixed") or "")
+                     for s in (json.loads(r["fix_json"]).get("steps") or []) if isinstance(s, dict)}
+        except Exception:
+            steps = {}
+        try:
+            edits = json.loads(r.get("fix_edited_json") or "{}")
+        except Exception:
+            edits = {}
+        def val(f):
+            return edits[f] if f in edits else steps.get(f, "")
+        # 只导出 标题 + 五点(用户明确不要长描述)；改了才填,没改留空
+        if not any(val(f) for f in ("标题", "fnb1", "fnb2", "fnb3", "fnb4", "fnb5")):
+            continue
+        ws.append([r["shop_sku"], r["store"], val("标题"),
+                   val("fnb1"), val("fnb2"), val("fnb3"), val("fnb4"), val("fnb5")])
+        n += 1
+    ws["J1"] = f"共{n}个SKU"
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    fname = f"哨兵改后内容_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=fname,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ---------------------------------------------------------------

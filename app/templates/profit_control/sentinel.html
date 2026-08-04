@@ -56,6 +56,9 @@
   <span class="ms-3"></span>
   <a class="btn btn-sm {{ 'btn-primary' if f_pq else 'btn-outline-primary' }}"
      href="{{ url_for('profit_control.sentinel', pq='1', **keep) }}">📤 推送队列 <span id="pq-count" class="badge bg-light text-dark">{{ queued_count }}</span></a>
+  <a class="btn btn-sm btn-success"
+     href="{{ url_for('profit_control.sentinel_export', verdict=verdict or none, status=status, store=f_store or none, operator=f_op or none, pq='1' if f_pq else none) }}"
+     title="把当前筛选里有修复的SKU的【改后标题+五点】导出Excel">⬇️ 导出改后内容</a>
 </div>
 
 {% for r in rows %}
