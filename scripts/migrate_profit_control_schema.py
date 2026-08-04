@@ -220,6 +220,10 @@ ALTERS = [
     "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_time DATETIME DEFAULT NULL",
     "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fp_issues JSON DEFAULT NULL "
     "COMMENT '逐条误报的问题签名列表(type|ours前60),重审不覆盖'",
+    "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN fix_edited_json JSON DEFAULT NULL "
+    "COMMENT '人工编辑后的修复文案 {字段:成品文案},只内容字段'",
+    "ALTER TABLE order_system.listing_sentinel_findings ADD COLUMN push_status VARCHAR(20) DEFAULT NULL "
+    "COMMENT '推送队列状态: queued/pushed/failed(Phase3用)'",
     "ALTER TABLE order_system.return_case ADD COLUMN claim_filed TINYINT(1) NOT NULL DEFAULT 0 "
     "COMMENT '已在飞书退货登记表追过款(每日从tblCqER404qe57vV同步),追款清单排除'",
     "ALTER TABLE order_system.return_case ADD COLUMN claim_tracking VARCHAR(64) DEFAULT NULL "

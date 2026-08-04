@@ -256,6 +256,10 @@ def _issue_sig(issue: dict) -> str:
     return f"{(issue.get('type') or '')}|{(issue.get('ours') or '')[:60]}"
 
 
+# 只允许编辑/推送的内容字段（价格/库存永不进来）——AI修复本就只产这些字段
+SENTINEL_FIX_FIELDS = {"标题", "fnb1", "fnb2", "fnb3", "fnb4", "fnb5", "长描述"}
+
+
 @profit_control_bp.route("/sentinel")
 def sentinel():
     verdict = request.args.get("verdict", "")
@@ -302,6 +306,10 @@ def sentinel():
             r["fix"] = json.loads(r["fix_json"]) if r.get("fix_json") else None
         except Exception:
             r["fix"] = None
+        try:
+            r["fix_edits"] = json.loads(r.get("fix_edited_json") or "{}")
+        except Exception:
+            r["fix_edits"] = {}
     # 徽章计数跟随店铺/运营筛选（不含verdict/status本身）
     cconds, cparams = [], []
     if f_store:
@@ -415,6 +423,35 @@ def sentinel_issue_fp():
                  ORDER BY id DESC LIMIT 1""", (entity,))
         status_changed = "open"
     return jsonify({"ok": True, "open_issues": open_left, "status_changed": status_changed})
+
+
+@profit_control_bp.route("/sentinel/save-fix", methods=["POST"])
+def sentinel_save_fix():
+    """保存人工编辑后的修复文案（只收内容字段，价格/库存一律拒）。"""
+    data = request.get_json(silent=True) or {}
+    fid = int(data.get("id") or 0)
+    edits = data.get("edits") or {}
+    if not fid or not isinstance(edits, dict):
+        return jsonify({"ok": False, "msg": "缺参数"}), 400
+    # 白名单：只保留内容字段，其它(含任何价格/库存字段)丢弃
+    clean = {k: str(v) for k, v in edits.items() if k in SENTINEL_FIX_FIELDS}
+    _exec("UPDATE order_system.listing_sentinel_findings SET fix_edited_json=%s WHERE id=%s",
+          (json.dumps(clean, ensure_ascii=False), fid))
+    return jsonify({"ok": True, "saved_fields": list(clean.keys())})
+
+
+@profit_control_bp.route("/sentinel/queue", methods=["POST"])
+def sentinel_queue():
+    """加入/移出推送队列（Phase 1 只打标记，Phase 2/3 才真组装/推）。"""
+    data = request.get_json(silent=True) or {}
+    fid = int(data.get("id") or 0)
+    action = (data.get("action") or "add").strip()
+    if not fid:
+        return jsonify({"ok": False, "msg": "缺参数"}), 400
+    new_status = None if action == "remove" else "queued"
+    _exec("UPDATE order_system.listing_sentinel_findings SET push_status=%s WHERE id=%s",
+          (new_status, fid))
+    return jsonify({"ok": True, "push_status": new_status})
 
 
 # ---------------------------------------------------------------

@@ -103,22 +103,35 @@
   {% endif %}
   {% if r.fix %}
   <details class="mt-2" open>
-    <summary class="small text-success fw-bold" style="cursor:pointer">🤖 AI修复方案（{{ r.fix.steps|length }}处修改，逐字段可直接粘贴）</summary>
+    <summary class="small text-success fw-bold" style="cursor:pointer">🤖 AI修复方案（{{ r.fix.steps|length }}处修改，可直接改后保存）
+      {% if r.fix_edits %}<span class="badge text-bg-info">✍️已人工编辑</span>{% endif %}
+      {% if r.push_status == 'queued' %}<span class="badge text-bg-primary">📤已入推送队列</span>{% endif %}</summary>
     <table class="table table-sm mt-1 mb-1 iss">
-      <thead class="table-light"><tr><th style="width:70px">字段</th><th>修改后文案（直接可用）</th><th style="width:26%">为什么这么改</th></tr></thead>
+      <thead class="table-light"><tr><th style="width:70px">字段</th><th>修改后文案（可编辑，改完保存）</th><th style="width:24%">为什么这么改</th></tr></thead>
       <tbody>
         {% for s in r.fix.steps %}
         <tr>
           <td class="text-nowrap"><b>{{ s.field }}</b></td>
-          <td><div class="quote2" style="display:block;white-space:pre-wrap">{{ s.fixed }}</div>
-              <div class="kpi-sub mt-1">原文：{{ s.current }}</div></td>
+          <td>
+            <textarea class="form-control form-control-sm fx-edit" data-fid="{{ r.id }}" data-field="{{ s.field }}"
+              rows="{{ 4 if s.field == '长描述' else 2 }}" style="white-space:pre-wrap">{% if s.field in r.fix_edits %}{{ r.fix_edits[s.field] }}{% else %}{{ s.fixed }}{% endif %}</textarea>
+            <div class="kpi-sub mt-1">原文：{{ s.current }}</div></td>
           <td class="small">{{ s.reason }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    {% if r.fix.other_advice %}<div class="kpi-sub">其他建议：{{ r.fix.other_advice }}</div>{% endif %}
-    <div class="kpi-sub mt-1">📌 操作步骤：{{ r.fix.operation_guide }}</div>
+    {% if r.fix.other_advice %}<div class="kpi-sub">其他建议（图片/价格等，走人工，不在推送范围）：{{ r.fix.other_advice }}</div>{% endif %}
+    <div class="d-flex gap-2 flex-wrap mt-1">
+      <button class="btn btn-sm btn-success py-0" onclick="saveFix({{ r.id }}, this)">💾 保存修复文案</button>
+      {% if r.push_status == 'queued' %}
+      <button class="btn btn-sm btn-outline-primary py-0" onclick="queueFix({{ r.id }}, 'remove', this)">移出推送队列</button>
+      {% else %}
+      <button class="btn btn-sm btn-outline-primary py-0" onclick="queueFix({{ r.id }}, 'add', this)">📤 加入推送队列</button>
+      {% endif %}
+      <span class="kpi-sub align-self-center">只推内容(标题/五点/长描述)，不碰价格；真推送在后续阶段做</span>
+    </div>
+    <div class="kpi-sub mt-1">📌 手动操作步骤（暂用）：{{ r.fix.operation_guide }}</div>
   </details>
   {% endif %}
   <div class="mt-2">
@@ -167,6 +180,32 @@ async function issueFp(id, index, action, btn) {
     const r = await fetch('{{ url_for("profit_control.sentinel_issue_fp") }}', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id:id, index:index, action:action})});
+    const res = await r.json();
+    if (res.ok) location.reload();
+    else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
+  } catch (e) { alert('请求失败'); btn.disabled = false; }
+}
+async function saveFix(id, btn) {
+  const edits = {};
+  document.querySelectorAll('textarea.fx-edit[data-fid="' + id + '"]').forEach(function(t){
+    edits[t.dataset.field] = t.value;
+  });
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '保存中…';
+  try {
+    const r = await fetch('{{ url_for("profit_control.sentinel_save_fix") }}', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id, edits:edits})});
+    const res = await r.json();
+    if (res.ok) { btn.textContent = '✅已保存'; setTimeout(function(){location.reload();}, 500); }
+    else { alert('失败: ' + (res.msg || '')); btn.textContent = old; btn.disabled = false; }
+  } catch (e) { alert('请求失败'); btn.textContent = old; btn.disabled = false; }
+}
+async function queueFix(id, action, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch('{{ url_for("profit_control.sentinel_queue") }}', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id, action:action})});
     const res = await r.json();
     if (res.ok) location.reload();
     else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
