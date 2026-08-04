@@ -50,14 +50,12 @@
   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('profit_control.sentinel', status=status, **keep) }}">全部</a>
   <span class="ms-3"></span>
   {% for s, lab in [('open','待处理'), ('fixed','已修复'), ('false_positive','误报'), ('all','全部状态')] %}
-  <a class="btn btn-sm {{ 'btn-secondary' if status==s and not f_pq else 'btn-outline-secondary' }}"
+  <a class="btn btn-sm {{ 'btn-secondary' if status==s else 'btn-outline-secondary' }}"
      href="{{ url_for('profit_control.sentinel', status=s, verdict=verdict, **keep) }}">{{ lab }}</a>
   {% endfor %}
   <span class="ms-3"></span>
-  <a class="btn btn-sm {{ 'btn-primary' if f_pq else 'btn-outline-primary' }}"
-     href="{{ url_for('profit_control.sentinel', pq='1', **keep) }}">📤 推送队列 <span id="pq-count" class="badge bg-light text-dark">{{ queued_count }}</span></a>
   <a class="btn btn-sm btn-success"
-     href="{{ url_for('profit_control.sentinel_export', verdict=verdict or none, status=status, store=f_store or none, operator=f_op or none, pq='1' if f_pq else none) }}"
+     href="{{ url_for('profit_control.sentinel_export', verdict=verdict or none, status=status, store=f_store or none, operator=f_op or none) }}"
      title="把当前筛选里有修复的SKU的【改后标题+五点】导出Excel">⬇️ 导出改后内容</a>
 </div>
 
@@ -110,8 +108,7 @@
   {% if r.fix %}
   <details class="mt-2" open>
     <summary class="small text-success fw-bold" style="cursor:pointer">🤖 AI修复方案（{{ r.fix.steps|length }}处修改，可直接改后保存）
-      {% if r.fix_edits %}<span class="badge text-bg-info">✍️已人工编辑</span>{% endif %}
-      {% if r.push_status == 'queued' %}<span class="badge text-bg-primary">📤已入推送队列</span>{% endif %}</summary>
+      {% if r.fix_edits %}<span class="badge text-bg-info">✍️已人工编辑</span>{% endif %}</summary>
     <table class="table table-sm mt-1 mb-1 iss">
       <thead class="table-light"><tr><th style="width:70px">字段</th><th>修改后文案（可编辑，改完保存）</th><th style="width:24%">为什么这么改</th></tr></thead>
       <tbody>
@@ -130,12 +127,7 @@
     {% if r.fix.other_advice %}<div class="kpi-sub">其他建议（图片/价格等，走人工，不在推送范围）：{{ r.fix.other_advice }}</div>{% endif %}
     <div class="d-flex gap-2 flex-wrap mt-1">
       <button class="btn btn-sm btn-success py-0" onclick="saveFix({{ r.id }}, this)">💾 保存修复文案</button>
-      {% if r.push_status == 'queued' %}
-      <button class="btn btn-sm btn-outline-primary py-0" onclick="queueFix({{ r.id }}, 'remove', this)">移出推送队列</button>
-      {% else %}
-      <button class="btn btn-sm btn-outline-primary py-0" onclick="queueFix({{ r.id }}, 'add', this)">📤 加入推送队列</button>
-      {% endif %}
-      <span class="kpi-sub align-self-center">只推内容(标题/五点/长描述)，不碰价格；真推送在后续阶段做</span>
+      <span class="kpi-sub align-self-center">改完保存 → 顶部「⬇️导出改后内容」批量导出标题+五点</span>
     </div>
     <div class="kpi-sub mt-1">📌 手动操作步骤（暂用）：{{ r.fix.operation_guide }}</div>
   </details>
@@ -205,25 +197,6 @@ async function saveFix(id, btn) {
     if (res.ok) { btn.textContent = '✅已保存'; setTimeout(function(){location.reload();}, 500); }
     else { alert('失败: ' + (res.msg || '')); btn.textContent = old; btn.disabled = false; }
   } catch (e) { alert('请求失败'); btn.textContent = old; btn.disabled = false; }
-}
-async function queueFix(id, action, btn) {
-  btn.disabled = true;
-  try {
-    const r = await fetch('{{ url_for("profit_control.sentinel_queue") }}', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id:id, action:action})});
-    const res = await r.json();
-    if (res.ok) {
-      const add = (action === 'add');
-      btn.textContent = add ? '移出推送队列' : '📤 加入推送队列';
-      btn.onclick = function(){ queueFix(id, add ? 'remove' : 'add', btn); };
-      btn.classList.toggle('btn-primary', add);
-      btn.classList.toggle('btn-outline-primary', !add);
-      const cnt = document.getElementById('pq-count');
-      if (cnt && res.queued_total != null) cnt.textContent = res.queued_total;
-      btn.disabled = false;
-    } else { alert('失败: ' + (res.msg || '')); btn.disabled = false; }
-  } catch (e) { alert('请求失败: ' + e); btn.disabled = false; }
 }
 </script>
 {% endblock %}

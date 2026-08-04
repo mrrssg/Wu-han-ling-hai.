@@ -266,14 +266,11 @@ def _sentinel_filter(args):
     status = args.get("status", "open")
     f_store = (args.get("store") or "").strip()
     f_op = (args.get("operator") or "").strip()
-    f_pq = args.get("pq") == "1"
     conds, params = [], []
-    if f_pq:
-        conds.append("push_status='queued'")
     if verdict:
         conds.append("verdict=%s")
         params.append(verdict)
-    if status and status != "all" and not f_pq:
+    if status and status != "all":
         conds.append("status=%s")
         params.append(status)
     if f_store:
@@ -293,14 +290,11 @@ def sentinel():
     status = request.args.get("status", "open")
     f_store = (request.args.get("store") or "").strip()
     f_op = (request.args.get("operator") or "").strip()
-    f_pq = request.args.get("pq") == "1"          # 只看已入推送队列
     conds, params = [], []
-    if f_pq:
-        conds.append("push_status='queued'")
     if verdict:
         conds.append("verdict=%s")
         params.append(verdict)
-    if status and status != "all" and not f_pq:   # 看队列时不叠加status筛选
+    if status and status != "all":
         conds.append("status=%s")
         params.append(status)
     if f_store:
@@ -357,13 +351,9 @@ def sentinel():
     stores = [r["store"] for r in _query(
         """SELECT DISTINCT store FROM order_system.listing_sentinel_findings
            ORDER BY store""")]
-    qtot = _query("SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings "
-                  "WHERE push_status='queued'")
-    queued_count = int(qtot[0]["n"]) if qtot else 0
     return render_template("profit_control/sentinel.html",
                            rows=rows, verdict=verdict, status=status, counts=counts,
-                           f_store=f_store, f_op=f_op, stores=stores, f_pq=f_pq,
-                           queued_count=queued_count,
+                           f_store=f_store, f_op=f_op, stores=stores,
                            operators=list(SENTINEL_OPS.keys()))
 
 
@@ -472,23 +462,6 @@ def sentinel_save_fix():
     _exec("UPDATE order_system.listing_sentinel_findings SET fix_edited_json=%s WHERE id=%s",
           (json.dumps(clean, ensure_ascii=False), fid))
     return jsonify({"ok": True, "saved_fields": list(clean.keys())})
-
-
-@profit_control_bp.route("/sentinel/queue", methods=["POST"])
-def sentinel_queue():
-    """加入/移出推送队列（Phase 1 只打标记，Phase 2/3 才真组装/推）。"""
-    data = request.get_json(silent=True) or {}
-    fid = int(data.get("id") or 0)
-    action = (data.get("action") or "add").strip()
-    if not fid:
-        return jsonify({"ok": False, "msg": "缺参数"}), 400
-    new_status = None if action == "remove" else "queued"
-    _exec("UPDATE order_system.listing_sentinel_findings SET push_status=%s WHERE id=%s",
-          (new_status, fid))
-    tot = _query("SELECT COUNT(*) AS n FROM order_system.listing_sentinel_findings "
-                 "WHERE push_status='queued'")
-    return jsonify({"ok": True, "push_status": new_status,
-                    "queued_total": int(tot[0]["n"]) if tot else 0})
 
 
 @profit_control_bp.route("/sentinel/export")
