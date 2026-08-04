@@ -54,9 +54,9 @@
      href="{{ url_for('profit_control.sentinel', status=s, verdict=verdict, **keep) }}">{{ lab }}</a>
   {% endfor %}
   <span class="ms-3"></span>
-  <a class="btn btn-sm btn-success"
+  <a class="btn btn-sm {{ 'btn-success' if f_store else 'btn-outline-success' }}"
      href="{{ url_for('profit_control.sentinel_export', verdict=verdict or none, status=status, store=f_store or none, operator=f_op or none) }}"
-     title="把当前筛选里有修复的SKU的【改后标题+五点】导出Excel">⬇️ 导出改后内容</a>
+     title="导出当前筛选(店铺/运营/严重度/状态)里有修复的SKU的【改后标题+五点】。先在左边选店铺再导,就只导那家。">⬇️ 导出改后内容 · {{ f_store or '全部店铺(先选店铺筛)' }}</a>
 </div>
 
 {% for r in rows %}
