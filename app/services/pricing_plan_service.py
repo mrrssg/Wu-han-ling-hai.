@@ -75,7 +75,7 @@ def _qall(conn, sql, params=None):
         return cur.fetchall() or []
 
 
-def evaluate_store(store_key: str) -> Dict[str, Any]:
+def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
     """v5（用户2026-07-16定稿）：
 
       需要的毛利 = 10%基线 + 退货损失率
@@ -387,6 +387,7 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
               "cat": cat, "operator": op, "p_recover": round(p_recover, 4),
               "tail_m": round(tail_m, 3), "avg_age": avg_age,
               "tier_margins": {k: round(v, 4) for k, v in tier_margin_map.items()},
+              "tier_prices": {k: round(v, 2) for k, v in tier_price_map.items()},
               "supplier_price": sp,
               "listed_days": listed_days, "cur_price": cur_price, "cost": cost}
 
@@ -456,6 +457,9 @@ def evaluate_store(store_key: str) -> Dict[str, Any]:
                      orders90, returns90, round(am, 4), None,
                      listed_days, cur_price or None, cost or None,
                      round(lr, 4), src, op, cat, now))
+
+    if dry_run:   # 只算不写库（评估改动影响用）
+        return {"store_key": store_key, "offers": len(rows), "tiers": counts, "rows": rows}
 
     conn = DBManager.get_connection()
     try:
