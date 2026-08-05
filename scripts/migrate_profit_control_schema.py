@@ -230,6 +230,10 @@ ALTERS = [
     "COMMENT '退货登记表(退货)Tracking Number,Lowes跟进退货是否真的寄回'",
     "ALTER TABLE order_system.return_case ADD COLUMN claim_result VARCHAR(32) DEFAULT NULL "
     "COMMENT '退货登记表处理结果(已回复邮件/弃货等)'",
+    # 加宽:多箱退货一格可有十几个跟踪号(实测12箱=155字符),原varchar(64)会截断尾部跟踪号
+    # 导致后面几箱退货运费匹配不上落到"推断"(2026-08-05)。512约容39箱,足够。
+    "ALTER TABLE order_system.return_case MODIFY COLUMN claim_tracking VARCHAR(512) DEFAULT NULL "
+    "COMMENT '退货登记表(退货)Tracking Number,多箱空格分隔全存(加宽防截断)'",
 ]
 
 

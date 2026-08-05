@@ -78,6 +78,17 @@ def _cost_from_costway(cur, costway_sku: Optional[str]) -> Optional[float]:
     return None
 
 
+def _costway_sku_for_order(cur, order_id: Optional[str]) -> Optional[str]:
+    """订单号 → Costway SKU(从 lowesorder 取)。用于 return_case 无货值时兜底算成本。"""
+    if not order_id:
+        return None
+    cur.execute("""SELECT Costway_SKU FROM autooperate.lowesorder
+                   WHERE `Order number` LIKE %s AND Costway_SKU IS NOT NULL
+                     AND Costway_SKU<>'' LIMIT 1""", (order_id + "%",))
+    r = cur.fetchone()
+    return r["Costway_SKU"] if r and r.get("Costway_SKU") else None
+
+
 def _order_cost_claim(cur, order_id: str, costway_sku: Optional[str] = None) -> Dict[str, Any]:
     """一个订单的 货值/售价/运营/已登记。优先 return_case(权威,含claim_filed)，否则算成本。"""
     cur.execute(f"""SELECT shop_sku, cost, sale, operator, claim_filed
@@ -103,8 +114,14 @@ def _match_by_tracking(cur, tracking: str) -> Optional[Dict[str, Any]]:
     r = cur.fetchone()
     if not r:
         return None
+    # 货值优先用 return_case(权威,组合套装准确)；没有再从 Costway SKU 兜底补
+    cost = float(r["cost"] or 0)
+    if cost <= 0:
+        fb = _cost_from_costway(cur, _costway_sku_for_order(cur, r["order_id"]))
+        if fb:
+            cost = fb
     return {"match_type": "tracking", "order_id": r["order_id"], "shop_sku": r["shop_sku"],
-            "cost": float(r["cost"] or 0), "sale": float(r["sale"] or 0),
+            "cost": cost, "sale": float(r["sale"] or 0),
             "operator": r["operator"], "claim_filed": r["claim_filed"], "candidates_json": None}
 
 

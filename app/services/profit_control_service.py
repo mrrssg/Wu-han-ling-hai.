@@ -179,17 +179,29 @@ def fetch_claim_filed_orders() -> Dict[str, Dict[str, str]]:
             o = _gt(f.get("订单")).strip()
             if not o:
                 continue
-            info = {"tracking": _gt(f.get("（退货）Tracking Number")).strip()[:64],
-                    "result": _gt(f.get("处理结果")).strip()[:32]}
+            # 多箱退货一格可有十几个跟踪号(空格/逗号分隔)：全存不截断(原[:64]会丢尾部跟踪号)；
+            # 同一订单若跨多行登记，跟踪号合并(去重保序)而非二选一，否则漏箱→匹配落到推断。
+            trk = _gt(f.get("（退货）Tracking Number")).strip()
+            result = _gt(f.get("处理结果")).strip()[:32]
             keys = [o]
             m = re.match(r"^(.+-[A-Z])-\d+$", o)
             if m:
                 keys.append(m.group(1))
             for k in keys:
-                old = orders.get(k)
-                if old is None or (info["tracking"] and not old["tracking"]) \
-                        or (not old["tracking"] and info["result"] and not old["result"]):
-                    orders[k] = info
+                cur_info = orders.get(k)
+                if cur_info is None:
+                    cur_info = {"tracking": "", "result": ""}
+                    orders[k] = cur_info
+                if trk:
+                    have = cur_info["tracking"].split()
+                    seen = set(have)
+                    for t in trk.replace(",", " ").split():
+                        if t and t not in seen:
+                            have.append(t)
+                            seen.add(t)
+                    cur_info["tracking"] = " ".join(have)[:512]
+                if result and not cur_info["result"]:
+                    cur_info["result"] = result
         page_token = data["data"].get("page_token")
         if not page_token:
             break
