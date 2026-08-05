@@ -55,6 +55,36 @@ def page():
     if f_over:
         rows = [r for r in rows if r["over"]]
 
+    # 同一订单的多个跟踪号(多箱退货)排到相邻；货值/登记只在该订单首行显示一次(用户要求
+    # "每个订单只显示一个货值")。首行取该订单真实货值=组内 max(忽略人工填的0)，其余行 is_dup。
+    def _cost_of(x):
+        return float(x["cost"]) if x.get("cost") is not None else None
+    groups, order_seq = {}, []
+    for r in rows:
+        gkey = r.get("order_id") or ("__none__" + str(r["tracking"]))  # 未匹配行各自成组
+        if gkey not in groups:
+            groups[gkey] = []
+            order_seq.append(gkey)
+        groups[gkey].append(r)
+    ordered = []
+    for gkey in order_seq:
+        g = groups[gkey]
+        costs = [c for c in (_cost_of(x) for x in g) if c is not None]
+        order_cost = max(costs) if costs else None
+        claim = 1 if any(x.get("claim_filed") == 1 for x in g) else \
+                (0 if any(x.get("claim_filed") == 0 for x in g) else None)
+        # 组内：带全额货值的行排首(✏️预填正确)，再按运费降序
+        g.sort(key=lambda x: (-(_cost_of(x) if _cost_of(x) is not None else -1e18),
+                              -(float(x.get("net_charge") or 0))))
+        for i, x in enumerate(g):
+            x["is_dup"] = (i > 0 and len(g) > 1)
+            x["order_cost"] = order_cost
+            x["order_claim"] = claim
+            x["order_span"] = len(g)
+        ordered.append((max((float(x.get("net_charge") or 0) for x in g), default=0.0), g))
+    ordered.sort(key=lambda t: -t[0])       # 订单组按组内最大退货运费降序(大损失置顶)
+    rows = [x for _, g in ordered for x in g]
+
     # ⚠️ 货值(cost)按【订单】去重，运费(net_charge)/计数按【跟踪号】。
     # 一个订单多箱退货=多个跟踪号行，每行都挂整单货值；直接 SUM(cost) 会把货值加 N 遍。
     # 运费相反：每箱是真实独立的一笔退货运费，多箱=多笔真损失，不能去重。

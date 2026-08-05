@@ -78,11 +78,15 @@
           {% if r.confirmed %}<span class="text-primary mini">✓</span>{% endif %}
         </td>
         <td class="mini">{{ r.shop_sku or '—' }}</td>
-        <td class="text-end">{% if r.cost is not none %}${{ '%.2f'|format(r.cost) }}{% else %}<span class="text-muted">—</span>{% endif %}
+        <td class="text-end">
+          {% if r.is_dup %}<span class="text-muted mini" title="同一订单多箱退货，货值已在该订单首行计一次，不重复计入">↑ 同订单</span>
+          {% elif r.order_cost is not none %}${{ '%.2f'|format(r.order_cost) }}{% if r.order_span > 1 %}<br><span class="text-muted mini" title="该订单退了{{ r.order_span }}箱({{ r.order_span }}个跟踪号)，货值只算一次">共{{ r.order_span }}箱·货值计1次</span>{% endif %}
+          {% else %}<span class="text-muted">—</span>{% endif %}
           <button class="btn btn-link p-0 mini align-baseline" style="text-decoration:none" onclick="toggleEdit('{{ r.tracking }}')" title="人工填/改 订单·SKU·货值">✏️</button></td>
         <td>
-          {% if r.claim_filed==1 %}<span class="text-success">✅已登记</span>
-          {% elif r.claim_filed==0 %}<span class="text-warning">❌未登记</span>
+          {% if r.is_dup %}<span class="text-muted mini">↑</span>
+          {% elif r.order_claim==1 %}<span class="text-success">✅已登记</span>
+          {% elif r.order_claim==0 %}<span class="text-warning">❌未登记</span>
           {% else %}<span class="text-muted mini">—</span>{% endif %}
         </td>
         <td class="mini" style="max-width:180px"><div class="text-truncate" title="{{ r.shipper_name }} · {{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}">{{ r.shipper_name }}<br><span class="text-muted">{{ r.shipper_city }},{{ r.shipper_state }} {{ r.shipper_zip }}</span></div></td>
