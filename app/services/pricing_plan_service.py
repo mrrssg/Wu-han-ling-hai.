@@ -517,6 +517,9 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
 # =====================================================================
 
 MIN_DEVIATION = 0.01     # 目标价和现价差1%以内不折腾
+# 全损店"好SKU不动"(用户2026-08-05)：现价真实毛利已≥此值的，即使档位目标更高也不往上顶
+# (兜底退损率可能高估、把已健康SKU顶到25%意义不大)；只有跌破此值才涨。降价不受此限。
+HEALTHY_NO_RAISE_MARGIN = 0.22
 COLD_BATCH = 500   # 零销量降档促活每轮最多放500个候选（分批观察激活率，防一次全动）
 
 ACTION_TIERS = ("tier_12", "tier_15", "tier_18", "tier_20", "tier_22", "tier_25", "cold_12")   # 现价偏离档位公式价≥1%才出候选
@@ -628,6 +631,14 @@ def generate_plan_candidates(store_key: str) -> Dict[str, Any]:
             height_in=float(cfg.get("height_in") or 0),
             weight_lb=float(cfg.get("weight_lb") or 0),
             formula_variant=formula_variant, cost_buffer=cost_buffer)
+
+        # 全损店：已健康毛利(≥HEALTHY_NO_RAISE_MARGIN)的SKU不往上顶，只救真低价的(用户2026-08-05)。
+        # 降价(dev<0)照常，涨价(dev>0)且现毛利已够健康就跳过。
+        if (store_key in FULL_LOSS_STORES and dev > 0
+                and margin_before is not None
+                and margin_before >= HEALTHY_NO_RAISE_MARGIN):
+            summary["skip_healthy_no_raise"] = summary.get("skip_healthy_no_raise", 0) + 1
+            continue
 
         log_rows.append({
             "run_id": run_id, "run_type": "plan", "store_key": store_key,
