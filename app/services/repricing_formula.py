@@ -38,15 +38,16 @@ DIM_FACTOR_VOLUME_WEIGHT = 225        # 体积重 = L*W*H / 225
 PRICE_FORMULA_VARIANTS = {
     "macy": {"cost_factor": 0.92, "divisor": 0.6444},
     "lowes": {"cost_factor": 1.0, "divisor": 0.73},
-    # lowes_vevor（Yasonic，2026-07-22）：全司顺货，退实体店销毁→无退货成本项；
-    #   真实成本 = 供应商价×0.8×1.07；定价成本 = 真实成本×上溢buffer(每SKU 1.05/1.08)；
-    #   实际毛利按真实成本算(所以高于名义)。cost_factor/divisor 仅占位。
+    # lowes_vevor（Yasonic，2026-07-22；2026-08-05改）：全司顺货，退实体店销毁→无退货成本项；
+    #   真实成本 = 供应商价×0.8（去消费税后）；定价成本 = 真实成本（去buffer）；
+    #   退货损失靠 定价基线12% + 全损退损率 + 放开20/22/25档 保证净利≥12%。cost_factor/divisor 仅占位。
     "lowes_vevor": {"cost_factor": 1.0, "divisor": 0.73},
 }
 DEFAULT_FORMULA_VARIANT = "macy"
 
-# Yasonic真实成本系数（不含buffer；buffer是每SKU的上溢，另传）
-YASONIC_REAL_COST_FACTOR = 0.8 * 1.07   # = 0.856
+# Yasonic真实成本系数 = 供应商价×0.8（司顺折扣）。2026-08-05去消费税：司顺7月起不收7%消费税，
+# 原 0.8*1.07=0.856 里的 1.07 抠掉。（buffer已废弃，退货损失改由12%基线+全损退损率+高档位盖）
+YASONIC_REAL_COST_FACTOR = 0.8
 
 # legacy aliases kept so any old import still resolves
 PRICE_FORMULA_NUMERATOR_COST_FACTOR = PRICE_FORMULA_VARIANTS["macy"]["cost_factor"]
@@ -187,7 +188,7 @@ def calculate_breakdown(
     # ---- Yasonic：真实成本+buffer+无退货成本项（2026-07-22）----
     if formula_variant == "lowes_vevor":
         real_cost = supplier_price * YASONIC_REAL_COST_FACTOR
-        pricing_cost = real_cost * (cost_buffer if cost_buffer else 1.0)
+        pricing_cost = real_cost   # 2026-08-05去buffer：退货损失改由定价基线12%+全损退损率+放开高档位盖
         div = divisor_override if divisor_override else variant["divisor"]
         formula_price = pricing_cost / div
         discount_price = round(formula_price, 0) - ROUNDED_OFFSET

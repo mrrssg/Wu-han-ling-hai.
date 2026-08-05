@@ -25,7 +25,10 @@ from app.models.db_manager import DBManager
 
 CN_TZ = timezone(timedelta(hours=8))
 
-BASELINE = 0.10            # 考核基线（唯一不动的常数）
+BASELINE = 0.10            # 考核基线（利润控制台判达标用，不动）
+# 定价基线（各店定价目标净利，可≠考核基线）。Yasonic 2026-08-05 定到12%：司顺退货纯损失，
+# 去掉猜的buffer后靠"12%基线+全损退货损失率+放开高档位"保证扣退货后净利≥12%。默认回退 BASELINE。
+STORE_BASELINE = {"lowes_yasonic": 0.12}
 COLD_WATCH_DAYS = 30       # 零销量<30天=新品观察
 MIN_ORDERS_OWN = 11        # 窗口>10单用SKU自己的数（用户2026-07-17定；退货损失率、实际毛利同一门槛）
 MIN_CAT_ORDERS = 30        # 运营×类目 / 运营全池 的最小样本单数
@@ -313,6 +316,10 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
 
     rows = []
     counts: Dict[str, int] = {}
+    base = STORE_BASELINE.get(store_key, BASELINE)   # 该店定价基线(Yasonic=12%,其它10%)
+    # 全损店(Yasonic)：放开高档位20/22/25给所有SKU + 严格盖住need(不放1点宽容)
+    full_loss = store_key in FULL_LOSS_STORES
+    tol = 0.0 if full_loss else KEEP_TOLERANCE
     for o in offers:
         sku = o["shop_sku"]
         cat = offer_cat[sku]
@@ -326,7 +333,7 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
         listed_days = (now.date() - o["listed_at"].date()).days if o["listed_at"] else None
 
         lr, am, src, orders_m = level_pick(sku, cat, op)
-        need = BASELINE + lr
+        need = base + lr
 
         # ---- 各档公式价的精确毛利：毛利 = (P×(1−佣金) − 成本) ÷ P ----
         tier_margin_map: Dict[str, float] = {}
@@ -349,9 +356,10 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
                 lr = rr_use * (cost / sell_p)      # 全损：退一颗丢整货值占售价比（不折减回收）
                 src = ("高货值·品类退率全损" if cost >= HIGH_VALUE_THRESHOLD
                        else "高退率品类·全损")
-                need = BASELINE + lr
-        # 突破18%顶：常规三档盖不住时往上加 20/22/25 档
-        tier_set = TIER_MARGINS + (TIER_MARGINS_HV if is_hv else [])
+                need = base + lr
+        # 突破18%顶：常规三档盖不住时往上加 20/22/25 档。全损店(Yasonic)所有SKU都放开高档位
+        # （退货纯损失、退损率高，非高货值SKU也常需20%+毛利才能净12%）
+        tier_set = TIER_MARGINS + (TIER_MARGINS_HV if (is_hv or full_loss) else [])
 
         # lowes_vevor(Yasonic)无退货运费项，不要求 return_shipping_base
         _need_rsb = formula_variant != "lowes_vevor"
@@ -409,13 +417,13 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
             tier = None
             for key, nominal in tier_set:
                 m = tier_margin_map.get(key)
-                if m is not None and m >= need - KEEP_TOLERANCE:
+                if m is not None and m >= need - tol:
                     tier, target = key, nominal
                     break
             if tier is not None:
                 _rec_txt = ("全损不折减回收）" if "全损" in src
                             else f"可要回{p_recover*100:.1f}%已折减）")
-                reason = (f"需要毛利{need*100:.1f}%（10%基线+退货损失率{lr*100:.1f}%，{src}口径，"
+                reason = (f"需要毛利{need*100:.1f}%（{int(base*100)}%基线+退货损失率{lr*100:.1f}%，{src}口径，"
                           + _rec_txt + f"；本SKU各档公式价毛利 {m_txt}"
                           f"——{int(target*100)}%档够住，取最低够用档（现实际毛利{am*100:.1f}%）")
             elif orders_m >= DELIST_MIN_WINDOW_ORDERS:
