@@ -219,7 +219,7 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
     supplier_price, supplier_updated = sp_info
 
     cost_buffer = float(cfg["cost_buffer"]) if cfg.get("cost_buffer") else None
-    new_cost = ((supplier_price * 0.8 * 1.07) if _is_vevor
+    new_cost = ((supplier_price * 0.8) if _is_vevor   # 2026-08-05去消费税(原×1.07,司顺7月起不收)
                 else cost_from_supplier_price(supplier_price, supplier))
     # Store-level override (e.g. macy_kuyotq fixed at 0.4) wins over Feishu
     # per-SKU value to neutralise stale/dirty Feishu data.
@@ -250,6 +250,17 @@ def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
     )
     target_origin = round(float(bd.origin_price), 2)
     target_discount = round(float(bd.discount_price), 2)
+
+    # 全损店(Yasonic)"好SKU不动"(用户2026-08-05)：涨价且现价真实毛利已≥HEALTHY_NO_RAISE_MARGIN
+    # 就保持现价不导出(与待改价候选同口径,别把已健康的SKU顶到更高档)。降价照常。
+    if _is_vevor and db_origin_price is not None and target_origin > float(db_origin_price):
+        from app.services.pricing_plan_service import HEALTHY_NO_RAISE_MARGIN
+        _cur_disc = float(db_origin_price) * df
+        if _cur_disc > 0 and (_cur_disc * (1 - cr) - new_cost) / _cur_disc >= HEALTHY_NO_RAISE_MARGIN:
+            return {"status": "skipped_healthy_no_raise",
+                    "supplier": supplier, "supplier_price": supplier_price,
+                    "new_cost": new_cost, "target_origin_price": target_origin,
+                    "current_origin_price": float(db_origin_price)}
 
     if db_origin_price is None:
         # treat as needs-update so the operator can fill it in
