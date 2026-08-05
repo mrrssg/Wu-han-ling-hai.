@@ -158,6 +158,44 @@ def _load_blacklist(store_key: str) -> set:
 # Per-row decision (pure-python, no DB)
 # =============================================================================
 
+def _load_order_activity(store_key: str) -> Dict[str, Tuple[int, int]]:
+    """每SKU (近30天订单数, 全部订单数)，给整体导出"改价提示"列用。
+    lowes_order_data 数据从 2026-04 起，全部订单=0 视为"从未出单"。"""
+    from app.services.pricing_plan_service import STORE_MAP
+    m = STORE_MAP.get(store_key)
+    if not m:
+        return {}
+    shop_id = m[2]
+    conn = DBManager.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT offer_sku,
+                          COUNT(DISTINCT order_id) AS o_all,
+                          COUNT(DISTINCT CASE WHEN created_date >=
+                                DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN order_id END) AS o_30
+                     FROM order_system.lowes_order_data
+                    WHERE shop_id=%s AND order_state<>'CANCELED'
+                    GROUP BY offer_sku""", (shop_id,))
+            return {r["offer_sku"]: (int(r["o_30"] or 0), int(r["o_all"] or 0))
+                    for r in cursor.fetchall() or []}
+    finally:
+        conn.close()
+
+
+def _price_note(shop_sku: str, decision: Dict, activity: Dict[str, Tuple[int, int]]) -> str:
+    """改价提示标注：销售情况 × 涨跌方向。"""
+    o30, oall = activity.get(shop_sku, (0, 0))
+    cur_p = decision.get("current_origin_price")
+    tgt_p = decision.get("target_origin_price")
+    up = (cur_p is not None and tgt_p is not None and float(tgt_p) > float(cur_p))
+    if oall == 0:
+        return "从未出单"
+    if o30 > 0:
+        return "⚠️在售·涨价" if up else "在售·降价"
+    return "曾出单·涨价" if up else "曾出单·降价"
+
+
 def _decide(offer: Dict, cfg: Optional[Dict], sp_lookup: Dict, blacklist: set,
             formula_variant: str = "macy",
             discount_factor_override: Optional[float] = None,
@@ -444,11 +482,13 @@ def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
         base_headers = [str(c.value).strip() if c.value else "" for c in ws[1]]
         # Build header-name -> column-index map (1-based)
         col_idx_by_name = {h: i + 1 for i, h in enumerate(base_headers) if h}
-        # Append rows aligned to base header order
+        # 末尾附非-Mirakl的"改价提示"标注列(供人工核对;传Mirakl时该列被忽略,不放心可删)
+        note_col = len(base_headers) + 1
+        ws.cell(row=1, column=note_col, value="改价提示")
+        # Append rows aligned to base header order + 标注列
         for r in rows:
-            line = []
-            for h in base_headers:
-                line.append(r.get(h))
+            line = [r.get(h) for h in base_headers]
+            line.append(r.get("改价提示"))
             ws.append(line)
         wb.save(output_path)
         wb.close()
@@ -458,9 +498,9 @@ def write_xlsx(rows: List[Dict[str, Any]], output_path: str,
     wb = Workbook()
     ws = wb.active
     ws.title = "offers-import"
-    ws.append(OFFERS_IMPORT_COLUMNS)
+    ws.append(OFFERS_IMPORT_COLUMNS + ["改价提示"])
     for r in rows:
-        ws.append([r.get(c) for c in OFFERS_IMPORT_COLUMNS])
+        ws.append([r.get(c) for c in OFFERS_IMPORT_COLUMNS] + [r.get("改价提示")])
     wb.save(output_path)
     return len(rows)
 
@@ -631,6 +671,8 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
 
     from app.services.pricing_plan_service import COLD_BATCH
 
+    order_activity = _load_order_activity(store_key)   # 改价提示列用
+
     by_tier: Dict[str, int] = {}
     for offer in active_offers:
         wh = offer.get("warehouse_sku")
@@ -658,7 +700,9 @@ def run_full_export(output_dir: str, store_key: str = "macy_kuyotq") -> Dict[str
                     raw = json.loads(offer["raw_json"])
                 except (TypeError, ValueError):
                     raw = {}
-            xlsx_rows.append(_build_xlsx_row(offer, decision, raw, push_discount))
+            _xrow = _build_xlsx_row(offer, decision, raw, push_discount)
+            _xrow["改价提示"] = _price_note(offer["shop_sku"], decision, order_activity)
+            xlsx_rows.append(_xrow)
 
     # Sort xlsx output by sku for tidy review
     xlsx_rows.sort(key=lambda r: r["sku"])
