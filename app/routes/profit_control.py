@@ -470,7 +470,13 @@ def sentinel_export():
     from io import BytesIO
     from datetime import datetime
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from flask import send_file
+
+    def _clean(v):
+        # 去掉 openpyxl 不允许的控制字符（AI文案偶带,否则写Excel直接崩500）
+        return ILLEGAL_CHARACTERS_RE.sub("", str(v)) if v not in (None, "") else ""
+
     where, params = _sentinel_filter(request.args)
     rows = _query(f"""SELECT shop_sku, store, verdict, fix_json, fix_edited_json
                       FROM order_system.listing_sentinel_findings {where}
@@ -497,8 +503,9 @@ def sentinel_export():
         # 只导出 标题 + 五点(用户明确不要长描述)；改了才填,没改留空
         if not any(val(f) for f in ("标题", "fnb1", "fnb2", "fnb3", "fnb4", "fnb5")):
             continue
-        ws.append([r["shop_sku"], r["store"], val("标题"),
-                   val("fnb1"), val("fnb2"), val("fnb3"), val("fnb4"), val("fnb5")])
+        ws.append([_clean(r["shop_sku"]), _clean(r["store"]), _clean(val("标题")),
+                   _clean(val("fnb1")), _clean(val("fnb2")), _clean(val("fnb3")),
+                   _clean(val("fnb4")), _clean(val("fnb5"))])
         n += 1
     ws["J1"] = f"共{n}个SKU"
     bio = BytesIO()
