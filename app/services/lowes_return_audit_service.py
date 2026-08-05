@@ -89,6 +89,48 @@ def _costway_sku_for_order(cur, order_id: Optional[str]) -> Optional[str]:
     return r["Costway_SKU"] if r and r.get("Costway_SKU") else None
 
 
+def _returned_qty(cur, order_id: Optional[str]) -> int:
+    """这次实际退回的件数 —— 以【系统 mirakl 退货记录】为准(用户定案 2026-08-05)。
+    飞书退货登记表的"退回数量"很多单没填,mirakl 更全且有填处两者一致。一单可拆多条退货记录,累加。"""
+    if not order_id:
+        return 0
+    cur.execute("""SELECT COALESCE(SUM(return_lines_total_qty),0) q
+                   FROM order_system.mirakl_returns
+                   WHERE order_id=%s AND shop_name='autool'""", (order_id,))
+    r = cur.fetchone()
+    return int(r["q"]) if r and r.get("q") else 0
+
+
+def _unit_cost(cur, shop_sku: Optional[str], order_id: Optional[str]) -> Optional[float]:
+    """单件成本：优先 pricing_tier.cost_price(定价系统,飞书维护,组合套装准),
+    在架 SKU 才有;下架/缺失回退 Costway feed×0.75。"""
+    if shop_sku:
+        cur.execute("SELECT cost_price FROM order_system.pricing_tier WHERE shop_sku=%s LIMIT 1", (shop_sku,))
+        r = cur.fetchone()
+        if r and r.get("cost_price") and float(r["cost_price"]) > 0:
+            return float(r["cost_price"])
+    return _cost_from_costway(cur, _costway_sku_for_order(cur, order_id))
+
+
+def _recompute_order_values(cur) -> int:
+    """把每个匹配到订单的行的货值重算成【实际退回件数 × 单件成本】,覆盖该订单所有行(含人工填的)。
+    多件退货算全、部分退货只算退的、组合套装成本准。件数/成本任一取不到就跳过(保留原值)。"""
+    cur.execute("""SELECT DISTINCT order_id, shop_sku FROM order_system.fedex_return_audit
+                   WHERE order_id IS NOT NULL""")
+    pairs = cur.fetchall()
+    n = 0
+    for p in pairs:
+        oid, sku = p["order_id"], p["shop_sku"]
+        qty = _returned_qty(cur, oid)
+        uc = _unit_cost(cur, sku, oid)
+        if qty and uc:
+            cur.execute("""UPDATE order_system.fedex_return_audit SET cost=%s
+                           WHERE order_id=%s AND (shop_sku=%s OR %s IS NULL)""",
+                        (round(qty * uc, 2), oid, sku, sku))
+            n += cur.rowcount
+    return n
+
+
 def _order_cost_claim(cur, order_id: str, costway_sku: Optional[str] = None) -> Dict[str, Any]:
     """一个订单的 货值/售价/运营/已登记。优先 return_case(权威,含claim_filed)，否则算成本。"""
     cur.execute(f"""SELECT shop_sku, cost, sale, operator, claim_filed
@@ -262,6 +304,8 @@ def rematch_all(only_unconfirmed: bool = True) -> Dict[str, Any]:
                     WHERE tracking=%s""",
                     (m["match_type"], m["order_id"], m["shop_sku"], m["cost"], m["sale"],
                      m["operator"], m["claim_filed"], m["candidates_json"], row["tracking"]))
+            # 货值统一按【实际退回件数 × 单件成本】重算(覆盖所有匹配行,含人工),多件/部分退货都准
+            _recompute_order_values(cur)
         conn.commit()
     finally:
         conn.close()
