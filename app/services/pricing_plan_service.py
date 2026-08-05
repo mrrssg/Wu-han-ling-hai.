@@ -399,7 +399,10 @@ def evaluate_store(store_key: str, dry_run: bool = False) -> Dict[str, Any]:
               "supplier_price": sp,
               "listed_days": listed_days, "cur_price": cur_price, "cost": cost}
 
-        if orders90 == 0:
+        # 全损店(Yasonic)不搞12%促活：退货全损下"出一单退一单"会亏本(2026-08-05用户定)。
+        # 零销量也按 need=定价基线+全店退损率 定价(落下面正常评档,兜底退损率≈20%档)扛住全损；
+        # 出单攒够自己数据(>10单)后 level_pick 自动切"SKU自己"退货率→升/降档。
+        if orders90 == 0 and not full_loss:
             if listed_days is not None and listed_days < COLD_WATCH_DAYS:
                 tier, target = "cold_watch", None
                 reason = f"上架{listed_days}天还没出单——新品观察期（{COLD_WATCH_DAYS}天内）不动价"
