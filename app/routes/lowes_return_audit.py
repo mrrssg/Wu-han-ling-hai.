@@ -55,17 +55,26 @@ def page():
     if f_over:
         rows = [r for r in rows if r["over"]]
 
-    stat = _query("""SELECT
-        COUNT(*) n, COALESCE(SUM(net_charge),0) ship_total,
-        COALESCE(SUM(CASE WHEN order_id IS NOT NULL THEN net_charge END),0) ship_matched,
-        COALESCE(SUM(CASE WHEN claim_filed=1 THEN cost END),0) claim_cost,
-        COALESCE(SUM(CASE WHEN claim_filed=0 THEN cost END),0) unclaim_cost,
-        COALESCE(SUM(CASE WHEN order_id IS NOT NULL THEN cost END),0) cost_matched,
-        SUM(order_id IS NOT NULL) matched_n,
-        SUM(match_type='tracking') n_track, SUM(match_type='po') n_po,
-        SUM(match_type='inferred') n_infer, SUM(match_type='manual') n_manual,
-        SUM(match_type='none') n_none
-        FROM order_system.fedex_return_audit""")
+    # ⚠️ 货值(cost)按【订单】去重，运费(net_charge)/计数按【跟踪号】。
+    # 一个订单多箱退货=多个跟踪号行，每行都挂整单货值；直接 SUM(cost) 会把货值加 N 遍。
+    # 运费相反：每箱是真实独立的一笔退货运费，多箱=多笔真损失，不能去重。
+    stat = _query("""SELECT t.*, o.claim_cost, o.unclaim_cost, o.cost_matched FROM
+        (SELECT
+            COUNT(*) n, COALESCE(SUM(net_charge),0) ship_total,
+            COALESCE(SUM(CASE WHEN order_id IS NOT NULL THEN net_charge END),0) ship_matched,
+            SUM(order_id IS NOT NULL) matched_n,
+            SUM(match_type='tracking') n_track, SUM(match_type='po') n_po,
+            SUM(match_type='inferred') n_infer, SUM(match_type='manual') n_manual,
+            SUM(match_type='none') n_none
+         FROM order_system.fedex_return_audit) t
+        CROSS JOIN
+        (SELECT
+            COALESCE(SUM(CASE WHEN claim_filed=1 THEN c END),0) claim_cost,
+            COALESCE(SUM(CASE WHEN claim_filed=0 THEN c END),0) unclaim_cost,
+            COALESCE(SUM(c),0) cost_matched
+         FROM (SELECT MAX(cost) c, MAX(claim_filed) claim_filed
+               FROM order_system.fedex_return_audit
+               WHERE order_id IS NOT NULL GROUP BY order_id) g) o""")
     s = stat[0] if stat else {}
     total = int(s.get("n") or 0)
     matched_n = int(s.get("matched_n") or 0)
