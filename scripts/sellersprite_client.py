@@ -6,6 +6,7 @@ secret-key 从 instance/sellersprite_key.txt 读(不入 git),或环境变量 SS_
 目前只封装 google_trend(蓝海季节用)。
 """
 import json
+import time
 from pathlib import Path
 
 import requests
@@ -61,12 +62,19 @@ def _call(tool: str, arguments: dict, timeout: int = 60) -> dict:
 
 
 def google_trend(keyword: str, marketplace: str = "US", monthly: bool = True) -> list:
-    """返回 [{'time':ms,'value':int}, ...]，失败/无数据返回 []。"""
+    """返回 [{'time':ms,'value':int}, ...]，失败/无数据返回 []。
+    空结果退避重试一次(应对限流；真空关键词多花一次调用可接受)。"""
     if not keyword:
         return []
-    try:
-        payload = _call("google_trend", {"request": {
-            "keyword": keyword, "marketplace": marketplace, "monthly": monthly}})
-        return (payload.get("data") or {}).get("items") or []
-    except Exception:
-        return []
+    for attempt in range(2):
+        try:
+            payload = _call("google_trend", {"request": {
+                "keyword": keyword, "marketplace": marketplace, "monthly": monthly}})
+            items = (payload.get("data") or {}).get("items") or []
+            if items or attempt == 1:
+                return items
+        except Exception:
+            if attempt == 1:
+                return []
+        time.sleep(3)      # 退避后重试
+    return []

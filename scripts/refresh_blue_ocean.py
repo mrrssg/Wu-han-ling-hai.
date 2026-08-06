@@ -48,7 +48,7 @@ def refresh(store: str, topn: int):
                 done += 1
                 print(f"  {tag:6s} peak={peak or '-':4s} now={now if now is not None else '-':>3} "
                       f"blue={blue:3d} pts={len(items):2d} | {leaf} (kw={kw})")
-                time.sleep(0.4)              # 轻微限速
+                time.sleep(1.2)             # 限速, 防 SellerSprite 限流
         conn.commit()
         print(f"[blue_ocean refresh] store={store} candidates={len(cand)} season_updated={done}")
     finally:
