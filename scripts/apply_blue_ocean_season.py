@@ -27,6 +27,21 @@ from app.models.db_manager import DBManager
 FACTOR = {"⏫升温": 1.25, "🔥当季": 1.15, "🟰平稳": 1.0, "⏬降温": 0.7}
 
 
+def _profile(items):
+    """月度序列 → [1月..12月] 平均热度(缺月=0)。近3月窗口排行用。"""
+    prof = {m: [] for m in range(1, 13)}
+    for it in items or []:
+        try:
+            if isinstance(it, dict):
+                t, v = it["time"], float(it["value"])
+            else:
+                t, v = it[0], float(it[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        prof[datetime.utcfromtimestamp(t / 1000).month].append(v)
+    return [round(sum(prof[m]) / len(prof[m])) if prof[m] else 0 for m in range(1, 13)]
+
+
 def _season(items):
     """月度序列 → (tag, peak_month_label, trend_now_index)。"""
     prof = {m: [] for m in range(1, 13)}

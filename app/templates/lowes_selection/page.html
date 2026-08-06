@@ -25,6 +25,22 @@
   {% endfor %}
 </div>
 
+{% if hot_window %}
+<div class="card p-2 mb-3" style="font-size:.8rem;border-left:3px solid #ff7a45">
+  <div class="fw-semibold mb-1">📅 近3个月（{{ win_months }}）最旺类目
+    <span class="text-muted fw-normal">（热度=Google Trends 当季强度0~100,越高=越正处在自己旺季；在售/蓝海/探索一起排；点类目看候选）</span></div>
+  <div class="d-flex flex-wrap gap-1">
+    {% for x in hot_window %}
+    <a class="badge text-decoration-none {{ 'text-bg-danger' if x.heat>=85 else ('text-bg-warning' if x.heat>=65 else 'text-bg-secondary') }}"
+       href="{{ url_for('lowes_selection.page', store=store, leaf=x.leaf) }}"
+       title="{{ x.leaf }} · {{ x.kind }} · {{ win_months }}当季强度 {{ x.heat }}/100{% if x.peak %} · 全年旺季 {{ x.peak }}{% endif %}">
+      {{ loop.index }}. {{ x.leaf }} <b>{{ x.heat }}</b> <span class="opacity-75">{{ x.kind }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {% if cat_demand %}
 <div class="card p-2 mb-3" style="font-size:.8rem">
   <div class="fw-semibold mb-1">🔥 {{ stores[store] }} 近90天最好卖的类目<span class="text-muted fw-normal">（分数=GMV×净利率加权；净利率=毛利−15%佣金−退货损失；点类目=只看该类目候选）</span></div>

@@ -7,6 +7,7 @@ google_trend 取季节 + _season 折季节标签 + 重算 blue_score。不再需
 用法: refresh_blue_ocean.py [store=autool] [topn=24]
 需要 instance/sellersprite_key.txt(或环境变量 SS_KEY)。
 """
+import json
 import os
 import sys
 import time
@@ -20,7 +21,7 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 from app import create_app
 from app.models.db_manager import DBManager
 from compute_blue_ocean import _kw, compute
-from apply_blue_ocean_season import FACTOR, _season
+from apply_blue_ocean_season import FACTOR, _profile, _season
 from sellersprite_client import google_trend, market_research
 
 
@@ -35,6 +36,7 @@ def refresh(store: str, topn: int):
                 fit, sup = int(c["fit_score"]), int(c["supply_score"])
                 items = google_trend(kw)
                 tag, peak, now = _season(items)
+                prof = json.dumps(_profile(items))
                 internal = 0.65 * fit + 0.35 * sup
                 blue = round(min(100, internal * FACTOR.get(tag, 1.0)))
                 if fit < 60:
@@ -45,10 +47,10 @@ def refresh(store: str, topn: int):
                 mr = market_research(kw) if fit >= 55 else {}
                 cur.execute(
                     "UPDATE order_system.lowes_blue_ocean SET season_tag=%s, season_peak=%s,"
-                    " trend_now=%s, blue_score=%s, gt_keyword=%s,"
+                    " trend_now=%s, season_profile=%s, blue_score=%s, gt_keyword=%s,"
                     " amz_units=%s, amz_revenue=%s, amz_price=%s, amz_return=%s, amz_node=%s"
                     " WHERE store=%s AND lowes_leaf=%s",
-                    (tag, peak, now, blue, kw,
+                    (tag, peak, now, prof, blue, kw,
                      mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
                      mr.get("node"), store, leaf))
                 done += 1
@@ -67,14 +69,16 @@ def refresh(store: str, topn: int):
             for e in explore:
                 kw = e["gt_keyword"]
                 mr = market_research(kw)
-                tag, peak, now = _season(google_trend(kw))    # 探索区也给旺季
+                items = google_trend(kw)                       # 探索区也给旺季
+                tag, peak, now = _season(items)
+                prof = json.dumps(_profile(items))
                 cur.execute(
                     "UPDATE order_system.lowes_blue_ocean SET amz_units=%s, amz_revenue=%s,"
                     " amz_price=%s, amz_return=%s, amz_node=%s,"
-                    " season_tag=%s, season_peak=%s, trend_now=%s"
+                    " season_tag=%s, season_peak=%s, trend_now=%s, season_profile=%s"
                     " WHERE store=%s AND lowes_leaf=%s",
                     (mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
-                     mr.get("node"), tag, peak, now, store, e["lowes_leaf"]))
+                     mr.get("node"), tag, peak, now, prof, store, e["lowes_leaf"]))
                 exp_done += 1
                 print(f"  [探索] units={mr.get('units')} ret={mr.get('return_rate')} "
                       f"{tag} 旺{peak} node={mr.get('node')} | {e['lowes_leaf']} (kw={kw})")
@@ -87,10 +91,13 @@ def refresh(store: str, topn: int):
             sold_done = 0
             for s in sold:
                 leaf = s["lowes_leaf"]
-                tag, peak, now = _season(google_trend(_kw(leaf)))
+                items = google_trend(_kw(leaf))
+                tag, peak, now = _season(items)
+                prof = json.dumps(_profile(items))
                 cur.execute("UPDATE order_system.lowes_cat_demand SET season_tag=%s,"
-                            " season_peak=%s, trend_now=%s WHERE store=%s AND lowes_leaf=%s",
-                            (tag, peak, now, store, leaf))
+                            " season_peak=%s, trend_now=%s, season_profile=%s"
+                            " WHERE store=%s AND lowes_leaf=%s",
+                            (tag, peak, now, prof, store, leaf))
                 sold_done += 1
                 print(f"  [已售] {tag} 旺{peak or '-'} now={now} | {leaf}")
                 time.sleep(1.2)

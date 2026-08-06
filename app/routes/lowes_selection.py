@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Lowes 选品候选池页面（/lowes-selection）。Autool=豪雅 / Yasonic=司顺，单店重建。"""
+import json
 import threading
+from datetime import date
+
 from flask import Blueprint, current_app, jsonify, render_template, request
 
 from app.models.db_manager import DBManager
@@ -125,6 +128,36 @@ def page():
                               WHERE store=%s AND fit_score<55 AND amz_units IS NOT NULL
                                     AND amz_units>=3000
                               ORDER BY amz_units DESC LIMIT 15""", (store,))
+    # 近3个月最旺类目雷达：按 season_profile 在 [本月,+1,+2] 窗口的平均热度排(在售+蓝海+探索)
+    cur_m = date.today().month
+    win_idx = [((cur_m - 1 + k) % 12) for k in range(3)]           # 0-indexed 月
+    win_months = "/".join(str(i + 1) for i in win_idx) + "月"
+
+    def _win_heat(pj):
+        try:
+            p = json.loads(pj) if pj else None
+        except (ValueError, TypeError):
+            p = None
+        if not p or len(p) < 12:
+            return None
+        vals = [p[i] for i in win_idx if p[i]]
+        return round(sum(vals) / len(vals)) if vals else None
+
+    hot = []
+    for r in _query("SELECT lowes_leaf, season_profile, season_peak FROM order_system.lowes_cat_demand "
+                    "WHERE store=%s AND season_profile IS NOT NULL", (store,)):
+        hh = _win_heat(r["season_profile"])
+        if hh:
+            hot.append({"leaf": r["lowes_leaf"], "kind": "在售", "heat": hh, "peak": r["season_peak"]})
+    for r in _query("SELECT lowes_leaf, season_profile, season_peak, blue_score FROM "
+                    "order_system.lowes_blue_ocean WHERE store=%s AND season_profile IS NOT NULL", (store,)):
+        hh = _win_heat(r["season_profile"])
+        if hh:
+            hot.append({"leaf": r["lowes_leaf"],
+                        "kind": "蓝海" if (r["blue_score"] or 0) >= 50 else "探索",
+                        "heat": hh, "peak": r["season_peak"]})
+    hot.sort(key=lambda x: x["heat"], reverse=True)
+    hot_window = hot[:12]
     return render_template("lowes_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per, store=store, stores=STORES,
                            f_leaf=f_leaf, f_q=f_q, f_img=f_img, f_newn=f_newn,
@@ -134,6 +167,7 @@ def page():
                            push_log=push_log, store_totals=store_totals,
                            cat_demand=cat_demand, demand_map=demand_map,
                            blue_ocean=blue_ocean, explore_ocean=explore_ocean,
+                           hot_window=hot_window, win_months=win_months,
                            supplier_cn=SUPPLIER_CN.get(store, "供应商"),
                            rebuilding=_REBUILD.get(store, False))
 

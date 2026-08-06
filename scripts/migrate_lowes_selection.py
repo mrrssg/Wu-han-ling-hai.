@@ -131,6 +131,8 @@ ALTERS = [
     "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN season_tag VARCHAR(24) DEFAULT NULL COMMENT '旺季标签(Google Trends,我们自有历史仅5-6月不够判)'",
     "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN season_peak VARCHAR(8) DEFAULT NULL COMMENT '旺季峰值月份'",
     "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN trend_now INT DEFAULT NULL COMMENT '当前Google Trends热度'",
+    "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN season_profile TEXT DEFAULT NULL COMMENT '12个月热度曲线JSON[1月..12月](近3月窗口排行用)'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN season_profile TEXT DEFAULT NULL COMMENT '12个月热度曲线JSON[1月..12月]'",
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_units INT DEFAULT NULL COMMENT 'Amazon该类目月销量(泛需求参考)'",
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_revenue DECIMAL(14,2) DEFAULT NULL COMMENT 'Amazon该类目月销售额'",
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_price DECIMAL(10,2) DEFAULT NULL COMMENT 'Amazon该类目均价'",
