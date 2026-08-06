@@ -68,10 +68,10 @@
     <button class="btn btn-sm btn-primary">搜索</button>
     {% if f_leaf or f_q or f_img %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('lowes_selection.page', store=store) }}">✕清除</a>{% endif %}
   </form>
-  <a class="btn btn-sm btn-outline-warning"
+  <a class="btn btn-sm {{ 'btn-warning' if f_leaf else 'btn-outline-warning' }}"
      href="{{ url_for('lowes_selection.export_noimg', store=store, leaf=f_leaf or None, q=f_q or None) }}"
-     title="导出当前店铺(+当前类目/搜索筛选)所有『总览无图』的SKU(含供应商图片链接),整理好图片再传飞书图片总览表">
-    ⬇️ 导出无图SKU（本店共{{ img_stat.n or 0 }}）</a>
+     title="导出当前筛选下所有『总览无图』的SKU(含供应商图片链接)。想按类目导:先用上面的「Lowes类目」框选类目,这里数字和导出就只剩该类目的无图">
+    ⬇️ 导出无图SKU（{% if f_leaf %}{{ f_leaf }}: {% endif %}{{ noimg_n }}）</a>
   <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
 </div>
 
