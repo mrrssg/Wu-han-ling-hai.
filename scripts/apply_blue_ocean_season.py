@@ -32,8 +32,11 @@ def _season(items):
     prof = {m: [] for m in range(1, 13)}
     for it in items or []:
         try:
-            t, v = it[0], float(it[1])
-        except (TypeError, ValueError, IndexError):
+            if isinstance(it, dict):
+                t, v = it["time"], float(it["value"])
+            else:
+                t, v = it[0], float(it[1])
+        except (TypeError, ValueError, IndexError, KeyError):
             continue
         m = datetime.utcfromtimestamp(t / 1000).month
         prof[m].append(v)
@@ -85,7 +88,12 @@ def main() -> int:
                     if leaf not in base:
                         continue
                     fit, sup = base[leaf]
-                    tag, peak, now = _season(payload.get("items"))
+                    if payload.get("tag"):     # 预算好的季节标签(本次种子)
+                        tag = payload["tag"]
+                        peak = payload.get("peak")
+                        now = payload.get("now")
+                    else:                       # 原始 google_trend 序列(未来刷新)
+                        tag, peak, now = _season(payload.get("items"))
                     internal = 0.6 * fit + 0.4 * sup
                     blue = round(min(100, internal * FACTOR.get(tag, 1.0)))
                     if fit < 15:
