@@ -75,12 +75,26 @@ def page():
                          ORDER BY pushed_at DESC LIMIT 50""", (store,))
     store_totals = {r["store"]: int(r["n"]) for r in _query(
         "SELECT store, COUNT(*) n FROM order_system.lowes_selection_pool GROUP BY store")}
+    # 类目热度面板：近90天该店卖得最好的类目 + 各有多少候选
+    cat_demand = _query("""SELECT d.lowes_leaf, d.gmv, d.units, d.margin_rate, d.score,
+                                  COALESCE(p.n,0) AS cand_n
+                           FROM order_system.lowes_cat_demand d
+                           LEFT JOIN (SELECT lowes_leaf, COUNT(*) n
+                                      FROM order_system.lowes_selection_pool
+                                      WHERE store=%s GROUP BY lowes_leaf) p
+                             ON p.lowes_leaf=d.lowes_leaf
+                           WHERE d.store=%s ORDER BY d.score DESC, d.gmv DESC LIMIT 15""",
+                        (store, store))
+    demand_map = {r["lowes_leaf"]: r for r in _query(
+        "SELECT lowes_leaf, gmv, units, margin_rate, score "
+        "FROM order_system.lowes_cat_demand WHERE store=%s", (store,))}
     return render_template("lowes_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per, store=store, stores=STORES,
                            f_leaf=f_leaf, f_q=f_q, f_img=f_img,
                            leaves=leaves, img_stat=img_stat,
                            built_at=built[0]["t"] if built else None,
                            push_log=push_log, store_totals=store_totals,
+                           cat_demand=cat_demand, demand_map=demand_map,
                            rebuilding=_REBUILD.get(store, False))
 
 

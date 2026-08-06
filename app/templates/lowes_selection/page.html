@@ -1,7 +1,7 @@
 {% extends "base_v2.html" %}
 {% block title %}Lowes选品{% endblock %}
 {% block page_title %}Lowes 选品{% endblock %}
-{% block page_sub %}Autool只上豪雅、Yasonic只上司顺；筛没上过、库存&gt;50、供应商类目能归到Lowes类目的候选，勾选后推送到对应 Lowes-Mirakl 表{% endblock %}
+{% block page_sub %}Autool只上豪雅、Yasonic只上司顺；筛没上过(飞书+本地已推)、库存&gt;50、能归到Lowes类目的候选，<b>按该类目近90天销量×毛利「推荐分」排序</b>，勾选后推送到对应 Lowes-Mirakl 表{% endblock %}
 {% block page_actions %}
 <button class="btn btn-sm btn-outline-primary" onclick="rebuild(this)">🔄 重建「{{ stores[store] }}」候选池</button>
 {% endblock %}
@@ -24,6 +24,21 @@
   </a>
   {% endfor %}
 </div>
+
+{% if cat_demand %}
+<div class="card p-2 mb-3" style="font-size:.8rem">
+  <div class="fw-semibold mb-1">🔥 {{ stores[store] }} 近90天最好卖的类目<span class="text-muted fw-normal">（分数=GMV×毛利加权；点类目=只看该类目候选）</span></div>
+  <div class="d-flex flex-wrap gap-1">
+    {% for c in cat_demand %}
+    <a class="badge text-decoration-none {{ 'text-bg-warning' if c.score>=60 else ('text-bg-info' if c.score>=30 else 'text-bg-secondary') }}"
+       href="{{ url_for('lowes_selection.page', store=store, leaf=c.lowes_leaf) }}"
+       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 毛利{{ '%.0f'|format((c.margin_rate or 0)*100) }}% · 候选{{ c.cand_n }}个">
+      {{ c.lowes_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
   <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('lowes_selection.page') }}">
@@ -78,7 +93,8 @@
     <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
       <th style="width:28px"></th><th>图</th><th>供应商SKU</th>
       <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
-      <th>供应商类目</th><th>建议Lowes类目</th><th>品牌</th>
+      <th>供应商类目</th><th>建议Lowes类目</th>
+      <th title="该类目近90天GMV×毛利加权推荐分(0~100)，越高越值得上">推荐分</th><th>品牌</th>
       <th title="图片链接总览表里有没有这个SKU的图(上架取图用)">总览图</th></tr></thead>
     <tbody>
       {% for r in rows %}
@@ -90,11 +106,16 @@
         <td class="text-end">{{ r.stock }}</td>
         <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
         <td class="small"><span class="badge text-bg-info" title="{{ r.lowes_path }}">{{ r.lowes_leaf }}</span></td>
+        <td class="text-center">
+          {% set dm = demand_map.get(r.lowes_leaf) %}
+          <span class="badge {{ 'text-bg-warning' if r.heat_90d>=60 else ('text-bg-info' if r.heat_90d>=30 else 'text-bg-light text-dark') }}"
+            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件 · 毛利{{ '%.0f'|format((dm.margin_rate or 0)*100) }}%{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
+        </td>
         <td class="small">{{ r.brand }}</td>
         <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="9" class="text-center text-muted py-4">「{{ stores[store] }}」候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
+      <tr><td colspan="10" class="text-center text-muted py-4">「{{ stores[store] }}」候选池是空的——点右上"重建候选池"（需先跑完AI类目映射）</td></tr>
       {% endfor %}
     </tbody>
   </table>

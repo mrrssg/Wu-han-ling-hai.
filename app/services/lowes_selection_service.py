@@ -20,6 +20,10 @@ STORE_CFG = {
     "autool": {"supplier": "Costway", "brand": "Volenca", "mirakl": "tblGp3uvtOe99vjY"},
     "yasonic": {"supplier": "Vevor", "brand": "Mecale", "mirakl": "tbldeuRJOoJBfX2g"},
 }
+STORE_SHOP = {"autool": 10, "yasonic": 11}                 # lowes_order_data.shop_id
+STORE_KEY = {"autool": "lowes_autool", "yasonic": "lowes_yasonic"}  # pricing_tier.store_key
+CAT_GMV_WEIGHT = 0.5        # 类目分权重：GMV 与 毛利各半（用户2026-08-06定"两者加权"）
+CAT_MARGIN_FULL = 0.40      # 毛利率≥40%算满分
 
 
 def _feishu_token() -> str:
@@ -91,6 +95,60 @@ def _feishu_overview_skus() -> set:
     return have
 
 
+def _local_pushed_skus(cur, store: str) -> set:
+    """本地已推镜像里该店的供应商SKU（补飞书同步延迟，刚推的立刻排除）。"""
+    cur.execute("SELECT supplier_sku FROM order_system.lowes_pushed_sku WHERE store=%s", (store,))
+    return {r["supplier_sku"] for r in cur.fetchall() if r["supplier_sku"]}
+
+
+def _compute_category_demand(cur, store: str) -> Dict[str, int]:
+    """近90天该店每个 Lowes 类目的 GMV+毛利率 → 归一化加权 score(0~100)，
+    写 lowes_cat_demand，返回 {lowes_leaf: score}。成本取 pricing_tier.cost_price，
+    覆盖不到的行不计入毛利（只按有成本的行估类目毛利率）。"""
+    shop_id = STORE_SHOP[store]
+    store_key = STORE_KEY[store]
+    cur.execute("""
+        SELECT o.category_label AS leaf,
+               SUM(o.line_total_price) AS gmv,
+               SUM(o.quantity) AS units,
+               SUM(COALESCE(pt.cost_price,0) * o.quantity) AS cost_sum,
+               SUM(CASE WHEN pt.cost_price IS NOT NULL THEN o.line_total_price ELSE 0 END) AS gmv_c
+        FROM order_system.lowes_order_data o
+        LEFT JOIN order_system.pricing_tier pt
+          ON pt.store_key=%s AND pt.shop_sku=o.offer_sku
+        WHERE o.shop_id=%s AND o.order_state<>'CANCELED'
+          AND o.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+          AND o.category_label IS NOT NULL AND o.category_label<>''
+        GROUP BY o.category_label""", (store_key, shop_id))
+    rows = cur.fetchall()
+    if not rows:
+        return {}
+    max_gmv = max(float(r["gmv"] or 0) for r in rows) or 1.0
+    scores: Dict[str, int] = {}
+    to_write = []
+    for r in rows:
+        gmv = float(r["gmv"] or 0)
+        units = int(r["units"] or 0)
+        gmv_c = float(r["gmv_c"] or 0)
+        cost_sum = float(r["cost_sum"] or 0)
+        margin = (1 - cost_sum / gmv_c) if gmv_c > 0 else None
+        gmv_norm = gmv / max_gmv
+        margin_norm = min(max((margin or 0) / CAT_MARGIN_FULL, 0.0), 1.0)
+        score = round((CAT_GMV_WEIGHT * gmv_norm + (1 - CAT_GMV_WEIGHT) * margin_norm) * 100)
+        leaf = (r["leaf"] or "")[:120]
+        scores[leaf] = score
+        to_write.append((store, leaf, round(gmv, 2), units,
+                         round(margin, 4) if margin is not None else None, score))
+    cur.execute("DELETE FROM order_system.lowes_cat_demand WHERE store=%s", (store,))
+    for i in range(0, len(to_write), 500):
+        c = to_write[i:i + 500]
+        ph = ",".join(["(%s,%s,%s,%s,%s,%s,NOW())"] * len(c))
+        cur.execute("INSERT INTO order_system.lowes_cat_demand "
+                    "(store,lowes_leaf,gmv,units,margin_rate,score,computed_at) VALUES "
+                    + ph, [v for row in c for v in row])
+    return scores
+
+
 def rebuild_pool(store: str) -> Dict[str, Any]:
     """只重建 store（autool/yasonic）一个店铺的候选池。"""
     cfg = STORE_CFG.get(store)
@@ -110,6 +168,9 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                            WHERE supplier=%s AND lowes_path IS NOT NULL""", (supplier,))
             cat2path = {r["supplier_cat"]: (r["lowes_leaf"], r["lowes_path"])
                         for r in cur.fetchall()}
+
+            used |= _local_pushed_skus(cur, store)               # 叠加本地已推(补飞书同步延迟)
+            cat_scores = _compute_category_demand(cur, store)    # 类目需求分(近90天GMV×毛利)
 
             # 已上过灌临时表
             cur.execute("DROP TEMPORARY TABLE IF EXISTS _lused")
@@ -148,7 +209,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
             rows.append((store, supplier, r["sku"], (r.get("title") or "")[:400],
                          (r.get("img") or "")[:600], int(r.get("stock") or 0),
                          (r["cat"] or "")[:400], leaf, path, brand,
-                         (str(r.get("price") or ""))[:32], 0, has_img))
+                         (str(r.get("price") or ""))[:32],
+                         int(cat_scores.get(leaf, 0)), has_img))
 
         with conn.cursor() as cur:
             cur.execute("DELETE FROM order_system.lowes_selection_pool WHERE store=%s", (store,))
@@ -161,7 +223,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                 cur.execute(f"INSERT INTO order_system.lowes_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
         return {"store": store, "supplier": supplier, "used_skus": len(used),
-                "mapped_cats": len(cat2path), "candidates": len(rows),
+                "mapped_cats": len(cat2path), "scored_cats": len(cat_scores),
+                "candidates": len(rows),
                 "with_overview_img": sum(1 for r in rows if r[12])}
     finally:
         conn.close()
@@ -247,6 +310,11 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
                         (store, batch_desc, sku_count, leaf_summary)
                         VALUES (%s,%s,%s,%s)""",
                         (store, batch_desc, ok, leaf_summary[:1000]))
+                    # 本地已推镜像：立刻去重，不等飞书同步回来
+                    cur.executemany("""INSERT INTO order_system.lowes_pushed_sku
+                        (store, supplier_sku, supplier, batch_desc) VALUES (%s,%s,%s,%s)
+                        ON DUPLICATE KEY UPDATE batch_desc=VALUES(batch_desc), pushed_at=NOW()""",
+                        [(store, it["supplier_sku"], it["supplier"], batch_desc) for it in its])
                 conn.commit()
             finally:
                 conn.close()

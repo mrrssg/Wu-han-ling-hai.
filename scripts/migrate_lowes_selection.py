@@ -65,6 +65,26 @@ DDLS = [
         UNIQUE KEY uq_sku (store, supplier_sku),
         KEY idx_store (store), KEY idx_leaf (lowes_leaf)
     ) CHARSET=utf8mb4 COMMENT='Lowes选品候选池(每店独立,单店重建)'""",
+    # 已推送本地镜像（照抄 macy_pushed_sku）：推成功即写，重建排除，补飞书同步延迟
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_pushed_sku (
+        store VARCHAR(12) NOT NULL,
+        supplier_sku VARCHAR(64) NOT NULL,
+        supplier VARCHAR(16),
+        batch_desc VARCHAR(255),
+        pushed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, supplier_sku)
+    ) CHARSET=utf8mb4 COMMENT='Lowes已推送本地镜像(去重,补飞书同步延迟)'""",
+    # 类目需求分（每店近90天 GMV×毛利，驱动候选排序）
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_cat_demand (
+        store VARCHAR(12) NOT NULL,
+        lowes_leaf VARCHAR(120) NOT NULL,
+        gmv DECIMAL(14,2) DEFAULT 0,
+        units INT DEFAULT 0,
+        margin_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目毛利率(1-成本/售价)',
+        score INT DEFAULT 0 COMMENT '0~100:GMV与毛利加权',
+        computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, lowes_leaf)
+    ) CHARSET=utf8mb4 COMMENT='Lowes类目需求分(近90天GMV×毛利,驱动选品排序)'""",
     # 推送记录（带 store）
     """CREATE TABLE IF NOT EXISTS order_system.lowes_push_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
