@@ -53,6 +53,8 @@
         <th>类目</th><th>店铺大类</th>
         <th title="和我们哪个已赚钱类目同属一个Lowes大类(邻接=平台适配的证据)">为什么推(邻接)</th>
         <th title="Google Trends季节:⏫升温该提前布局/🔥当季/🟰平稳/⏬降温已过季">季节</th>
+        <th class="text-end" title="Amazon该类目月销量(泛需求参考:这品类到底有没有人买。Amazon≠Lowes,只作参考)">市场需求</th>
+        <th class="text-end" title="Amazon该类目退货率(>15%高退货⚠️;产品本身的退货风险,较平台无关)">退货</th>
         <th class="text-end">可上SKU</th><th class="text-end">均价</th></tr></thead>
       <tbody>
       {% for b in blue_ocean %}
@@ -65,6 +67,11 @@
         <td style="white-space:nowrap">
           {% if b.season_tag and b.season_tag != '—' %}{{ b.season_tag }}{% if b.season_peak %}<span class="text-muted"> 旺{{ b.season_peak }}</span>{% endif %}
           {% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td class="text-end" style="white-space:nowrap"
+            title="{% if b.amz_units %}Amazon月销售额 ${{ '{:,.0f}'.format(b.amz_revenue or 0) }} · 均价 ${{ '%.0f'|format(b.amz_price or 0) }}{% else %}未查/无数据{% endif %}">
+          {% if b.amz_units %}{% if b.amz_units >= 10000 %}{{ '%.1f'|format(b.amz_units/10000) }}万{% else %}{{ b.amz_units }}{% endif %}<span class="text-muted">/月</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td class="text-end">
+          {% if b.amz_return is not none %}<span class="{{ 'text-danger fw-bold' if b.amz_return > 15 else '' }}">{{ '%.1f'|format(b.amz_return) }}%{% if b.amz_return > 15 %} ⚠️{% endif %}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         <td class="text-end">{{ b.sku_n }}<span class="text-muted"> ({{ b.with_img }}图)</span></td>
         <td class="text-end">{% if b.avg_price %}${{ '%.0f'|format(b.avg_price) }}{% endif %}</td>
       </tr>
@@ -72,7 +79,7 @@
       </tbody>
     </table>
   </div>
-  <div class="text-muted mt-1" style="font-size:.72rem">共 {{ blue_ocean|length }} 个高分蓝海类目（全部未涉及类目更多）。季节来自卖家精灵 Google Trends（美国搜索热度,平台无关,做季节择时用）。</div>
+  <div class="text-muted mt-1" style="font-size:.72rem">共 {{ blue_ocean|length }} 个高分蓝海类目（全部未涉及类目更多）。季节=卖家精灵 Google Trends（搜索热度,平台无关,做择时）；市场需求/退货=卖家精灵 Amazon 类目数据（<b>泛需求参考,验证"到底有没有人买、退货高不高",Amazon≠Lowes 只作参考</b>，不影响蓝海分排序）。</div>
 </details>
 {% endif %}
 

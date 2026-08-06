@@ -111,7 +111,8 @@ def page():
     # 蓝海类目：豪雅有货但我们0销量的类目(邻接适配×货盘×季节)
     blue_ocean = _query("""SELECT lowes_leaf, l1, l2, sku_n, with_img, avg_price,
                                   fit_score, fit_reason, supply_score,
-                                  season_tag, season_peak, trend_now, blue_score
+                                  season_tag, season_peak, trend_now, blue_score,
+                                  amz_units, amz_revenue, amz_price, amz_return
                            FROM order_system.lowes_blue_ocean
                            WHERE store=%s AND blue_score>=50
                            ORDER BY blue_score DESC, sku_n DESC LIMIT 40""", (store,))

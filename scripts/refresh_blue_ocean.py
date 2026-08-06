@@ -21,7 +21,7 @@ from app import create_app
 from app.models.db_manager import DBManager
 from compute_blue_ocean import compute
 from apply_blue_ocean_season import FACTOR, _season
-from sellersprite_client import google_trend
+from sellersprite_client import google_trend, market_research
 
 
 def refresh(store: str, topn: int):
@@ -41,13 +41,20 @@ def refresh(store: str, topn: int):
                     blue = min(blue, 48)
                 if fit < 15:
                     blue = min(blue, 22)
+                # 需求验证(Amazon 泛需求参考):只对进面板的强邻接类目查,省 credits
+                mr = market_research(kw) if fit >= 55 else {}
                 cur.execute(
                     "UPDATE order_system.lowes_blue_ocean SET season_tag=%s, season_peak=%s,"
-                    " trend_now=%s, blue_score=%s, gt_keyword=%s WHERE store=%s AND lowes_leaf=%s",
-                    (tag, peak, now, blue, kw, store, leaf))
+                    " trend_now=%s, blue_score=%s, gt_keyword=%s,"
+                    " amz_units=%s, amz_revenue=%s, amz_price=%s, amz_return=%s"
+                    " WHERE store=%s AND lowes_leaf=%s",
+                    (tag, peak, now, blue, kw,
+                     mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
+                     store, leaf))
                 done += 1
                 print(f"  {tag:6s} peak={peak or '-':4s} now={now if now is not None else '-':>3} "
-                      f"blue={blue:3d} pts={len(items):2d} | {leaf} (kw={kw})")
+                      f"blue={blue:3d} pts={len(items):2d} amz_units={mr.get('units')} "
+                      f"ret={mr.get('return_rate')} | {leaf} (kw={kw})")
                 time.sleep(1.2)             # 限速, 防 SellerSprite 限流
         conn.commit()
         print(f"[blue_ocean refresh] store={store} candidates={len(cand)} season_updated={done}")

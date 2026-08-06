@@ -103,6 +103,10 @@ DDLS = [
         season_tag VARCHAR(24) DEFAULT NULL COMMENT '🔥当季/⏫升温/🟰平稳/⏬降温/—未查',
         season_peak VARCHAR(8) DEFAULT NULL COMMENT '旺季峰值月份',
         trend_now INT DEFAULT NULL COMMENT '当前Google Trends热度index',
+        amz_units INT DEFAULT NULL COMMENT 'Amazon该类目月销量(泛需求参考)',
+        amz_revenue DECIMAL(14,2) DEFAULT NULL COMMENT 'Amazon该类目月销售额',
+        amz_price DECIMAL(10,2) DEFAULT NULL COMMENT 'Amazon该类目均价',
+        amz_return DECIMAL(6,2) DEFAULT NULL COMMENT 'Amazon该类目退货率%',
         blue_score INT DEFAULT 0 COMMENT '综合蓝海分0~100(内部×季节)',
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, lowes_leaf),
@@ -123,6 +127,10 @@ DDLS = [
 ALTERS = [
     "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN gross_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目毛利率(1-成本/售价)'",
     "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN ret_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目退货率(近180天订单级)'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_units INT DEFAULT NULL COMMENT 'Amazon该类目月销量(泛需求参考)'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_revenue DECIMAL(14,2) DEFAULT NULL COMMENT 'Amazon该类目月销售额'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_price DECIMAL(10,2) DEFAULT NULL COMMENT 'Amazon该类目均价'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_return DECIMAL(6,2) DEFAULT NULL COMMENT 'Amazon该类目退货率%'",
 ]
 
 
