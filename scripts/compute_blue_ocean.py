@@ -32,9 +32,26 @@ from app.models.db_manager import DBManager
 
 FIT_QUERY_MIN = 25   # 只对 fit>=此值(至少同L1邻接)的类目查季节，省 credits
 
+# 类目名 → 更好的 Google Trends 关键词(_kw 默认词返空/太窄的手工覆盖,实证有数据)
+KEYWORD_OVERRIDE = {
+    "Garage Buildings": "metal garage", "Gazebo Parts & Accessories": "gazebo",
+    "Whole House Fans": "whole house fan", "Automatic Gate Openers": "automatic gate opener",
+    "Media Blaster Cabinets": "sandblasting cabinet", "Polishers": "car polisher",
+    "Range Hood Parts": "range hood", "Deck Connectors": "deck bracket",
+    "Plumbing Installation Kits": "plumbing kit", "Water Storage": "water storage tank",
+    "Smart Speakers & Displays": "smart speaker", "Media Cabinets": "media cabinet",
+    "Towel Warmers": "towel warmer", "Towel Racks": "towel rack",
+    "Refrigerator Water Filters": "refrigerator water filter", "Box Springs": "box spring",
+    "Immersion Blenders": "immersion blender", "Portable Power Stations": "portable power station",
+    "Cotton Candy Machines": "cotton candy machine", "Desks": "desk", "Kids Chairs": "kids chair",
+    "Porch Swings & Gliders": "porch swing", "Pond Pumps": "pond pump",
+}
+
 
 def _kw(leaf: str) -> str:
-    """类目名 → Google Trends 关键词(小写, 砍掉 &/, 后半, 保留主词)。"""
+    """类目名 → Google Trends 关键词(优先手工覆盖;否则小写砍 &/, 后半保留主词)。"""
+    if leaf in KEYWORD_OVERRIDE:
+        return KEYWORD_OVERRIDE[leaf]
     s = (leaf or "").lower()
     for sep in ("&", ",", "/"):
         if sep in s:
@@ -171,6 +188,7 @@ def compute(store: str, topn: int):
               f"| {r['sku_n']:4d}SKU | {r['leaf']}  <{r['fit_reason']}>")
     topn_json = [{"leaf": r["leaf"], "keyword": r["gt_keyword"]} for r in cand]
     print("TOPN_JSON:" + json.dumps(topn_json, ensure_ascii=False))
+    return cand
 
 
 def main() -> int:
