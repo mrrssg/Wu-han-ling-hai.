@@ -41,29 +41,30 @@ def _season(items):
         m = datetime.utcfromtimestamp(t / 1000).month
         prof[m].append(v)
     avg = {m: (sum(vs) / len(vs)) for m, vs in prof.items() if vs}
-    if not avg:
-        return "—", None, None
+    if len(avg) < 6:                 # 数据太少判不了季节
+        return "—", None, (round(max(avg.values())) if avg else None)
     peak_m = max(avg, key=avg.get)
     peak_v = avg[peak_m]
+    trough_v = min(avg.values())
+    mean_v = sum(avg.values()) / len(avg)
     cur = datetime.now().month
-    nowv = avg.get(cur, 0.0)
-
-    def at(off):
-        return avg.get(((cur - 1 + off) % 12) + 1, 0.0)
-
-    nxt = max(at(1), at(2))
-    trend = (nxt - nowv) / nowv if nowv > 1e-6 else 0.0
-    if peak_v <= 0:
-        tag = "—"
-    elif nowv >= 0.85 * peak_v:
-        tag = "🔥当季"
-    elif trend >= 0.20:
-        tag = "⏫升温"
-    elif trend <= -0.15:
-        tag = "⏬降温"
-    else:
-        tag = "🟰平稳"
-    return tag, f"{peak_m}月", round(nowv)
+    nowv = avg.get(cur, mean_v)
+    # 季节振幅小 = 全年平稳(家具/五金常年可卖),不当季节品,也不给误导性旺季月
+    amp = (peak_v - trough_v) / mean_v if mean_v > 0 else 0.0
+    if amp < 0.5:
+        return "🟰平稳", None, round(nowv)
+    # 有明显季节性:tag 看趋势, 旺季月对齐语义(升温给"即将到来"的峰)
+    fwd = [((cur - 1 + k) % 12) + 1 for k in range(1, 6)]        # 未来5个月
+    peak_fwd_m = max(fwd, key=lambda m: avg.get(m, 0.0))
+    peak_fwd_v = avg.get(peak_fwd_m, 0.0)
+    n12 = (avg.get((cur % 12) + 1, nowv) + avg.get(((cur + 1) % 12) + 1, nowv)) / 2
+    if nowv >= 0.80 * peak_v:
+        return "🔥当季", f"{peak_m}月", round(nowv)
+    if peak_fwd_v >= nowv * 1.15:            # 未来5月内有更高峰 → 提前布局
+        return "⏫升温", f"{peak_fwd_m}月", round(nowv)
+    if n12 <= nowv * 0.85:                    # 接下来两月明显走低 → 过季
+        return "⏬降温", f"{peak_m}月", round(nowv)
+    return "🟰平稳", f"{peak_m}月", round(nowv)
 
 
 def main() -> int:
