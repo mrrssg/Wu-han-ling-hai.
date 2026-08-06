@@ -32,7 +32,7 @@
     {% for c in cat_demand %}
     <a class="badge text-decoration-none {{ 'text-bg-warning' if c.score>=60 else ('text-bg-info' if c.score>=30 else 'text-bg-secondary') }}"
        href="{{ url_for('lowes_selection.page', store=store, leaf=c.lowes_leaf) }}"
-       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ '%.0f'|format((c.margin_rate or 0)*100) }}% = 毛利{{ '%.0f'|format((c.gross_rate or 0)*100) }}% − 佣金15% − 退货{{ '%.0f'|format((c.ret_rate or 0)*100) }}%损失">
+       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ '%.0f'|format((c.margin_rate or 0)*100) }}% = 毛利{{ '%.0f'|format((c.gross_rate or 0)*100) }}% − 佣金15% − 退货损失{{ '%.0f'|format((c.ret_rate or 0)*(1-(c.gross_rate or 0))*100) }}%（退货率{{ '%.0f'|format((c.ret_rate or 0)*100) }}%）">
       {{ c.lowes_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}
     </a>
     {% endfor %}
@@ -127,7 +127,7 @@
         <td class="text-center">
           {% set dm = demand_map.get(r.lowes_leaf) %}
           <span class="badge {{ 'text-bg-warning' if r.heat_90d>=60 else ('text-bg-info' if r.heat_90d>=30 else 'text-bg-light text-dark') }}"
-            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ '%.0f'|format((dm.margin_rate or 0)*100) }}% = 毛利{{ '%.0f'|format((dm.gross_rate or 0)*100) }}% − 佣金15% − 退货{{ '%.0f'|format((dm.ret_rate or 0)*100) }}%损失{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
+            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ '%.0f'|format((dm.margin_rate or 0)*100) }}% = 毛利{{ '%.0f'|format((dm.gross_rate or 0)*100) }}% − 佣金15% − 退货损失{{ '%.0f'|format((dm.ret_rate or 0)*(1-(dm.gross_rate or 0))*100) }}%（退货率{{ '%.0f'|format((dm.ret_rate or 0)*100) }}%）{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
         </td>
         <td class="small">{{ r.brand }}</td>
         <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
