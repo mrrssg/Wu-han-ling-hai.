@@ -106,6 +106,51 @@ def page():
                            rebuilding=_REBUILD.get(store, False))
 
 
+@lowes_selection_bp.route("/export-noimg")
+def export_noimg():
+    """导出当前店铺(+当前类目/搜索筛选)所有「总览无图」候选 → Excel，
+    供人工整理图片后上传飞书图片总览表。带供应商图片链接做起点。"""
+    from io import BytesIO
+    from datetime import datetime
+    from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    from flask import send_file
+    store = _cur_store()
+    f_leaf = (request.args.get("leaf") or "").strip()
+    f_q = (request.args.get("q") or "").strip()
+    where, params = ["store=%s", "has_overview_img=0"], [store]
+    if f_leaf:
+        where.append("lowes_leaf=%s"); params.append(f_leaf)
+    if f_q:
+        where.append("(supplier_sku LIKE %s OR title LIKE %s OR supplier_cat LIKE %s OR lowes_path LIKE %s)")
+        params += [f"%{f_q}%"] * 4
+    w = " AND ".join(where)
+    rows = _query(f"""SELECT supplier_sku, title, supplier_cat, lowes_leaf, lowes_path,
+                             image, price, brand, heat_90d
+                      FROM order_system.lowes_selection_pool WHERE {w}
+                      ORDER BY heat_90d DESC, supplier_sku""", tuple(params))
+
+    def _clean(v):
+        return ILLEGAL_CHARACTERS_RE.sub("", str(v)) if v not in (None, "") else ""
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "无图SKU"
+    ws.append(["供应商SKU", "产品名", "供应商类目", "建议Lowes类目", "店铺类目(完整路径)",
+               "供应商图片链接", "价格", "品牌", "推荐分"])
+    for r in rows:
+        ws.append([_clean(r["supplier_sku"]), _clean(r["title"]), _clean(r["supplier_cat"]),
+                   _clean(r["lowes_leaf"]), _clean(r["lowes_path"]), _clean(r["image"]),
+                   _clean(r["price"]), _clean(r["brand"]), r["heat_90d"]])
+    ws["K1"] = f"共{len(rows)}个无图SKU"
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    fname = f"lowes_{store}_无图SKU_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=fname,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @lowes_selection_bp.route("/rebuild", methods=["POST"])
 def rebuild():
     store = (request.form.get("store") or request.args.get("store") or "autool").strip().lower()
