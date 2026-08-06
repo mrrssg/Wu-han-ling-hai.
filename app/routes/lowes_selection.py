@@ -111,8 +111,9 @@ def page():
     blue_ocean = _query("""SELECT lowes_leaf, l1, l2, sku_n, with_img, avg_price,
                                   fit_score, fit_reason, supply_score,
                                   season_tag, season_peak, trend_now, blue_score
-                           FROM order_system.lowes_blue_ocean WHERE store=%s
-                           ORDER BY blue_score DESC, sku_n DESC LIMIT 30""", (store,))
+                           FROM order_system.lowes_blue_ocean
+                           WHERE store=%s AND blue_score>=50
+                           ORDER BY blue_score DESC, sku_n DESC LIMIT 40""", (store,))
     return render_template("lowes_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per, store=store, stores=STORES,
                            f_leaf=f_leaf, f_q=f_q, f_img=f_img, f_newn=f_newn,

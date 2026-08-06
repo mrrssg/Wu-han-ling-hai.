@@ -97,15 +97,18 @@ def compute(store: str, topn: int):
                 avg_price = float(w["avg_price"] or 0)
                 avg_stock = int(w["avg_stock"] or 0)
 
-                # fit
+                # fit：同 L2(二级)=真邻接(强); 仅同 L1(一级)=弱(L1如Recreation太宽,
+                # 卖过露营椅不代表能卖玩具/蹦床)。strong 决定是否封顶。
+                strong = False
                 if l2 and l2 in l2_w:
                     fit = 60 + 40 * min(l2_w[l2] / max_l2, 1.0)
+                    strong = True
                     sib, sn = l2_top[l2]
                     reason = f"挨着已验证的{sib}(净{sn*100:.0f}%·同「{l2}」)"
                 elif l1 and l1 in l1_w:
-                    fit = 25 + 30 * min(l1_w[l1] / max_l1, 1.0)
+                    fit = 20 + 18 * min(l1_w[l1] / max_l1, 1.0)
                     sib, sn = l1_top[l1]
-                    reason = f"同「{l1}」大类已验证{sib}(净{sn*100:.0f}%)"
+                    reason = f"仅同「{l1}」大类(弱邻接)·{sib}(净{sn*100:.0f}%)"
                 else:
                     fit = 8
                     reason = "主业无邻接类目(慎入)"
@@ -126,10 +129,12 @@ def compute(store: str, topn: int):
                 supply_score = round(100 * (0.40 * sku_comp + 0.15 * stock_comp
                                             + 0.25 * img_rate + 0.20 * price_comp))
 
-                internal = 0.6 * fit_score + 0.4 * supply_score
+                internal = 0.65 * fit_score + 0.35 * supply_score
                 blue = round(internal)
-                if fit_score < 15:      # 弱适配硬压底(Toys/Pets)
-                    blue = min(blue, 25)
+                if not strong:          # 非同L2弱邻接封顶,别让大货盘(Toys 1020SKU)把它抬进推荐
+                    blue = min(blue, 48)
+                if fit_score < 15:      # 无邻接硬压底
+                    blue = min(blue, 22)
 
                 rows.append({
                     "leaf": leaf, "l1": l1, "l2": l2, "sku_n": sku_n,

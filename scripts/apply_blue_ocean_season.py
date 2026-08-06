@@ -94,10 +94,12 @@ def main() -> int:
                         now = payload.get("now")
                     else:                       # 原始 google_trend 序列(未来刷新)
                         tag, peak, now = _season(payload.get("items"))
-                    internal = 0.6 * fit + 0.4 * sup
+                    internal = 0.65 * fit + 0.35 * sup
                     blue = round(min(100, internal * FACTOR.get(tag, 1.0)))
+                    if fit < 60:        # 非同L2弱邻接封顶(与 compute 一致,季节也不抬)
+                        blue = min(blue, 48)
                     if fit < 15:
-                        blue = min(blue, 25)
+                        blue = min(blue, 22)
                     cur.execute(
                         "UPDATE order_system.lowes_blue_ocean SET season_tag=%s, season_peak=%s,"
                         " trend_now=%s, blue_score=%s WHERE store=%s AND lowes_leaf=%s",
