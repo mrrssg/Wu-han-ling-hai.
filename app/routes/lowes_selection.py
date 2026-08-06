@@ -36,6 +36,7 @@ def page():
     f_leaf = (request.args.get("leaf") or "").strip()
     f_q = (request.args.get("q") or "").strip()
     f_img = (request.args.get("img") or "").strip()
+    f_newn = (request.args.get("newn") or "").strip()   # ''/new/restock
     try:
         pg = max(1, int(request.args.get("page") or 1))
     except (TypeError, ValueError):
@@ -52,6 +53,10 @@ def page():
         where.append("has_overview_img=1")
     elif f_img == "n":
         where.append("has_overview_img=0")
+    if f_newn == "new":
+        where.append("is_new=1")
+    elif f_newn == "restock":
+        where.append("is_restock=1")
     w = " AND ".join(where)
 
     total = int((_query(f"SELECT COUNT(*) n FROM order_system.lowes_selection_pool WHERE {w}",
@@ -68,6 +73,9 @@ def page():
     imgc = _query("""SELECT SUM(has_overview_img=1) y, SUM(has_overview_img=0) n
                      FROM order_system.lowes_selection_pool WHERE store=%s""", (store,))
     img_stat = imgc[0] if imgc else {"y": 0, "n": 0}
+    nnc = _query("""SELECT COUNT(*) a, SUM(is_new) nw, SUM(is_restock) rs
+                    FROM order_system.lowes_selection_pool WHERE store=%s""", (store,))
+    newn_stat = nnc[0] if nnc else {"a": 0, "nw": 0, "rs": 0}
     built = _query("SELECT MAX(rebuilt_at) t FROM order_system.lowes_selection_pool WHERE store=%s",
                    (store,))
     push_log = _query("""SELECT batch_desc, sku_count, leaf_summary, pushed_at
@@ -90,8 +98,8 @@ def page():
         "FROM order_system.lowes_cat_demand WHERE store=%s", (store,))}
     return render_template("lowes_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per, store=store, stores=STORES,
-                           f_leaf=f_leaf, f_q=f_q, f_img=f_img,
-                           leaves=leaves, img_stat=img_stat,
+                           f_leaf=f_leaf, f_q=f_q, f_img=f_img, f_newn=f_newn,
+                           leaves=leaves, img_stat=img_stat, newn_stat=newn_stat,
                            built_at=built[0]["t"] if built else None,
                            push_log=push_log, store_totals=store_totals,
                            cat_demand=cat_demand, demand_map=demand_map,

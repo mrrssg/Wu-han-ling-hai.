@@ -7,6 +7,7 @@
 筛选：库存>50 + 没上过 + 供应商类目映射到了 Lowes 叶子(lowes_cat_map)。
 候选存 lowes_selection_pool（带store区分），页面读它，勾选后推送到对应 Mirakl 表。
 """
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List
 
 from app.models.db_manager import DBManager
@@ -24,6 +25,9 @@ STORE_SHOP = {"autool": 10, "yasonic": 11}                 # lowes_order_data.sh
 STORE_KEY = {"autool": "lowes_autool", "yasonic": "lowes_yasonic"}  # pricing_tier.store_key
 CAT_GMV_WEIGHT = 0.5        # 类目分权重：GMV 与 毛利各半（用户2026-08-06定"两者加权"）
 CAT_MARGIN_FULL = 0.40      # 毛利率≥40%算满分
+NEWNESS_DAYS = 14           # first_seen/restock_at 在近14天内 → 新品/新库存(P2,只对Costway)
+NEW_BONUS = 15              # 新品推荐分加成(封顶100)
+RESTOCK_BONUS = 8           # 新库存加成
 
 
 def _feishu_token() -> str:
@@ -184,7 +188,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
             if supplier == "Costway":
                 cur.execute("""
                     SELECT c.sku, c.title, c.image_url AS img, d.Stock AS stock,
-                           c.category AS cat, d.Price AS price
+                           c.category AS cat, d.Price AS price,
+                           d.first_seen, d.restock_at
                     FROM order_system.safety_product_cache c
                     JOIN autooperate.newestdropship d ON d.SKU=c.sku
                     LEFT JOIN _lused u ON u.sku=c.sku COLLATE utf8mb4_general_ci
@@ -199,6 +204,11 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                     WHERE v.product_type<>'' AND v.inventory>50 AND u.sku IS NULL""")
             recs = cur.fetchall()
 
+        cutoff = date.today() - timedelta(days=NEWNESS_DAYS)
+
+        def _asdate(v):
+            return v.date() if isinstance(v, datetime) else v   # date / None 原样
+
         rows = []
         for r in recs:
             lp = cat2path.get(r["cat"])
@@ -206,25 +216,33 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                 continue   # 供应商类目没映射到Lowes叶子 → 不进池
             leaf, path = lp
             has_img = 1 if r["sku"] in overview else 0
+            fs = _asdate(r.get("first_seen")); rs = _asdate(r.get("restock_at"))
+            is_new = 1 if (fs and fs >= cutoff) else 0
+            is_restock = 1 if (not is_new and rs and rs >= cutoff) else 0
+            base = int(cat_scores.get(leaf, 0))
+            heat = min(100, base + (NEW_BONUS if is_new else RESTOCK_BONUS if is_restock else 0))
             rows.append((store, supplier, r["sku"], (r.get("title") or "")[:400],
                          (r.get("img") or "")[:600], int(r.get("stock") or 0),
                          (r["cat"] or "")[:400], leaf, path, brand,
                          (str(r.get("price") or ""))[:32],
-                         int(cat_scores.get(leaf, 0)), has_img))
+                         heat, has_img, is_new, is_restock))
 
         with conn.cursor() as cur:
             cur.execute("DELETE FROM order_system.lowes_selection_pool WHERE store=%s", (store,))
             cols = ("store,supplier,supplier_sku,title,image,stock,supplier_cat,"
-                    "lowes_leaf,lowes_path,brand,price,heat_90d,has_overview_img,rebuilt_at")
+                    "lowes_leaf,lowes_path,brand,price,heat_90d,has_overview_img,"
+                    "is_new,is_restock,rebuilt_at")
             for i in range(0, len(rows), 1000):
                 chunk = rows[i:i + 1000]
-                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.lowes_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
         return {"store": store, "supplier": supplier, "used_skus": len(used),
                 "mapped_cats": len(cat2path), "scored_cats": len(cat_scores),
                 "candidates": len(rows),
+                "new": sum(1 for r in rows if r[13]),
+                "restock": sum(1 for r in rows if r[14]),
                 "with_overview_img": sum(1 for r in rows if r[12])}
     finally:
         conn.close()

@@ -40,6 +40,16 @@
 </div>
 {% endif %}
 
+<div class="btn-group btn-group-sm mb-2" role="group">
+  {% set nkp = {'store': store, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
+  <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}"
+     href="{{ url_for('lowes_selection.page', **nkp) }}">全部 {{ newn_stat.a or 0 }}</a>
+  <a class="btn {{ 'btn-warning' if f_newn=='new' else 'btn-outline-warning' }}"
+     href="{{ url_for('lowes_selection.page', newn='new', **nkp) }}">🆕 豪雅新品 {{ newn_stat.nw or 0 }}</a>
+  <a class="btn {{ 'btn-info' if f_newn=='restock' else 'btn-outline-info' }}"
+     href="{{ url_for('lowes_selection.page', newn='restock', **nkp) }}">📦 新库存 {{ newn_stat.rs or 0 }}</a>
+</div>
+
 <div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
   <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('lowes_selection.page') }}">
     <input type="hidden" name="store" value="{{ store }}">
@@ -102,7 +112,11 @@
         <td><input type="checkbox" class="sel-cb" value="{{ r.id }}"></td>
         <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
         <td class="font-monospace small">{{ r.supplier_sku }}</td>
-        <td class="small"><div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="small">
+          {% if r.is_new %}<span class="badge text-bg-warning" title="豪雅近期新增产品">🆕新品</span>
+          {% elif r.is_restock %}<span class="badge text-bg-info" title="近期重新有货(0→有货)">📦新库存</span>{% endif %}
+          <div style="max-width:340px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div>
+        </td>
         <td class="text-end">{{ r.stock }}</td>
         <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
         <td class="small"><span class="badge text-bg-info" title="{{ r.lowes_path }}">{{ r.lowes_leaf }}</span></td>

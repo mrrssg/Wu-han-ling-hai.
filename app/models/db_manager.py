@@ -571,10 +571,14 @@ class DBManager:
         conn = DBManager.get_connection()
         try:
             with conn.cursor() as cursor:
+                # first_seen: 新SKU首次插入=今天(存量行走ON DUPLICATE不动它,保持回填的远古值)。
+                # restock_at: 旧Stock<=0且新Stock>0 → 记今天(必须放在 Stock=VALUES(Stock) 之前,
+                #   否则 Stock 已被改成新值,判不出0→有货)。用于"新库存"识别。
                 sql = """
-                    INSERT INTO newestdropship (SKU, Price, Stock, Updated_At)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO newestdropship (SKU, Price, Stock, Updated_At, first_seen)
+                    VALUES (%s, %s, %s, %s, CURDATE())
                     ON DUPLICATE KEY UPDATE
+                        restock_at = IF(Stock <= 0 AND VALUES(Stock) > 0, CURDATE(), restock_at),
                         Price = VALUES(Price),
                         Stock = VALUES(Stock),
                         Updated_At = VALUES(Updated_At);
