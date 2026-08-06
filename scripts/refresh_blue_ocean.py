@@ -19,7 +19,7 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 from app import create_app
 from app.models.db_manager import DBManager
-from compute_blue_ocean import compute
+from compute_blue_ocean import _kw, compute
 from apply_blue_ocean_season import FACTOR, _season
 from sellersprite_client import google_trend, market_research
 
@@ -67,18 +67,36 @@ def refresh(store: str, topn: int):
             for e in explore:
                 kw = e["gt_keyword"]
                 mr = market_research(kw)
+                tag, peak, now = _season(google_trend(kw))    # 探索区也给旺季
                 cur.execute(
                     "UPDATE order_system.lowes_blue_ocean SET amz_units=%s, amz_revenue=%s,"
-                    " amz_price=%s, amz_return=%s, amz_node=%s WHERE store=%s AND lowes_leaf=%s",
+                    " amz_price=%s, amz_return=%s, amz_node=%s,"
+                    " season_tag=%s, season_peak=%s, trend_now=%s"
+                    " WHERE store=%s AND lowes_leaf=%s",
                     (mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
-                     mr.get("node"), store, e["lowes_leaf"]))
+                     mr.get("node"), tag, peak, now, store, e["lowes_leaf"]))
                 exp_done += 1
                 print(f"  [探索] units={mr.get('units')} ret={mr.get('return_rate')} "
-                      f"node={mr.get('node')} | {e['lowes_leaf']} (kw={kw})")
+                      f"{tag} 旺{peak} node={mr.get('node')} | {e['lowes_leaf']} (kw={kw})")
+                time.sleep(1.2)
+
+            # 已售类目旺季(我们自有历史仅5-6月不够判季节 → 用 google_trend 5年)
+            cur.execute("SELECT lowes_leaf FROM order_system.lowes_cat_demand "
+                        "WHERE store=%s AND gmv>0 ORDER BY gmv DESC LIMIT 35", (store,))
+            sold = cur.fetchall()
+            sold_done = 0
+            for s in sold:
+                leaf = s["lowes_leaf"]
+                tag, peak, now = _season(google_trend(_kw(leaf)))
+                cur.execute("UPDATE order_system.lowes_cat_demand SET season_tag=%s,"
+                            " season_peak=%s, trend_now=%s WHERE store=%s AND lowes_leaf=%s",
+                            (tag, peak, now, store, leaf))
+                sold_done += 1
+                print(f"  [已售] {tag} 旺{peak or '-'} now={now} | {leaf}")
                 time.sleep(1.2)
         conn.commit()
-        print(f"[blue_ocean refresh] store={store} candidates={len(cand)} "
-              f"season_updated={done} explore_probed={exp_done}")
+        print(f"[blue_ocean refresh] store={store} candidates={len(cand)} season_updated={done} "
+              f"explore_probed={exp_done} sold_season={sold_done}")
     finally:
         conn.close()
 

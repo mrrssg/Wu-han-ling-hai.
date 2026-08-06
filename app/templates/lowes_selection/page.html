@@ -34,8 +34,8 @@
     {% set cl = ((c.ret_rate or 0)*(1-(c.gross_rate or 0))*100)|round(1) %}
     <a class="badge text-decoration-none {{ 'text-bg-warning' if c.score>=60 else ('text-bg-info' if c.score>=30 else 'text-bg-secondary') }}"
        href="{{ url_for('lowes_selection.page', store=store, leaf=c.lowes_leaf) }}"
-       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ (cg-15-cl)|round(1) }}% = 毛利{{ cg }}% − 佣金15% − 退货损失{{ cl }}%（退货率{{ '%.1f'|format((c.ret_rate or 0)*100) }}%）">
-      {{ c.lowes_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}
+       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ (cg-15-cl)|round(1) }}% = 毛利{{ cg }}% − 佣金15% − 退货损失{{ cl }}%（退货率{{ '%.1f'|format((c.ret_rate or 0)*100) }}%）{% if c.season_peak %}&#10;旺季 {{ c.season_peak }}（{{ c.season_tag }}）{% endif %}">
+      {{ c.lowes_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}{% if c.season_tag and c.season_tag not in ['🟰平稳','—'] %} · {{ c.season_tag }}旺{{ c.season_peak }}{% endif %}
     </a>
     {% endfor %}
   </div>
@@ -93,6 +93,7 @@
         <th>类目</th><th>店铺大类</th>
         <th title="卖家精灵关键词匹配到的Amazon类目,核对是否和左边类目对得上(串了就别信这行需求)">Amazon类目(核对)</th>
         <th class="text-end">市场需求</th><th class="text-end">月销售额</th>
+        <th title="Google Trends旺季:⏫升温该提前布局/🔥当季/🟰平稳/⏬降温已过季">季节</th>
         <th class="text-end">退货</th><th class="text-end">Amz均价</th><th class="text-end">可上SKU</th></tr></thead>
       <tbody>
       {% for b in explore_ocean %}
@@ -103,6 +104,7 @@
         <td class="small" style="max-width:150px"><div class="text-truncate" title="{{ b.amz_node }}">{{ b.amz_node or '—' }}</div></td>
         <td class="text-end fw-semibold">{% if b.amz_units >= 10000 %}{{ '%.1f'|format(b.amz_units/10000) }}万{% else %}{{ b.amz_units }}{% endif %}<span class="text-muted">/月</span></td>
         <td class="text-end">{% if b.amz_revenue %}${{ '{:,.0f}'.format(b.amz_revenue) }}{% endif %}</td>
+        <td style="white-space:nowrap">{% if b.season_tag and b.season_tag != '—' %}{{ b.season_tag }}{% if b.season_peak %}<span class="text-muted"> 旺{{ b.season_peak }}</span>{% endif %}{% else %}<span class="text-muted">—</span>{% endif %}</td>
         <td class="text-end">{% if b.amz_return is not none %}<span class="{{ 'text-danger fw-bold' if b.amz_return > 15 else '' }}">{{ '%.1f'|format(b.amz_return) }}%{% if b.amz_return > 15 %} ⚠️{% endif %}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         <td class="text-end">{% if b.amz_price %}${{ '%.0f'|format(b.amz_price) }}{% endif %}</td>
         <td class="text-end">{{ b.sku_n }}<span class="text-muted"> ({{ b.with_img }}图)</span></td>
@@ -204,7 +206,7 @@
           {% set dg = ((dm.gross_rate or 0)*100)|round(1) if dm else 0 %}
           {% set dl = ((dm.ret_rate or 0)*(1-(dm.gross_rate or 0))*100)|round(1) if dm else 0 %}
           <span class="badge {{ 'text-bg-warning' if r.heat_90d>=60 else ('text-bg-info' if r.heat_90d>=30 else 'text-bg-light text-dark') }}"
-            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ (dg-15-dl)|round(1) }}% = 毛利{{ dg }}% − 佣金15% − 退货损失{{ dl }}%（退货率{{ '%.1f'|format((dm.ret_rate or 0)*100) }}%）{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
+            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ (dg-15-dl)|round(1) }}% = 毛利{{ dg }}% − 佣金15% − 退货损失{{ dl }}%（退货率{{ '%.1f'|format((dm.ret_rate or 0)*100) }}%）{% if dm.season_peak %}&#10;旺季 {{ dm.season_peak }}（{{ dm.season_tag }}）{% endif %}{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
         </td>
         <td class="small">{{ r.brand }}</td>
         <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>

@@ -97,6 +97,7 @@ def page():
     # 类目热度面板：近90天该店卖得最好的类目 + 各有多少候选
     cat_demand = _query("""SELECT d.lowes_leaf, d.gmv, d.units, d.margin_rate,
                                   d.gross_rate, d.ret_rate, d.score,
+                                  d.season_tag, d.season_peak, d.trend_now,
                                   COALESCE(p.n,0) AS cand_n
                            FROM order_system.lowes_cat_demand d
                            LEFT JOIN (SELECT lowes_leaf, COUNT(*) n
@@ -106,8 +107,8 @@ def page():
                            WHERE d.store=%s ORDER BY d.score DESC, d.gmv DESC LIMIT 15""",
                         (store, store))
     demand_map = {r["lowes_leaf"]: r for r in _query(
-        "SELECT lowes_leaf, gmv, units, margin_rate, gross_rate, ret_rate, score "
-        "FROM order_system.lowes_cat_demand WHERE store=%s", (store,))}
+        "SELECT lowes_leaf, gmv, units, margin_rate, gross_rate, ret_rate, score, "
+        "season_tag, season_peak, trend_now FROM order_system.lowes_cat_demand WHERE store=%s", (store,))}
     # 蓝海类目：豪雅有货但我们0销量的类目(邻接适配×货盘×季节)
     blue_ocean = _query("""SELECT lowes_leaf, l1, l2, sku_n, with_img, avg_price,
                                   fit_score, fit_reason, supply_score,
@@ -118,7 +119,8 @@ def page():
                            ORDER BY blue_score DESC, sku_n DESC LIMIT 40""", (store,))
     # 探索区：邻接弱(进不了主推)但 Amazon 需求大的类目，平台没把握，人工判断
     explore_ocean = _query("""SELECT lowes_leaf, l1, l2, sku_n, with_img, avg_price, fit_reason,
-                                     amz_units, amz_revenue, amz_price, amz_return, amz_node
+                                     amz_units, amz_revenue, amz_price, amz_return, amz_node,
+                                     season_tag, season_peak, trend_now
                               FROM order_system.lowes_blue_ocean
                               WHERE store=%s AND fit_score<55 AND amz_units IS NOT NULL
                                     AND amz_units>=3000
