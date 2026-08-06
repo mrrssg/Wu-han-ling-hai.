@@ -9,6 +9,7 @@ lowes_selection_bp = Blueprint("lowes_selection", __name__)
 
 _REBUILD = {"autool": False, "yasonic": False}
 STORES = {"autool": "Lowes-Autool（豪雅）", "yasonic": "Lowes-Yasonic（司顺）"}
+SUPPLIER_CN = {"autool": "豪雅", "yasonic": "司顺"}   # 供应商中文名(面板文案用)
 
 
 def _query(sql, params=None):
@@ -123,6 +124,7 @@ def page():
                            push_log=push_log, store_totals=store_totals,
                            cat_demand=cat_demand, demand_map=demand_map,
                            blue_ocean=blue_ocean,
+                           supplier_cn=SUPPLIER_CN.get(store, "供应商"),
                            rebuilding=_REBUILD.get(store, False))
 
 
