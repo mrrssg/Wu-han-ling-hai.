@@ -93,14 +93,17 @@ def main(local_path=None) -> int:
             with conn.cursor() as cur:
                 for i in range(0, len(rows), 2000):
                     chunk = rows[i:i + 2000]
-                    ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                    # first_seen: 新SKU首次插入=今天(存量走ON DUPLICATE不动它,保回填的远古值)；
+                    # restock_at: 旧inventory<=0且新>0→记今天(必须放 inventory=VALUES(inventory) 之前)。
+                    ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),CURDATE())"] * len(chunk))
                     flat = [v for row in chunk for v in row]
                     cur.execute(f"""
                         INSERT INTO autooperate.vevor_feed
                             (sku, product_type, title, inventory, price, image,
-                             long_in, wide_in, high_in, weight_lb, synced_at)
+                             long_in, wide_in, high_in, weight_lb, synced_at, first_seen)
                         VALUES {ph}
                         ON DUPLICATE KEY UPDATE
+                            restock_at=IF(inventory<=0 AND VALUES(inventory)>0, CURDATE(), restock_at),
                             product_type=VALUES(product_type), title=VALUES(title),
                             inventory=VALUES(inventory), price=VALUES(price),
                             image=VALUES(image), long_in=VALUES(long_in),

@@ -198,7 +198,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
             else:
                 cur.execute("""
                     SELECT v.sku, v.title, v.image AS img, v.inventory AS stock,
-                           v.product_type AS cat, v.price
+                           v.product_type AS cat, v.price,
+                           v.first_seen, v.restock_at
                     FROM autooperate.vevor_feed v
                     LEFT JOIN _lused u ON u.sku=v.sku COLLATE utf8mb4_general_ci
                     WHERE v.product_type<>'' AND v.inventory>50 AND u.sku IS NULL""")

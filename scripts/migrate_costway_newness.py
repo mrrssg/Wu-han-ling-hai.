@@ -25,6 +25,11 @@ ALTERS = [
     "COMMENT '豪雅新品(first_seen近N天)'",
     "ALTER TABLE order_system.lowes_selection_pool ADD COLUMN is_restock TINYINT DEFAULT 0 "
     "COMMENT '豪雅新库存(restock_at近N天)'",
+    # 司顺(Yasonic)feed 同样加，由 sync_vevor_feed.py 维护
+    "ALTER TABLE autooperate.vevor_feed ADD COLUMN first_seen DATE DEFAULT NULL "
+    "COMMENT '首次出现在vevor_feed的日期(新品判定)'",
+    "ALTER TABLE autooperate.vevor_feed ADD COLUMN restock_at DATE DEFAULT NULL "
+    "COMMENT '最近一次inventory 0→>0的日期(新库存判定)'",
 ]
 
 
@@ -46,7 +51,10 @@ def main() -> int:
                 # 存量行 first_seen 回填远古(=不算新品)；只填 NULL 的
                 cur.execute("UPDATE autooperate.newestdropship "
                             "SET first_seen='2025-01-01' WHERE first_seen IS NULL")
-                print(f"backfilled first_seen rows: {cur.rowcount}")
+                print(f"backfilled newestdropship first_seen: {cur.rowcount}")
+                cur.execute("UPDATE autooperate.vevor_feed "
+                            "SET first_seen='2025-01-01' WHERE first_seen IS NULL")
+                print(f"backfilled vevor_feed first_seen: {cur.rowcount}")
             conn.commit()
             print("costway newness schema OK")
         finally:
