@@ -45,7 +45,7 @@
   <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}"
      href="{{ url_for('lowes_selection.page', **nkp) }}">全部 {{ newn_stat.a or 0 }}</a>
   <a class="btn {{ 'btn-warning' if f_newn=='new' else 'btn-outline-warning' }}"
-     href="{{ url_for('lowes_selection.page', newn='new', **nkp) }}">🆕 豪雅新品 {{ newn_stat.nw or 0 }}</a>
+     href="{{ url_for('lowes_selection.page', newn='new', **nkp) }}">🆕 新品 {{ newn_stat.nw or 0 }}</a>
   <a class="btn {{ 'btn-info' if f_newn=='restock' else 'btn-outline-info' }}"
      href="{{ url_for('lowes_selection.page', newn='restock', **nkp) }}">📦 新库存 {{ newn_stat.rs or 0 }}</a>
 </div>
