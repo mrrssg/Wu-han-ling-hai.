@@ -30,9 +30,11 @@
   <div class="fw-semibold mb-1">🔥 {{ stores[store] }} 近90天最好卖的类目<span class="text-muted fw-normal">（分数=GMV×净利率加权；净利率=毛利−15%佣金−退货损失；点类目=只看该类目候选）</span></div>
   <div class="d-flex flex-wrap gap-1">
     {% for c in cat_demand %}
+    {% set cg = ((c.gross_rate or 0)*100)|round(1) %}
+    {% set cl = ((c.ret_rate or 0)*(1-(c.gross_rate or 0))*100)|round(1) %}
     <a class="badge text-decoration-none {{ 'text-bg-warning' if c.score>=60 else ('text-bg-info' if c.score>=30 else 'text-bg-secondary') }}"
        href="{{ url_for('lowes_selection.page', store=store, leaf=c.lowes_leaf) }}"
-       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ '%.1f'|format((c.margin_rate or 0)*100) }}% = 毛利{{ '%.1f'|format((c.gross_rate or 0)*100) }}% − 佣金15% − 退货损失{{ '%.1f'|format((c.ret_rate or 0)*(1-(c.gross_rate or 0))*100) }}%（退货率{{ '%.1f'|format((c.ret_rate or 0)*100) }}%）">
+       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ (cg-15-cl)|round(1) }}% = 毛利{{ cg }}% − 佣金15% − 退货损失{{ cl }}%（退货率{{ '%.1f'|format((c.ret_rate or 0)*100) }}%）">
       {{ c.lowes_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}
     </a>
     {% endfor %}
@@ -126,8 +128,10 @@
         <td class="small"><span class="badge text-bg-info" title="{{ r.lowes_path }}">{{ r.lowes_leaf }}</span></td>
         <td class="text-center">
           {% set dm = demand_map.get(r.lowes_leaf) %}
+          {% set dg = ((dm.gross_rate or 0)*100)|round(1) if dm else 0 %}
+          {% set dl = ((dm.ret_rate or 0)*(1-(dm.gross_rate or 0))*100)|round(1) if dm else 0 %}
           <span class="badge {{ 'text-bg-warning' if r.heat_90d>=60 else ('text-bg-info' if r.heat_90d>=30 else 'text-bg-light text-dark') }}"
-            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ '%.1f'|format((dm.margin_rate or 0)*100) }}% = 毛利{{ '%.1f'|format((dm.gross_rate or 0)*100) }}% − 佣金15% − 退货损失{{ '%.1f'|format((dm.ret_rate or 0)*(1-(dm.gross_rate or 0))*100) }}%（退货率{{ '%.1f'|format((dm.ret_rate or 0)*100) }}%）{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
+            title="{% if dm %}{{ r.lowes_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ (dg-15-dl)|round(1) }}% = 毛利{{ dg }}% − 佣金15% − 退货损失{{ dl }}%（退货率{{ '%.1f'|format((dm.ret_rate or 0)*100) }}%）{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span>
         </td>
         <td class="small">{{ r.brand }}</td>
         <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
