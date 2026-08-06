@@ -80,8 +80,10 @@ DDLS = [
         lowes_leaf VARCHAR(120) NOT NULL,
         gmv DECIMAL(14,2) DEFAULT 0,
         units INT DEFAULT 0,
-        margin_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目毛利率(1-成本/售价)',
-        score INT DEFAULT 0 COMMENT '0~100:GMV与毛利加权',
+        margin_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目净利率(毛利-15%佣金-退货损失)',
+        gross_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目毛利率(1-成本/售价)',
+        ret_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目退货率(近180天订单级)',
+        score INT DEFAULT 0 COMMENT '0~100:GMV与净利率加权',
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, lowes_leaf)
     ) CHARSET=utf8mb4 COMMENT='Lowes类目需求分(近90天GMV×毛利,驱动选品排序)'""",
@@ -96,6 +98,12 @@ DDLS = [
     ) CHARSET=utf8mb4 COMMENT='Lowes选品推送记录'""",
 ]
 
+# 幂等加列（老表已存在时补新列；Duplicate column 容错）
+ALTERS = [
+    "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN gross_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目毛利率(1-成本/售价)'",
+    "ALTER TABLE order_system.lowes_cat_demand ADD COLUMN ret_rate DECIMAL(6,4) DEFAULT NULL COMMENT '类目退货率(近180天订单级)'",
+]
+
 
 def main() -> int:
     app = create_app(os.environ.get("FLASK_CONFIG", "production"))
@@ -105,6 +113,12 @@ def main() -> int:
             with conn.cursor() as cur:
                 for ddl in DDLS:
                     cur.execute(ddl)
+                for alt in ALTERS:
+                    try:
+                        cur.execute(alt)
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
             print("lowes_selection schema OK")
         finally:

@@ -23,8 +23,11 @@ STORE_CFG = {
 }
 STORE_SHOP = {"autool": 10, "yasonic": 11}                 # lowes_order_data.shop_id
 STORE_KEY = {"autool": "lowes_autool", "yasonic": "lowes_yasonic"}  # pricing_tier.store_key
-CAT_GMV_WEIGHT = 0.5        # 类目分权重：GMV 与 毛利各半（用户2026-08-06定"两者加权"）
-CAT_MARGIN_FULL = 0.40      # 毛利率≥40%算满分
+CAT_GMV_WEIGHT = 0.5        # 类目分权重：GMV 与 净利率各半（用户2026-08-06定"两者加权"）
+CAT_MARGIN_FULL = 0.20      # 净利率≥20%算满分（净口径，2026-08-06改：原毛利0.40）
+LOWES_COMMISSION = 0.15     # Lowes平台佣金15%（autool/yasonic同，从毛利里扣）
+RET_RATE_WINDOW = 180       # 退货率取近180天订单（够成熟，退货滞后~30-60天）
+RET_RATE_MIN_ORDERS = 20    # 类目订单<20用店铺级退货率兜底（样本太少不可信）
 NEWNESS_DAYS = 14           # first_seen/restock_at 在近14天内 → 新品/新库存(P2,只对Costway)
 NEW_BONUS = 15              # 新品推荐分加成(封顶100)
 RESTOCK_BONUS = 8           # 新库存加成
@@ -106,11 +109,15 @@ def _local_pushed_skus(cur, store: str) -> set:
 
 
 def _compute_category_demand(cur, store: str) -> Dict[str, int]:
-    """近90天该店每个 Lowes 类目的 GMV+毛利率 → 归一化加权 score(0~100)，
-    写 lowes_cat_demand，返回 {lowes_leaf: score}。成本取 pricing_tier.cost_price，
-    覆盖不到的行不计入毛利（只按有成本的行估类目毛利率）。"""
+    """近90天该店每个 Lowes 类目的 GMV + 真实净利率 → 归一化加权 score(0~100)。
+    净利率 = 毛利(1-成本/售价) − 15%平台佣金 − 退货损失率；
+      退货损失率 = 该类目退货率 × (1−毛利)  —— 全损店退一单亏整个成本、Lowes退货运费=0。
+    高退货类目会被自动拉低甚至沉底(net可为负→拉低score)，避免推荐"高毛利高退货"坑品类。
+    写 lowes_cat_demand(margin_rate=净利率, gross_rate=毛利, ret_rate=退货率)，返回 {leaf: score}。
+    成本取 pricing_tier.cost_price，覆盖不到的行不计入毛利。"""
     shop_id = STORE_SHOP[store]
     store_key = STORE_KEY[store]
+    # 1) 近90天 GMV / 毛利（成本×数量 ÷ 有成本行的成交额）
     cur.execute("""
         SELECT o.category_label AS leaf,
                SUM(o.line_total_price) AS gmv,
@@ -127,6 +134,28 @@ def _compute_category_demand(cur, store: str) -> Dict[str, int]:
     rows = cur.fetchall()
     if not rows:
         return {}
+    # 2) 近180天各类目退货率(订单级) + 店铺级兜底(样本不足时用)
+    cur.execute("""
+        SELECT o.category_label AS leaf,
+               COUNT(DISTINCT o.order_id) AS orders,
+               COUNT(DISTINCT r.order_id) AS ret_orders
+        FROM order_system.lowes_order_data o
+        LEFT JOIN order_system.mirakl_returns r ON r.order_id = o.order_id
+        WHERE o.shop_id=%s AND o.order_state<>'CANCELED'
+          AND o.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+          AND o.category_label IS NOT NULL AND o.category_label<>''
+        GROUP BY o.category_label""", (shop_id, RET_RATE_WINDOW))
+    ret_map: Dict[str, float] = {}
+    tot_ord = tot_ret = 0
+    for x in cur.fetchall():
+        o_n = int(x["orders"] or 0)
+        r_n = int(x["ret_orders"] or 0)
+        tot_ord += o_n
+        tot_ret += r_n
+        if o_n >= RET_RATE_MIN_ORDERS:
+            ret_map[x["leaf"] or ""] = r_n / o_n if o_n else 0.0
+    store_ret = (tot_ret / tot_ord) if tot_ord else 0.10   # 类目样本不足时的兜底退货率
+
     max_gmv = max(float(r["gmv"] or 0) for r in rows) or 1.0
     scores: Dict[str, int] = {}
     to_write = []
@@ -135,20 +164,25 @@ def _compute_category_demand(cur, store: str) -> Dict[str, int]:
         units = int(r["units"] or 0)
         gmv_c = float(r["gmv_c"] or 0)
         cost_sum = float(r["cost_sum"] or 0)
-        margin = (1 - cost_sum / gmv_c) if gmv_c > 0 else None
+        gross = (1 - cost_sum / gmv_c) if gmv_c > 0 else None
+        ret_rate = ret_map.get(r["leaf"] or "", store_ret)
+        net = None if gross is None else gross - LOWES_COMMISSION - ret_rate * (1 - gross)
         gmv_norm = gmv / max_gmv
-        margin_norm = min(max((margin or 0) / CAT_MARGIN_FULL, 0.0), 1.0)
-        score = round((CAT_GMV_WEIGHT * gmv_norm + (1 - CAT_GMV_WEIGHT) * margin_norm) * 100)
+        net_norm = min(max((net if net is not None else 0) / CAT_MARGIN_FULL, -1.0), 1.0)
+        score = round((CAT_GMV_WEIGHT * gmv_norm + (1 - CAT_GMV_WEIGHT) * net_norm) * 100)
+        score = max(0, min(100, score))
         leaf = (r["leaf"] or "")[:120]
         scores[leaf] = score
         to_write.append((store, leaf, round(gmv, 2), units,
-                         round(margin, 4) if margin is not None else None, score))
+                         round(net, 4) if net is not None else None,
+                         round(gross, 4) if gross is not None else None,
+                         round(ret_rate, 4), score))
     cur.execute("DELETE FROM order_system.lowes_cat_demand WHERE store=%s", (store,))
     for i in range(0, len(to_write), 500):
         c = to_write[i:i + 500]
-        ph = ",".join(["(%s,%s,%s,%s,%s,%s,NOW())"] * len(c))
+        ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(c))
         cur.execute("INSERT INTO order_system.lowes_cat_demand "
-                    "(store,lowes_leaf,gmv,units,margin_rate,score,computed_at) VALUES "
+                    "(store,lowes_leaf,gmv,units,margin_rate,gross_rate,ret_rate,score,computed_at) VALUES "
                     + ph, [v for row in c for v in row])
     return scores
 
