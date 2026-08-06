@@ -144,18 +144,20 @@ def page():
         return round(sum(vals) / len(vals)) if vals else None
 
     hot = []
-    for r in _query("SELECT lowes_leaf, season_profile, season_peak FROM order_system.lowes_cat_demand "
+    for r in _query("SELECT lowes_leaf, season_profile, season_peak, season_tag "
+                    "FROM order_system.lowes_cat_demand "
                     "WHERE store=%s AND season_profile IS NOT NULL", (store,)):
         hh = _win_heat(r["season_profile"])
         if hh:
-            hot.append({"leaf": r["lowes_leaf"], "kind": "在售", "heat": hh, "peak": r["season_peak"]})
-    for r in _query("SELECT lowes_leaf, season_profile, season_peak, blue_score FROM "
+            hot.append({"leaf": r["lowes_leaf"], "kind": "在售", "heat": hh,
+                        "peak": r["season_peak"], "tag": r["season_tag"]})
+    for r in _query("SELECT lowes_leaf, season_profile, season_peak, season_tag, blue_score FROM "
                     "order_system.lowes_blue_ocean WHERE store=%s AND season_profile IS NOT NULL", (store,)):
         hh = _win_heat(r["season_profile"])
         if hh:
             hot.append({"leaf": r["lowes_leaf"],
                         "kind": "蓝海" if (r["blue_score"] or 0) >= 50 else "探索",
-                        "heat": hh, "peak": r["season_peak"]})
+                        "heat": hh, "peak": r["season_peak"], "tag": r["season_tag"]})
     hot.sort(key=lambda x: x["heat"], reverse=True)
     hot_window = hot[:12]
     return render_template("lowes_selection/page.html", rows=rows, total=total,

@@ -33,8 +33,8 @@
     {% for x in hot_window %}
     <a class="badge text-decoration-none {{ 'text-bg-danger' if x.heat>=85 else ('text-bg-warning' if x.heat>=65 else 'text-bg-secondary') }}"
        href="{{ url_for('lowes_selection.page', store=store, leaf=x.leaf) }}"
-       title="{{ x.leaf }} · {{ x.kind }} · {{ win_months }}当季强度 {{ x.heat }}/100{% if x.peak %} · 全年旺季 {{ x.peak }}{% endif %}">
-      {{ loop.index }}. {{ x.leaf }} <b>{{ x.heat }}</b> <span class="opacity-75">{{ x.kind }}</span>
+       title="{{ x.leaf }} · {{ x.kind }} · {{ win_months }}当季强度 {{ x.heat }}/100{% if x.peak %} · 全年旺季 {{ x.peak }}{% endif %}{% if x.tag %} · {{ x.tag }}{% endif %}">
+      {{ loop.index }}. {{ x.leaf }} <b>{{ x.heat }}</b>{% if x.tag and x.tag not in ['🟰平稳','—'] %} {{ x.tag[0] }}{% endif %} <span class="opacity-75">{{ x.kind }}</span>
     </a>
     {% endfor %}
   </div>
