@@ -83,6 +83,38 @@
 </details>
 {% endif %}
 
+{% if explore_ocean %}
+<details class="card p-2 mb-3" style="font-size:.8rem">
+  <summary style="cursor:pointer" class="fw-semibold">🚀 高需求新赛道 —— 我们没沾过、平台适配没把握,但 Amazon 需求大
+    <span class="text-muted fw-normal">（邻接弱=进不了上面主推,但这品类市场大+退货低值得你自己判断要不要试；<b>务必核对"Amazon类目"列对不对得上</b>——关键词匹配偶尔会串到别的类目）</span></summary>
+  <div class="table-responsive mt-2" style="max-height:320px;overflow-y:auto">
+    <table class="table table-sm table-hover mb-0" style="font-size:.78rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th>类目</th><th>店铺大类</th>
+        <th title="卖家精灵关键词匹配到的Amazon类目,核对是否和左边类目对得上(串了就别信这行需求)">Amazon类目(核对)</th>
+        <th class="text-end">市场需求</th><th class="text-end">月销售额</th>
+        <th class="text-end">退货</th><th class="text-end">Amz均价</th><th class="text-end">可上SKU</th></tr></thead>
+      <tbody>
+      {% for b in explore_ocean %}
+      <tr>
+        <td><a href="{{ url_for('lowes_selection.page', store=store, leaf=b.lowes_leaf) }}"
+               class="fw-semibold text-decoration-none">{{ b.lowes_leaf }}</a></td>
+        <td class="text-muted" style="max-width:150px"><div class="text-truncate">{{ b.l1 }}{% if b.l2 %} / {{ b.l2 }}{% endif %}</div></td>
+        <td class="small" style="max-width:150px"><div class="text-truncate" title="{{ b.amz_node }}">{{ b.amz_node or '—' }}</div></td>
+        <td class="text-end fw-semibold">{% if b.amz_units >= 10000 %}{{ '%.1f'|format(b.amz_units/10000) }}万{% else %}{{ b.amz_units }}{% endif %}<span class="text-muted">/月</span></td>
+        <td class="text-end">{% if b.amz_revenue %}${{ '{:,.0f}'.format(b.amz_revenue) }}{% endif %}</td>
+        <td class="text-end">{% if b.amz_return is not none %}<span class="{{ 'text-danger fw-bold' if b.amz_return > 15 else '' }}">{{ '%.1f'|format(b.amz_return) }}%{% if b.amz_return > 15 %} ⚠️{% endif %}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td class="text-end">{% if b.amz_price %}${{ '%.0f'|format(b.amz_price) }}{% endif %}</td>
+        <td class="text-end">{{ b.sku_n }}<span class="text-muted"> ({{ b.with_img }}图)</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-muted mt-1" style="font-size:.72rem"><b>这些不是"建议上",是"值得你看一眼"</b>：我们在 Lowes 这类目上没有任何销量证据,平台适配纯属未知。只是它们 Amazon 需求够大、退货够低、豪雅/司顺又有货,所以摆出来让你拿自己的平台经验判断。</div>
+</details>
+{% endif %}
+
 <div class="btn-group btn-group-sm mb-2" role="group">
   {% set nkp = {'store': store, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
   <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}"

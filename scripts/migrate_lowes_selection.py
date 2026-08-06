@@ -107,6 +107,7 @@ DDLS = [
         amz_revenue DECIMAL(14,2) DEFAULT NULL COMMENT 'Amazon该类目月销售额',
         amz_price DECIMAL(10,2) DEFAULT NULL COMMENT 'Amazon该类目均价',
         amz_return DECIMAL(6,2) DEFAULT NULL COMMENT 'Amazon该类目退货率%',
+        amz_node VARCHAR(120) DEFAULT NULL COMMENT '匹配到的Amazon类目名(核对是否对上)',
         blue_score INT DEFAULT 0 COMMENT '综合蓝海分0~100(内部×季节)',
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, lowes_leaf),
@@ -131,6 +132,7 @@ ALTERS = [
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_revenue DECIMAL(14,2) DEFAULT NULL COMMENT 'Amazon该类目月销售额'",
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_price DECIMAL(10,2) DEFAULT NULL COMMENT 'Amazon该类目均价'",
     "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_return DECIMAL(6,2) DEFAULT NULL COMMENT 'Amazon该类目退货率%'",
+    "ALTER TABLE order_system.lowes_blue_ocean ADD COLUMN amz_node VARCHAR(120) DEFAULT NULL COMMENT '匹配到的Amazon类目名(核对是否对上)'",
 ]
 
 

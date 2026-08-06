@@ -116,6 +116,13 @@ def page():
                            FROM order_system.lowes_blue_ocean
                            WHERE store=%s AND blue_score>=50
                            ORDER BY blue_score DESC, sku_n DESC LIMIT 40""", (store,))
+    # 探索区：邻接弱(进不了主推)但 Amazon 需求大的类目，平台没把握，人工判断
+    explore_ocean = _query("""SELECT lowes_leaf, l1, l2, sku_n, with_img, avg_price, fit_reason,
+                                     amz_units, amz_revenue, amz_price, amz_return, amz_node
+                              FROM order_system.lowes_blue_ocean
+                              WHERE store=%s AND fit_score<55 AND amz_units IS NOT NULL
+                                    AND amz_units>=3000
+                              ORDER BY amz_units DESC LIMIT 15""", (store,))
     return render_template("lowes_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per, store=store, stores=STORES,
                            f_leaf=f_leaf, f_q=f_q, f_img=f_img, f_newn=f_newn,
@@ -124,7 +131,7 @@ def page():
                            built_at=built[0]["t"] if built else None,
                            push_log=push_log, store_totals=store_totals,
                            cat_demand=cat_demand, demand_map=demand_map,
-                           blue_ocean=blue_ocean,
+                           blue_ocean=blue_ocean, explore_ocean=explore_ocean,
                            supplier_cn=SUPPLIER_CN.get(store, "供应商"),
                            rebuilding=_REBUILD.get(store, False))
 

@@ -45,6 +45,11 @@ KEYWORD_OVERRIDE = {
     "Immersion Blenders": "immersion blender", "Portable Power Stations": "portable power station",
     "Cotton Candy Machines": "cotton candy machine", "Desks": "desk", "Kids Chairs": "kids chair",
     "Porch Swings & Gliders": "porch swing", "Pond Pumps": "pond pump",
+    # 探索区(邻接弱但货盘厚)的类目 → 能匹配到 Amazon 节点的关键词(实测)
+    "Trampolines": "trampoline", "Pet Houses": "dog house", "Bounce Houses": "bounce house",
+    "Aquatic Sports": "pool float", "Sports Equipment": "exercise equipment",
+    "Pet Collars & Harnesses": "dog harness", "Bikes": "kids bicycle",
+    "Cat Trees & Scratchers": "cat tower",
 }
 
 

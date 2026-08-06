@@ -46,18 +46,39 @@ def refresh(store: str, topn: int):
                 cur.execute(
                     "UPDATE order_system.lowes_blue_ocean SET season_tag=%s, season_peak=%s,"
                     " trend_now=%s, blue_score=%s, gt_keyword=%s,"
-                    " amz_units=%s, amz_revenue=%s, amz_price=%s, amz_return=%s"
+                    " amz_units=%s, amz_revenue=%s, amz_price=%s, amz_return=%s, amz_node=%s"
                     " WHERE store=%s AND lowes_leaf=%s",
                     (tag, peak, now, blue, kw,
                      mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
-                     store, leaf))
+                     mr.get("node"), store, leaf))
                 done += 1
                 print(f"  {tag:6s} peak={peak or '-':4s} now={now if now is not None else '-':>3} "
                       f"blue={blue:3d} pts={len(items):2d} amz_units={mr.get('units')} "
                       f"ret={mr.get('return_rate')} | {leaf} (kw={kw})")
                 time.sleep(1.2)             # 限速, 防 SellerSprite 限流
+
+            # 探索区: 邻接弱(fit<55, 进不了主推)但货盘厚的类目 → 查 Amazon 需求,
+            # 供"高需求新赛道"人工判断(蹦床/宠物等我们没沾过但市场大的)
+            cur.execute("SELECT lowes_leaf, gt_keyword FROM order_system.lowes_blue_ocean "
+                        "WHERE store=%s AND fit_score<55 AND sku_n>=30 AND amz_units IS NULL "
+                        "ORDER BY sku_n DESC LIMIT 15", (store,))
+            explore = cur.fetchall()
+            exp_done = 0
+            for e in explore:
+                kw = e["gt_keyword"]
+                mr = market_research(kw)
+                cur.execute(
+                    "UPDATE order_system.lowes_blue_ocean SET amz_units=%s, amz_revenue=%s,"
+                    " amz_price=%s, amz_return=%s, amz_node=%s WHERE store=%s AND lowes_leaf=%s",
+                    (mr.get("units"), mr.get("revenue"), mr.get("price"), mr.get("return_rate"),
+                     mr.get("node"), store, e["lowes_leaf"]))
+                exp_done += 1
+                print(f"  [探索] units={mr.get('units')} ret={mr.get('return_rate')} "
+                      f"node={mr.get('node')} | {e['lowes_leaf']} (kw={kw})")
+                time.sleep(1.2)
         conn.commit()
-        print(f"[blue_ocean refresh] store={store} candidates={len(cand)} season_updated={done}")
+        print(f"[blue_ocean refresh] store={store} candidates={len(cand)} "
+              f"season_updated={done} explore_probed={exp_done}")
     finally:
         conn.close()
 

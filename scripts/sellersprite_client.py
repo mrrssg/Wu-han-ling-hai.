@@ -77,7 +77,7 @@ def market_research(keyword: str, marketplace: str = "US") -> dict:
                 it = items[0]
                 return {"units": it.get("totalUnits"), "revenue": it.get("totalRevenue"),
                         "price": it.get("avgPrice"), "return_rate": it.get("returnRatio"),
-                        "node": it.get("nodeLabelPathLocale") or it.get("nodeLabelPath")}
+                        "node": it.get("nodeLabelName")}   # 匹配到的Amazon类目名(核对是否对上)
             if attempt == 1:
                 return {}
         except Exception:
