@@ -42,6 +42,40 @@
 </div>
 {% endif %}
 
+{% if blue_ocean %}
+<details class="card p-2 mb-3" style="font-size:.8rem" open>
+  <summary style="cursor:pointer" class="fw-semibold">🌱 蓝海类目 —— 豪雅有货、但我们还没开卖的类目
+    <span class="text-muted fw-normal">（蓝海分=邻接适配×货盘厚度×季节；<b>⏫升温</b>=接下来的旺季该提前布局；点类目名=看该类目可上的豪雅产品）</span></summary>
+  <div class="table-responsive mt-2" style="max-height:360px;overflow-y:auto">
+    <table class="table table-sm table-hover mb-0" style="font-size:.78rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th title="邻接适配×货盘厚度×季节 综合分,越高越值得开发">蓝海分</th>
+        <th>类目</th><th>店铺大类</th>
+        <th title="和我们哪个已赚钱类目同属一个Lowes大类(邻接=平台适配的证据)">为什么推(邻接)</th>
+        <th title="Google Trends季节:⏫升温该提前布局/🔥当季/🟰平稳/⏬降温已过季">季节</th>
+        <th class="text-end">可上SKU</th><th class="text-end">均价</th></tr></thead>
+      <tbody>
+      {% for b in blue_ocean %}
+      <tr>
+        <td><span class="badge {{ 'text-bg-success' if b.blue_score>=75 else ('text-bg-warning' if b.blue_score>=55 else 'text-bg-secondary') }}">{{ b.blue_score }}</span></td>
+        <td><a href="{{ url_for('lowes_selection.page', store=store, leaf=b.lowes_leaf) }}"
+               class="fw-semibold text-decoration-none">{{ b.lowes_leaf }}</a></td>
+        <td class="text-muted" style="max-width:170px"><div class="text-truncate">{{ b.l1 }}{% if b.l2 %} / {{ b.l2 }}{% endif %}</div></td>
+        <td class="small" style="max-width:260px"><div class="text-truncate" title="{{ b.fit_reason }}">{{ b.fit_reason }}</div></td>
+        <td style="white-space:nowrap">
+          {% if b.season_tag and b.season_tag != '—' %}{{ b.season_tag }}{% if b.season_peak %}<span class="text-muted"> 旺{{ b.season_peak }}</span>{% endif %}
+          {% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td class="text-end">{{ b.sku_n }}<span class="text-muted"> ({{ b.with_img }}图)</span></td>
+        <td class="text-end">{% if b.avg_price %}${{ '%.0f'|format(b.avg_price) }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-muted mt-1" style="font-size:.72rem">共 {{ blue_ocean|length }} 个高分蓝海类目（全部未涉及类目更多）。季节来自卖家精灵 Google Trends（美国搜索热度,平台无关,做季节择时用）。</div>
+</details>
+{% endif %}
+
 <div class="btn-group btn-group-sm mb-2" role="group">
   {% set nkp = {'store': store, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
   <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}"
