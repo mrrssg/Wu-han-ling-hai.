@@ -87,6 +87,27 @@ DDLS = [
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, lowes_leaf)
     ) CHARSET=utf8mb4 COMMENT='Lowes类目需求分(近90天GMV×毛利,驱动选品排序)'""",
+    # 蓝海类目（未涉及：豪雅有货但我们0销量的类目，邻接适配+货盘+季节）
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_blue_ocean (
+        store VARCHAR(12) NOT NULL,
+        lowes_leaf VARCHAR(120) NOT NULL,
+        l1 VARCHAR(120), l2 VARCHAR(120),
+        sku_n INT DEFAULT 0 COMMENT '豪雅可上SKU数',
+        with_img INT DEFAULT 0 COMMENT '总览有图数',
+        avg_price DECIMAL(10,2) DEFAULT NULL,
+        avg_stock INT DEFAULT NULL,
+        fit_score INT DEFAULT 0 COMMENT '邻接适配分0~100(同L2强/同L1中/无邻接弱)',
+        fit_reason VARCHAR(255) COMMENT '为什么适配(挨着哪个已赚钱类目)',
+        supply_score INT DEFAULT 0 COMMENT '货盘厚度分0~100',
+        gt_keyword VARCHAR(120) COMMENT '查Google Trends用的关键词',
+        season_tag VARCHAR(24) DEFAULT NULL COMMENT '🔥当季/⏫升温/🟰平稳/⏬降温/—未查',
+        season_peak VARCHAR(8) DEFAULT NULL COMMENT '旺季峰值月份',
+        trend_now INT DEFAULT NULL COMMENT '当前Google Trends热度index',
+        blue_score INT DEFAULT 0 COMMENT '综合蓝海分0~100(内部×季节)',
+        computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, lowes_leaf),
+        KEY idx_store_score (store, blue_score)
+    ) CHARSET=utf8mb4 COMMENT='Lowes蓝海类目推荐(未涉及类目,邻接适配+季节)'""",
     # 推送记录（带 store）
     """CREATE TABLE IF NOT EXISTS order_system.lowes_push_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
