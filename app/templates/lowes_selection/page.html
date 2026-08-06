@@ -47,7 +47,7 @@
   <a class="btn {{ 'btn-warning' if f_newn=='new' else 'btn-outline-warning' }}"
      href="{{ url_for('lowes_selection.page', newn='new', **nkp) }}">🆕 新品 {{ newn_stat.nw or 0 }}</a>
   <a class="btn {{ 'btn-info' if f_newn=='restock' else 'btn-outline-info' }}"
-     href="{{ url_for('lowes_selection.page', newn='restock', **nkp) }}">📦 新库存 {{ newn_stat.rs or 0 }}</a>
+     href="{{ url_for('lowes_selection.page', newn='restock', **nkp) }}">📦 新补货 {{ newn_stat.rs or 0 }}</a>
 </div>
 
 <div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
@@ -114,7 +114,7 @@
         <td class="font-monospace small">{{ r.supplier_sku }}</td>
         <td class="small">
           {% if r.is_new %}<span class="badge text-bg-warning" title="豪雅近期新增产品">🆕新品</span>
-          {% elif r.is_restock %}<span class="badge text-bg-info" title="近期重新有货(0→有货)">📦新库存</span>{% endif %}
+          {% elif r.is_restock %}<span class="badge text-bg-info" title="近期重新有货(0→有货)">📦新补货</span>{% endif %}
           <div style="max-width:340px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div>
         </td>
         <td class="text-end">{{ r.stock }}</td>
