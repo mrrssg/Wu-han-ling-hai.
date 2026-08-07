@@ -177,6 +177,15 @@ def _compute_category_demand(cur, store: str) -> Dict[str, int]:
                          round(net, 4) if net is not None else None,
                          round(gross, 4) if gross is not None else None,
                          round(ret_rate, 4), score))
+    # 季节列(season_tag/peak/trend_now/season_profile)由蓝海周刷(refresh_blue_ocean)维护，
+    # 本重算是 DELETE+INSERT，会把它们冲成 NULL → 先快照、后恢复，别丢掉旺季数据。
+    season_keep: Dict[str, Any] = {}
+    try:
+        cur.execute("SELECT lowes_leaf, season_tag, season_peak, trend_now, season_profile "
+                    "FROM order_system.lowes_cat_demand WHERE store=%s", (store,))
+        season_keep = {r["lowes_leaf"]: r for r in cur.fetchall()}
+    except Exception:
+        season_keep = {}          # 季节列还没建时忽略
     cur.execute("DELETE FROM order_system.lowes_cat_demand WHERE store=%s", (store,))
     for i in range(0, len(to_write), 500):
         c = to_write[i:i + 500]
@@ -184,6 +193,13 @@ def _compute_category_demand(cur, store: str) -> Dict[str, int]:
         cur.execute("INSERT INTO order_system.lowes_cat_demand "
                     "(store,lowes_leaf,gmv,units,margin_rate,gross_rate,ret_rate,score,computed_at) VALUES "
                     + ph, [v for row in c for v in row])
+    for leaf in scores:           # 恢复季节列(只恢复仍存在的类目)
+        sk = season_keep.get(leaf)
+        if sk and sk.get("season_tag"):
+            cur.execute("UPDATE order_system.lowes_cat_demand SET season_tag=%s, season_peak=%s,"
+                        " trend_now=%s, season_profile=%s WHERE store=%s AND lowes_leaf=%s",
+                        (sk["season_tag"], sk["season_peak"], sk["trend_now"],
+                         sk["season_profile"], store, leaf))
     return scores
 
 
