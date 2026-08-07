@@ -91,8 +91,12 @@ def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
     return scores
 
 
-def _feishu_used_skus() -> set:
-    """飞书 Macy-kuyotq-Mirakl + Macy-wopet-Mirakl 两表的「供应商SKU」全集=已上过。"""
+STORE_MIRAKL = {"kuyotq": "tblfyStm2eu3hp1Q", "wopet": "tbla2i1OwdwlCweK"}
+STORE_BRAND = {"kuyotq": None, "wopet": "COZITO"}   # wopet 固定 COZITO;kuyotq 品牌按类目映射
+
+
+def _feishu_used_skus(store: str = "kuyotq") -> set:
+    """该 Macy 店 Mirakl 表的「供应商SKU」全集=已上过(按店,不再混两店)。"""
     import requests
     APP_ID = "cli_a940a2a1067adbd2"
     SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
@@ -113,7 +117,7 @@ def _feishu_used_skus() -> set:
         return str(v) if v is not None else ""
 
     used = set()
-    for tbl in ("tblfyStm2eu3hp1Q", "tbla2i1OwdwlCweK"):
+    for tbl in (STORE_MIRAKL.get(store, "tblfyStm2eu3hp1Q"),):
         pt = ""
         while True:
             url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP}"
@@ -198,8 +202,51 @@ def _feishu_overview_skus() -> set:
     return have
 
 
-def rebuild_pool() -> Dict[str, Any]:
-    used = _feishu_used_skus()
+def _classify_wopet(supplier: str, title: str, supplier_cat: str):
+    """wopet 逐产品分类器 → (macy_leaf, tier, reason) 或 (None,None,None)。
+    tier: 'ai'=有把握精选 / 'manual'=擦边人工待选。宠物(6叶子)豪雅+司顺都收；Camping 只司顺。"""
+    t = f"{title or ''} {supplier_cat or ''}".lower()
+
+    def has(*ws):
+        return any(w in t for w in ws)
+
+    # 猫（cat 但排除 category/cattle/certificate 等误命中）
+    if "cat" in t and not has("category", "cattle", "certificate", "duplicate", "educat", "locat", "delicat"):
+        if has("litter", "cleaning", "scoop", "waste", "litter box"):
+            return "Cat Litter & Cleaning", "ai", "cat+litter"
+        if has("tree", "condo", "scratch", "tower", "perch", "cat house", "cat bed",
+                "cat shelf", "cat wall", "cat climb", "cat furniture", "cat cage", "cat window"):
+            return "Cat Furniture", "ai", "cat furniture词"
+        return "Cat Furniture", "manual", "只识别到cat,细分不明→擦边"
+    # 狗
+    if has("dog", "puppy", "canine"):
+        if has("crate", "kennel", "carrier", "cage", "playpen", "pet gate", "dog gate",
+                "fence", "enclosure", "pen "):
+            return "Dog Crates & Carriers & Gates", "ai", "dog+笼子/围栏"
+        if has("collar", "leash", "harness", "lead "):
+            return "Dog Collars & Leashes", "ai", "dog+项圈/牵引"
+        if has("training", "muzzle", "clicker", "potty", "pee pad", "bark", "agility"):
+            return "Dog Training", "ai", "dog+训练"
+        if has("bed", "sofa", "couch", " mat", "cushion", "dog house", "furniture",
+                "stairs", "steps", "ramp", "crib", "sofa"):
+            return "Dog Bedding & Furniture", "ai", "dog+床/家具"
+        return "Dog Bedding & Furniture", "manual", "只识别到dog,细分不明→擦边"
+    # 泛宠物(有pet无猫狗) → 擦边
+    if has("rabbit", "hamster", "guinea", "reptile", "bird cage", "small animal", "chicken coop", "pet "):
+        return "Dog Crates & Carriers & Gates", "manual", "泛宠物,拿不准→擦边"
+    # Camping —— 只司顺(Vevor)
+    if supplier == "Vevor":
+        if has("tent", "sleeping bag", "sleeping pad", "camping", "camp cot", "backpacking",
+               "camp stove", "camping chair", "bivy", "camp table") \
+                and not has("patio", "fire pit", "firepit", "grill", "cooler", "heater", "umbrella", "gazebo"):
+            return "Camping & Outdoor Recreation Gear", "ai", "露营词"
+        if has("outdoor", "portable", "folding") and has("chair", "table", "canopy", "shelter", "cot", "cart"):
+            return "Camping & Outdoor Recreation Gear", "manual", "户外品,拿不准是否露营→擦边"
+    return None, None, None
+
+
+def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
+    used = _feishu_used_skus(store)
     overview = _feishu_overview_skus()
     conn = DBManager.get_connection()
     try:
@@ -207,7 +254,10 @@ def rebuild_pool() -> Dict[str, Any]:
             cur.execute(DDL)
             for _alt in ("ADD COLUMN has_overview_img TINYINT DEFAULT 0",
                          "ADD COLUMN is_new TINYINT DEFAULT 0",
-                         "ADD COLUMN is_restock TINYINT DEFAULT 0"):
+                         "ADD COLUMN is_restock TINYINT DEFAULT 0",
+                         "ADD COLUMN store VARCHAR(12) NOT NULL DEFAULT 'kuyotq'",
+                         "ADD COLUMN tier VARCHAR(8) NOT NULL DEFAULT 'ai'",
+                         "ADD COLUMN classify_reason VARCHAR(200) DEFAULT NULL"):
                 try:
                     cur.execute("ALTER TABLE order_system.macy_selection_pool " + _alt)
                 except Exception as exc:
@@ -227,7 +277,7 @@ def rebuild_pool() -> Dict[str, Any]:
             cat2leaf = {(r["supplier"], r["supplier_cat"]): (r["macy_leaf"], r["macy_brand"])
                         for r in cur.fetchall()}
             # 类目推荐分：近90天净利率(收入−实际佣金−成本)×GMV,写 macy_cat_demand,返回 {leaf: score}
-            cat_scores = _compute_macy_cat_demand(cur, store="kuyotq")
+            cat_scores = _compute_macy_cat_demand(cur, store=store)
 
             # 已上过灌临时表
             cur.execute("DROP TEMPORARY TABLE IF EXISTS _used")
@@ -260,37 +310,45 @@ def rebuild_pool() -> Dict[str, Any]:
         rows = []
         for supplier, recs in (("Costway", cw), ("Vevor", vv)):
             for r in recs:
-                lb = cat2leaf.get((supplier, r["cat"]))
-                if not lb:
-                    continue   # 类目没映射到Macy叶子 → 不进池
-                leaf, brand = lb
+                # 归类：kuyotq 用类目映射表(全 ai);wopet 用逐产品分类器(ai精选/manual擦边)
+                if store == "wopet":
+                    leaf, tier, reason = _classify_wopet(supplier, r.get("title"), r.get("cat"))
+                    if not leaf:
+                        continue
+                    brand = STORE_BRAND["wopet"]
+                else:
+                    lb = cat2leaf.get((supplier, r["cat"]))
+                    if not lb:
+                        continue
+                    leaf, brand = lb
+                    tier, reason = "ai", None
                 has_img = 1 if r["sku"] in overview else 0
                 fs, rs = r.get("first_seen"), r.get("restock_at")
                 is_new = 1 if (fs and fs >= cutoff) else 0
                 is_restock = 1 if (not is_new and rs and rs >= cutoff) else 0
                 base = cat_scores.get(leaf, 0)
                 heat = min(100, base + (NEW_BONUS if is_new else RESTOCK_BONUS if is_restock else 0))
-                rows.append((supplier, r["sku"], (r.get("title") or "")[:400],
-                             (r.get("img") or "")[:600], int(r.get("stock") or 0),
-                             (r["cat"] or "")[:400], leaf, brand,
+                rows.append((store, tier, (reason or "")[:200], supplier, r["sku"],
+                             (r.get("title") or "")[:400], (r.get("img") or "")[:600],
+                             int(r.get("stock") or 0), (r["cat"] or "")[:400], leaf, brand,
                              (str(r.get("price") or ""))[:32], heat, has_img, is_new, is_restock))
 
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM order_system.macy_selection_pool")
-            cols = ("supplier,supplier_sku,title,image,stock,supplier_cat,"
+            cur.execute("DELETE FROM order_system.macy_selection_pool WHERE store=%s", (store,))
+            cols = ("store,tier,classify_reason,supplier,supplier_sku,title,image,stock,supplier_cat,"
                     "macy_leaf,macy_brand,price,heat_90d,has_overview_img,is_new,is_restock,rebuilt_at")
             for i in range(0, len(rows), 1000):
                 chunk = rows[i:i + 1000]
-                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.macy_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
-        return {"used_skus": len(used), "local_pushed_skus": len(local_pushed),
-                "overview_skus": len(overview),
-                "candidates": len(rows),
-                "with_overview_img": sum(1 for r in rows if r[10]),
-                "costway": sum(1 for r in rows if r[0] == "Costway"),
-                "vevor": sum(1 for r in rows if r[0] == "Vevor")}
+        return {"store": store, "used_skus": len(used), "local_pushed_skus": len(local_pushed),
+                "overview_skus": len(overview), "candidates": len(rows),
+                "ai": sum(1 for r in rows if r[1] == "ai"),
+                "manual": sum(1 for r in rows if r[1] == "manual"),
+                "costway": sum(1 for r in rows if r[3] == "Costway"),
+                "vevor": sum(1 for r in rows if r[3] == "Vevor")}
     finally:
         conn.close()
 
@@ -300,7 +358,6 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
     import json
     import requests
     APP = "QEeubiXYGa83zXs3Zt8cSSJPnih"
-    KUYOTQ = "tblfyStm2eu3hp1Q"
     APP_ID = "cli_a940a2a1067adbd2"
     SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
     if not pool_ids:
@@ -312,6 +369,8 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
             cur.execute(f"""SELECT * FROM order_system.macy_selection_pool
                             WHERE id IN ({ph})""", pool_ids)
             items = cur.fetchall()
+            store = (items[0].get("store") if items else None) or "kuyotq"
+            TARGET = STORE_MIRAKL.get(store, "tblfyStm2eu3hp1Q")
             # 叶子类目 → 完整Macy类目路径（写「店铺类目」字段用）
             cur.execute("""SELECT brand, leaf, full_path FROM order_system.macy_leaf_category""")
             leaf_path = {(r["brand"], r["leaf"]): r["full_path"] for r in cur.fetchall()}
@@ -331,7 +390,7 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
 
     records = []
     for it in items:
-        full_path = leaf_path.get((it["macy_brand"], it["macy_leaf"])) or ""
+        full_path = leaf_path.get((it["macy_brand"], it["macy_leaf"])) or it["macy_leaf"] or ""
         f = {
             "供应商SKU": it["supplier_sku"],
             "Item Name": it["title"] or "",
@@ -355,7 +414,7 @@ def push_to_feishu(pool_ids: List[int], batch_desc: str) -> Dict[str, Any]:
     for i in range(0, len(records), 100):
         chunk = records[i:i + 100]
         r = requests.post(
-            f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP}/tables/{KUYOTQ}/records/batch_create",
+            f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP}/tables/{TARGET}/records/batch_create",
             headers=H, data=json.dumps({"records": chunk}).encode("utf-8"), timeout=60).json()
         if r.get("code") == 0:
             ok += len(chunk)

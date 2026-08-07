@@ -83,6 +83,17 @@ ALTERS = [
     "COMMENT '新品(first_seen近14天,Costway/Vevor任一)'",
     "ALTER TABLE order_system.macy_selection_pool ADD COLUMN is_restock TINYINT DEFAULT 0 "
     "COMMENT '新补货(restock_at近14天)'",
+    # 店铺参数化 + 两池(tier)
+    "ALTER TABLE order_system.macy_selection_pool ADD COLUMN store VARCHAR(12) NOT NULL DEFAULT 'kuyotq' "
+    "COMMENT '哪个Macy店(kuyotq/wopet…)'",
+    "ALTER TABLE order_system.macy_selection_pool ADD COLUMN tier VARCHAR(8) NOT NULL DEFAULT 'ai' "
+    "COMMENT 'ai=精选(有把握)/manual=人工待选(擦边)'",
+    "ALTER TABLE order_system.macy_selection_pool ADD COLUMN classify_reason VARCHAR(200) DEFAULT NULL "
+    "COMMENT '归类依据(命中的关键词/擦边原因)'",
+    # 唯一键改成含 store(同一SKU可同时是不同店的候选)
+    "ALTER TABLE order_system.macy_selection_pool DROP INDEX uq_sku",
+    "ALTER TABLE order_system.macy_selection_pool ADD UNIQUE KEY uq_sku (store, supplier, supplier_sku)",
+    # cat_demand / blue_ocean 已经 store 参数化(默认kuyotq),wopet 直接用 store='wopet'
 ]
 
 
@@ -98,7 +109,10 @@ def main() -> int:
                     try:
                         cur.execute(alt)
                     except Exception as exc:
-                        if "Duplicate column" not in str(exc):
+                        msg = str(exc)
+                        if not any(k in msg for k in (
+                                "Duplicate column", "Duplicate key", "check that column/key exists",
+                                "Can't DROP", "already exists")):
                             raise
             conn.commit()
             print("macy_selection schema OK")
