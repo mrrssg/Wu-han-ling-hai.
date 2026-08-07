@@ -37,6 +37,30 @@ DDLS = [
         UNIQUE KEY uq_cat (supplier, supplier_cat(255)),
         KEY idx_leaf (macy_leaf)
     ) CHARSET=utf8mb4 COMMENT='供应商类目→Macy叶子类目映射(AI判,人工可改)'""",
+    # 类目需求分（净利率×GMV,店铺参数化便于将来加其它Macy店）
+    """CREATE TABLE IF NOT EXISTS order_system.macy_cat_demand (
+        store VARCHAR(12) NOT NULL DEFAULT 'kuyotq',
+        macy_leaf VARCHAR(120) NOT NULL,
+        gmv DECIMAL(14,2) DEFAULT 0,
+        units INT DEFAULT 0,
+        margin_rate DECIMAL(6,4) DEFAULT NULL COMMENT '净利率=(收入-实际佣金-成本)/收入',
+        gross_rate DECIMAL(6,4) DEFAULT NULL COMMENT '毛利率(1-成本/收入)',
+        comm_rate DECIMAL(6,4) DEFAULT NULL COMMENT '实际佣金率',
+        score INT DEFAULT 0 COMMENT '0~100:GMV与净利率加权',
+        season_tag VARCHAR(24) DEFAULT NULL,
+        season_peak VARCHAR(8) DEFAULT NULL,
+        trend_now INT DEFAULT NULL,
+        season_profile TEXT DEFAULT NULL,
+        computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, macy_leaf)
+    ) CHARSET=utf8mb4 COMMENT='Macy类目需求分(净利率×GMV,store参数化)'""",
+]
+
+ALTERS = [
+    "ALTER TABLE order_system.macy_selection_pool ADD COLUMN is_new TINYINT DEFAULT 0 "
+    "COMMENT '新品(first_seen近14天,Costway/Vevor任一)'",
+    "ALTER TABLE order_system.macy_selection_pool ADD COLUMN is_restock TINYINT DEFAULT 0 "
+    "COMMENT '新补货(restock_at近14天)'",
 ]
 
 
@@ -48,6 +72,12 @@ def main() -> int:
             with conn.cursor() as cur:
                 for ddl in DDLS:
                     cur.execute(ddl)
+                for alt in ALTERS:
+                    try:
+                        cur.execute(alt)
+                    except Exception as exc:
+                        if "Duplicate column" not in str(exc):
+                            raise
             conn.commit()
             print("macy_selection schema OK")
         finally:

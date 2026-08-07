@@ -5,9 +5,74 @@
   库存>50 + 没上过(飞书两张Mirakl表供应商SKU) + 供应商类目映射到了有效Macy叶子类目
 的候选，存 macy_selection_pool（页面读它，勾选后推送飞书）。
 """
+from datetime import date, timedelta
 from typing import Any, Dict, List
 
 from app.models.db_manager import DBManager
+
+# 类目推荐分：GMV 与 净利率各半（净利率=收入−实际佣金−成本,用 macy_order_data.commission_fee 真值）
+CAT_GMV_WEIGHT = 0.5
+CAT_MARGIN_FULL = 0.20      # 净利率≥20%算满分
+NEWNESS_DAYS = 14           # first_seen/restock_at 在近14天 → 新品/新补货
+NEW_BONUS = 15
+RESTOCK_BONUS = 8
+STORE_SHOP = {"kuyotq": "kuyotq"}   # store → offerprice_listing.shop_name(将来加店在此扩)
+
+
+def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
+    """近90天该 Macy 店每类目 GMV + 净利率 → 归一化加权 score(0~100)。
+    净利率 = (收入 − 实际佣金commission_fee − 成本last_cost_snapshot) / 收入，只按有成本的行算。
+    写 macy_cat_demand，返回 {category_label(=macy_leaf): score}。"""
+    shop = STORE_SHOP.get(store, "kuyotq")
+    cur.execute("""
+        SELECT o.category_label AS leaf,
+               SUM(o.line_total_price) AS gmv,
+               SUM(o.quantity) AS units,
+               SUM(CASE WHEN l.last_cost_snapshot>0 THEN o.line_total_price ELSE 0 END) AS gmv_c,
+               SUM(CASE WHEN l.last_cost_snapshot>0 THEN o.commission_fee ELSE 0 END) AS comm_c,
+               SUM(CASE WHEN l.last_cost_snapshot>0 THEN l.last_cost_snapshot*o.quantity ELSE 0 END) AS cost_c
+        FROM order_system.macy_order_data o
+        JOIN order_system.offerprice_listing l
+          ON l.shop_sku=o.offer_sku AND l.platform='Macy' AND l.shop_name=%s
+        WHERE o.order_state<>'CANCELED'
+          AND o.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+          AND o.category_label IS NOT NULL AND o.category_label<>''
+        GROUP BY o.category_label""", (shop,))
+    rows = cur.fetchall()
+    if not rows:
+        return {}
+    max_gmv = max(float(r["gmv"] or 0) for r in rows) or 1.0
+    scores: Dict[str, int] = {}
+    to_write = []
+    for r in rows:
+        gmv = float(r["gmv"] or 0)
+        units = int(r["units"] or 0)
+        gmv_c = float(r["gmv_c"] or 0)
+        comm_c = float(r["comm_c"] or 0)
+        cost_c = float(r["cost_c"] or 0)
+        if gmv_c > 0:
+            net = (gmv_c - comm_c - cost_c) / gmv_c
+            gross = 1 - cost_c / gmv_c
+            comm_rate = comm_c / gmv_c
+        else:
+            net = gross = comm_rate = None
+        gmv_norm = gmv / max_gmv
+        net_norm = min(max((net if net is not None else 0) / CAT_MARGIN_FULL, -1.0), 1.0)
+        score = max(0, min(100, round((CAT_GMV_WEIGHT * gmv_norm + (1 - CAT_GMV_WEIGHT) * net_norm) * 100)))
+        leaf = (r["leaf"] or "")[:120]
+        scores[leaf] = score
+        to_write.append((store, leaf, round(gmv, 2), units,
+                         round(net, 4) if net is not None else None,
+                         round(gross, 4) if gross is not None else None,
+                         round(comm_rate, 4) if comm_rate is not None else None, score))
+    cur.execute("DELETE FROM order_system.macy_cat_demand WHERE store=%s", (store,))
+    for i in range(0, len(to_write), 500):
+        c = to_write[i:i + 500]
+        ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(c))
+        cur.execute("INSERT INTO order_system.macy_cat_demand "
+                    "(store,macy_leaf,gmv,units,margin_rate,gross_rate,comm_rate,score,computed_at) VALUES "
+                    + ph, [v for row in c for v in row])
+    return scores
 
 
 def _feishu_used_skus() -> set:
@@ -63,8 +128,10 @@ CREATE TABLE IF NOT EXISTS order_system.macy_selection_pool (
     macy_leaf VARCHAR(120),
     macy_brand VARCHAR(32),
     price VARCHAR(32),
-    heat_90d INT DEFAULT 0 COMMENT '该Macy叶子类目近90天Kuyotq订单数',
+    heat_90d INT DEFAULT 0 COMMENT '推荐分=该Macy叶子近90天净利率×GMV(+新品/补货加成)',
     has_overview_img TINYINT DEFAULT 0 COMMENT '图片总览表tbl2IRXCLuiUBfk9里有此SKU的图',
+    is_new TINYINT DEFAULT 0 COMMENT '新品(first_seen近14天)',
+    is_restock TINYINT DEFAULT 0 COMMENT '新补货(restock_at近14天)',
     rebuilt_at DATETIME,
     UNIQUE KEY uq_sku (supplier, supplier_sku),
     KEY idx_leaf (macy_leaf), KEY idx_supplier (supplier)
@@ -122,12 +189,14 @@ def rebuild_pool() -> Dict[str, Any]:
     try:
         with conn.cursor() as cur:
             cur.execute(DDL)
-            try:
-                cur.execute("ALTER TABLE order_system.macy_selection_pool "
-                            "ADD COLUMN has_overview_img TINYINT DEFAULT 0")
-            except Exception as exc:
-                if "Duplicate column" not in str(exc):
-                    raise
+            for _alt in ("ADD COLUMN has_overview_img TINYINT DEFAULT 0",
+                         "ADD COLUMN is_new TINYINT DEFAULT 0",
+                         "ADD COLUMN is_restock TINYINT DEFAULT 0"):
+                try:
+                    cur.execute("ALTER TABLE order_system.macy_selection_pool " + _alt)
+                except Exception as exc:
+                    if "Duplicate column" not in str(exc):
+                        raise
             # 本地推送明细并入"已上过"：刚推的SKU立刻排除，不依赖飞书传播/整表读全
             cur.execute("""CREATE TABLE IF NOT EXISTS order_system.macy_pushed_sku (
                 supplier_sku VARCHAR(64) PRIMARY KEY,
@@ -141,15 +210,8 @@ def rebuild_pool() -> Dict[str, Any]:
                            FROM order_system.macy_cat_map WHERE macy_leaf IS NOT NULL""")
             cat2leaf = {(r["supplier"], r["supplier_cat"]): (r["macy_leaf"], r["macy_brand"])
                         for r in cur.fetchall()}
-            # 类目热度: 该Macy叶子近90天Kuyotq订单数（按offer的category粗匹配leaf名）
-            cur.execute("""SELECT category, COUNT(DISTINCT order_id) AS n
-                           FROM order_system.macy_order_data d
-                           JOIN order_system.offerprice_listing o
-                             ON o.shop_sku=d.offer_sku AND o.platform='Macy' AND o.shop_name='kuyotq'
-                           WHERE d.order_state<>'CANCELED'
-                             AND d.created_date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY)
-                           GROUP BY category""")
-            heat = {(r["category"] or ""): int(r["n"] or 0) for r in cur.fetchall()}
+            # 类目推荐分：近90天净利率(收入−实际佣金−成本)×GMV,写 macy_cat_demand,返回 {leaf: score}
+            cat_scores = _compute_macy_cat_demand(cur, store="kuyotq")
 
             # 已上过灌临时表
             cur.execute("DROP TEMPORARY TABLE IF EXISTS _used")
@@ -160,23 +222,25 @@ def rebuild_pool() -> Dict[str, Any]:
                 c = ul[i:i + 2000]
                 cur.execute(f"INSERT IGNORE INTO _used (sku) VALUES {','.join(['(%s)']*len(c))}", c)
 
-            # Costway候选（带供应商价Price）
+            # Costway候选（带供应商价Price + first_seen/restock新品判定；排除Disabled禁用品）
             cur.execute("""
                 SELECT c.sku, c.title, c.image_url AS img, d.Stock AS stock,
-                       c.category AS cat, d.Price AS price
+                       c.category AS cat, d.Price AS price, d.first_seen, d.restock_at
                 FROM order_system.safety_product_cache c
                 JOIN autooperate.newestdropship d ON d.SKU=c.sku
                 LEFT JOIN _used u ON u.sku=c.sku COLLATE utf8mb4_general_ci
-                WHERE c.supplier='Costway' AND c.category<>'' AND d.Stock>50 AND u.sku IS NULL""")
+                WHERE c.supplier='Costway' AND c.category<>'' AND d.Stock>50 AND u.sku IS NULL
+                  AND COALESCE(d.status,'Enabled')<>'Disabled'""")
             cw = cur.fetchall()
             cur.execute("""
                 SELECT v.sku, v.title, v.image AS img, v.inventory AS stock,
-                       v.product_type AS cat, v.price
+                       v.product_type AS cat, v.price, v.first_seen, v.restock_at
                 FROM autooperate.vevor_feed v
                 LEFT JOIN _used u ON u.sku=v.sku COLLATE utf8mb4_general_ci
                 WHERE v.product_type<>'' AND v.inventory>50 AND u.sku IS NULL""")
             vv = cur.fetchall()
 
+        cutoff = date.today() - timedelta(days=NEWNESS_DAYS)
         rows = []
         for supplier, recs in (("Costway", cw), ("Vevor", vv)):
             for r in recs:
@@ -185,18 +249,23 @@ def rebuild_pool() -> Dict[str, Any]:
                     continue   # 类目没映射到Macy叶子 → 不进池
                 leaf, brand = lb
                 has_img = 1 if r["sku"] in overview else 0
+                fs, rs = r.get("first_seen"), r.get("restock_at")
+                is_new = 1 if (fs and fs >= cutoff) else 0
+                is_restock = 1 if (not is_new and rs and rs >= cutoff) else 0
+                base = cat_scores.get(leaf, 0)
+                heat = min(100, base + (NEW_BONUS if is_new else RESTOCK_BONUS if is_restock else 0))
                 rows.append((supplier, r["sku"], (r.get("title") or "")[:400],
                              (r.get("img") or "")[:600], int(r.get("stock") or 0),
                              (r["cat"] or "")[:400], leaf, brand,
-                             (str(r.get("price") or ""))[:32], 0, has_img))
+                             (str(r.get("price") or ""))[:32], heat, has_img, is_new, is_restock))
 
         with conn.cursor() as cur:
             cur.execute("DELETE FROM order_system.macy_selection_pool")
             cols = ("supplier,supplier_sku,title,image,stock,supplier_cat,"
-                    "macy_leaf,macy_brand,price,heat_90d,has_overview_img,rebuilt_at")
+                    "macy_leaf,macy_brand,price,heat_90d,has_overview_img,is_new,is_restock,rebuilt_at")
             for i in range(0, len(rows), 1000):
                 chunk = rows[i:i + 1000]
-                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
+                ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.macy_selection_pool ({cols}) VALUES {ph}", flat)
         conn.commit()
