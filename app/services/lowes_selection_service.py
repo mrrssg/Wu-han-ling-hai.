@@ -210,11 +210,13 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
         return {"error": f"未知店铺 {store}"}
     supplier = cfg["supplier"]
     brand = cfg["brand"]
-    # 同平台(Lowes)两店(autool+yasonic)并集去重:同一供应商产品不能同时上两个Lowes店
-    # (实际两店供应商不同=SKU不重叠,这里是规则兜底/未来防串)
+    # 同平台(Lowes)跨店去重:同一供应商产品不能同时上两个Lowes店。
+    # 只需并集"同供应商"的Lowes店(不同供应商SKU天然不重叠,读了也白读)。
+    # 现状 autool=Costway / yasonic=Vevor 各自独一,故等于只读本店;将来同供应商加店会自动纳入。
     used = set()
     for _c in STORE_CFG.values():
-        used |= _feishu_used_skus(_c["mirakl"])
+        if _c["supplier"] == supplier:
+            used |= _feishu_used_skus(_c["mirakl"])
     overview = _feishu_overview_skus()
 
     conn = DBManager.get_connection()
