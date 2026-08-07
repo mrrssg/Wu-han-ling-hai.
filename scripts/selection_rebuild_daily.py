@@ -48,7 +48,8 @@ def main() -> int:
         from app.services.macy_selection_service import rebuild_pool as macy_rebuild
         from app.services.lowes_selection_service import rebuild_pool as lowes_rebuild
         jobs = [
-            ("macy", macy_rebuild),
+            ("macy-kuyotq", lambda: macy_rebuild("kuyotq")),
+            ("macy-wopet", lambda: macy_rebuild("wopet")),
             ("lowes-autool", lambda: lowes_rebuild("autool")),
             ("lowes-yasonic", lambda: lowes_rebuild("yasonic")),
         ]
