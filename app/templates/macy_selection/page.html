@@ -14,11 +14,17 @@
   z-index:2000; display:none; pointer-events:none; }
 </style>
 
-<div class="btn-group mb-3" role="group">
-  <a class="btn btn-sm {{ 'btn-primary' if f_store=='kuyotq' else 'btn-outline-primary' }}"
-     href="{{ url_for('macy_selection.page', store='kuyotq') }}">Macy-Kuyotq（Mecale/Ecooso/Volenca）</a>
-  <a class="btn btn-sm {{ 'btn-primary' if f_store=='wopet' else 'btn-outline-primary' }}"
-     href="{{ url_for('macy_selection.page', store='wopet') }}">Macy-Wopet（COZITO·宠物/露营）</a>
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <div class="btn-group" role="group">
+    <a class="btn btn-sm {{ 'btn-primary' if f_store=='kuyotq' else 'btn-outline-primary' }}"
+       href="{{ url_for('macy_selection.page', store='kuyotq') }}">Macy-Kuyotq（Mecale/Ecooso/Volenca）</a>
+    <a class="btn btn-sm {{ 'btn-primary' if f_store=='wopet' else 'btn-outline-primary' }}"
+       href="{{ url_for('macy_selection.page', store='wopet') }}">Macy-Wopet（COZITO·宠物/露营）</a>
+  </div>
+  {% if f_store=='kuyotq' %}
+  <a class="btn btn-sm btn-outline-warning" href="{{ url_for('macy_selection.unmapped', store=f_store) }}"
+     title="有货但类目没归到Macy、不在任何池里的产品(如被漏掉的玩具)">🕳 未归类复核</a>
+  {% endif %}
 </div>
 
 {% if hot_window %}

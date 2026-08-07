@@ -295,6 +295,13 @@ def triage():
             brand = (data.get("brand") or "").strip() or None
             if not (supplier and supplier_cat and leaf):
                 return jsonify({"success": False, "msg": "缺供应商/供应商类目/目标类目"})
+            if not brand:   # 没给品牌→按目标叶子在 macy_leaf_category 里取(kuyotq按叶子,wopet固定)
+                if store == "wopet":
+                    brand = "COZITO"
+                else:
+                    lb = _query("SELECT brand FROM order_system.macy_leaf_category "
+                                "WHERE active=1 AND leaf=%s AND brand IS NOT NULL LIMIT 1", (leaf,))
+                    brand = lb[0]["brand"] if lb else None
             stmts = [
                 ("INSERT INTO order_system.macy_cat_override "
                  "(store,supplier,supplier_cat,override_leaf,override_brand) VALUES (%s,%s,%s,%s,%s) "
@@ -312,6 +319,45 @@ def triage():
         return jsonify({"success": False, "msg": "未知操作"}), 400
     except Exception as exc:
         return jsonify({"success": False, "msg": str(exc)[:200]}), 500
+
+
+@macy_selection_bp.route("/unmapped")
+def unmapped():
+    """🕳 未归类复核桶:有货>50 但供应商类目没归到任何 Macy 叶子(prefilter/AI漏掉/feed新类目)
+    → 不在任何池里,彻底隐形。列出来供人工映射(写 macy_cat_override,重建后进池)。"""
+    store = (request.args.get("store") or "kuyotq").strip().lower()
+    if store not in ("kuyotq", "wopet"):
+        store = "kuyotq"
+    if store == "wopet":
+        # wopet 用逐产品分类器,没有"未映射类目"概念(非宠物是故意排除)
+        return render_template("macy_selection/unmapped.html", store=store, rows=[],
+                               is_wopet=True, leaf_options=[], total_n=0)
+    rows = _query("""
+        SELECT supplier, cat, n FROM (
+          SELECT 'Costway' AS supplier, c.category AS cat, COUNT(*) AS n
+          FROM autooperate.newestdropship d
+          JOIN order_system.safety_product_cache c ON c.sku=d.SKU AND c.supplier='Costway'
+          WHERE COALESCE(d.`status`,'Enabled')<>'Disabled' AND c.category<>'' AND d.Stock>50
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_map m
+                           WHERE m.supplier='Costway' AND m.supplier_cat=c.category AND m.macy_leaf IS NOT NULL)
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_override o
+                           WHERE o.store=%s AND o.supplier='Costway' AND o.supplier_cat=c.category)
+          GROUP BY c.category
+          UNION ALL
+          SELECT 'Vevor' AS supplier, v.product_type AS cat, COUNT(*) AS n
+          FROM autooperate.vevor_feed v
+          WHERE v.product_type<>'' AND v.inventory>50
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_map m
+                           WHERE m.supplier='Vevor' AND m.supplier_cat=v.product_type AND m.macy_leaf IS NOT NULL)
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_override o
+                           WHERE o.store=%s AND o.supplier='Vevor' AND o.supplier_cat=v.product_type)
+          GROUP BY v.product_type
+        ) t ORDER BY n DESC LIMIT 500""", (store, store))
+    total_n = sum(int(r["n"]) for r in rows)
+    leaf_options = sorted({r["leaf"] for r in _query(
+        "SELECT leaf FROM order_system.macy_leaf_category WHERE active=1 AND leaf IS NOT NULL")})
+    return render_template("macy_selection/unmapped.html", store=store, rows=rows,
+                           is_wopet=False, leaf_options=leaf_options, total_n=total_n)
 
 
 @macy_selection_bp.route("/push", methods=["POST"])

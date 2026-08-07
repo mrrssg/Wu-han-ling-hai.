@@ -1,0 +1,64 @@
+{% extends "base_v2.html" %}
+{% block title %}Macy未归类复核{% endblock %}
+{% block page_title %}🕳 未归类复核 · {{ 'Kuyotq' if store=='kuyotq' else 'Wopet' }}{% endblock %}
+{% block page_sub %}有货(库存&gt;50)但供应商类目没归到任何 Macy 可上类目的产品——它们不在任何池里、彻底隐形。给它选个 Macy 类目→映射进池（下次重建生效）{% endblock %}
+{% block page_actions %}
+<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page', store=store) }}">← 回选品池</a>
+<button class="btn btn-sm btn-outline-primary" onclick="rebuildPool(this)">🔄 重建候选池</button>
+{% endblock %}
+
+{% block content %}
+{% if is_wopet %}
+<div class="alert alert-info">Wopet 用的是<b>逐产品分类器</b>（按产品名判宠物/露营），不是按供应商类目映射，所以没有"未归类类目"这个概念——非宠物/露营的产品是<b>故意</b>不上 wopet 的。要补 wopet 的漏网，去擦边池里挑。</div>
+{% else %}
+<div class="alert alert-warning py-2" style="font-size:.85rem">
+  共 <b>{{ rows|length }}</b> 个未归类供应商类目、约 <b>{{ total_n }}</b> 个有货产品被挡在池外。
+  给它选一个 Macy 类目点「映射进池」→ 写进映射（含将来新品自动跟）→ <b>点右上「重建候选池」后进精选</b>。
+  真的不该上 Macy 的（如工具/工业/充气）可以不管它。
+</div>
+<div class="card">
+  <div class="table-responsive" style="max-height:74vh;overflow-y:auto">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th>供应商</th><th style="min-width:340px">供应商类目（没归到Macy）</th>
+        <th class="text-end">有货产品数</th><th style="min-width:230px">归到 Macy 类目</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr data-supplier="{{ r.supplier }}" data-cat="{{ r.cat|e }}">
+        <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+        <td class="small"><div style="max-width:520px" class="text-truncate" title="{{ r.cat }}">{{ r.cat }}</div></td>
+        <td class="text-end fw-semibold">{{ r.n }}</td>
+        <td><input class="form-control form-control-sm um-leaf" list="um-dl" placeholder="选 Macy 类目" autocomplete="off"></td>
+        <td><button class="btn btn-sm btn-success py-0" onclick="mapCat(this)">映射进池</button></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="text-center text-muted py-4">没有未归类的有货类目 🎉</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<datalist id="um-dl">{% for lf in leaf_options %}<option value="{{ lf }}">{% endfor %}</datalist>
+{% endif %}
+
+<script>
+const STORE='{{ store }}';
+async function mapCat(btn){
+  const tr=btn.closest('tr');
+  const supplier=tr.dataset.supplier, cat=tr.dataset.cat;
+  const leaf=tr.querySelector('.um-leaf').value.trim();
+  if(!leaf){alert('先选一个 Macy 类目');return;}
+  if(!confirm('把「'+cat+'」整类归到 '+leaf+'，并记住(以后同类新品自动跟)？\n点右上「重建候选池」后进精选池。'))return;
+  btn.disabled=true;
+  const r=await fetch('{{ url_for("macy_selection.triage") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'apply_category',store:STORE,supplier:supplier,supplier_cat:cat,leaf:leaf})});
+  const d=await r.json();
+  if(d.success){tr.style.opacity=.4;tr.querySelector('td:last-child').innerHTML='<span class="text-success small">✅已映射,待重建</span>';}
+  else{alert('失败：'+(d.msg||''));btn.disabled=false;}
+}
+async function rebuildPool(btn){btn.disabled=true;btn.textContent='已开始…';
+  const r=await fetch('{{ url_for("macy_selection.rebuild") }}?store={{ store }}',{method:'POST'});
+  alert((await r.json()).msg);}
+</script>
+{% endblock %}

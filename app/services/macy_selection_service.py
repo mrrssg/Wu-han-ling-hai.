@@ -344,8 +344,14 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
         rows = []
         for supplier, recs in (("Costway", cw), ("Vevor", vv)):
             for r in recs:
-                # 归类：kuyotq 用类目映射表(全 ai);wopet 用逐产品分类器(ai精选/manual擦边)
-                if store == "wopet":
+                # 归类优先级：①人工"记住映射"(cat_override,能救被prefilter/AI漏掉的未映射类目)
+                #   → ②wopet逐产品分类器 / kuyotq类目映射表
+                ov = cat_override.get((supplier, r["cat"]))
+                if ov:
+                    leaf = ov["override_leaf"]
+                    brand = ov.get("override_brand") or STORE_BRAND.get(store)
+                    tier, reason = "ai", "人工锁定类目"
+                elif store == "wopet":
                     leaf, tier, reason = _classify_wopet(supplier, r.get("title"), r.get("cat"))
                     if not leaf:
                         continue
@@ -356,13 +362,6 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
                         continue
                     leaf, brand, cat_reason = lb
                     tier, reason = _kuyotq_tier(cat_reason)
-                # 人工"记住映射"(按供应商类目)——含将来新品自动跟,直接进精选
-                ov = cat_override.get((supplier, r["cat"]))
-                if ov:
-                    leaf = ov["override_leaf"]
-                    if ov.get("override_brand"):
-                        brand = ov["override_brand"]
-                    tier, reason = "ai", "人工锁定类目"
                 # 人工逐SKU决策：弃用→剔除;采用→进精选(带改后类目)
                 dec = sku_decision.get((supplier, r["sku"]))
                 if dec:
