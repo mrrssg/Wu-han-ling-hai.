@@ -344,8 +344,10 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
         rows = []
         for supplier, recs in (("Costway", cw), ("Vevor", vv)):
             for r in recs:
-                # 归类优先级：①人工"记住映射"(cat_override,能救被prefilter/AI漏掉的未映射类目)
-                #   → ②wopet逐产品分类器 / kuyotq类目映射表
+                dec = sku_decision.get((supplier, r["sku"]))
+                if dec and dec["decision"] == "rejected":     # 逐SKU弃用→剔除
+                    continue
+                # 基础归类：①人工整类映射(cat_override) → ②wopet逐产品分类器 / kuyotq类目映射表
                 ov = cat_override.get((supplier, r["cat"]))
                 if ov:
                     leaf = ov["override_leaf"]
@@ -353,26 +355,23 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
                     tier, reason = "ai", "人工锁定类目"
                 elif store == "wopet":
                     leaf, tier, reason = _classify_wopet(supplier, r.get("title"), r.get("cat"))
-                    if not leaf:
-                        continue
-                    brand = STORE_BRAND["wopet"]
+                    brand = STORE_BRAND["wopet"] if leaf else None
                 else:
                     lb = cat2leaf.get((supplier, r["cat"]))
-                    if not lb:
-                        continue
-                    leaf, brand, cat_reason = lb
-                    tier, reason = _kuyotq_tier(cat_reason)
-                # 人工逐SKU决策：弃用→剔除;采用→进精选(带改后类目)
-                dec = sku_decision.get((supplier, r["sku"]))
-                if dec:
-                    if dec["decision"] == "rejected":
-                        continue
-                    tier = "ai"
+                    if lb:
+                        leaf, brand, cat_reason = lb
+                        tier, reason = _kuyotq_tier(cat_reason)
+                    else:
+                        leaf = brand = tier = reason = None
+                # 逐SKU人工采用：带改后类目,能把"未映射产品"单个救进精选
+                if dec and dec["decision"] == "approved":
                     if dec.get("override_leaf"):
                         leaf = dec["override_leaf"]
-                    if dec.get("override_brand"):
-                        brand = dec["override_brand"]
-                    reason = "人工采用进精选"
+                        brand = dec.get("override_brand") or brand or STORE_BRAND.get(store)
+                    if leaf:
+                        tier, reason = "ai", "人工采用进精选"
+                if not leaf:      # 没归到类(未映射且没被人工采用)→ 不进池
+                    continue
                 has_img = 1 if r["sku"] in overview else 0
                 fs, rs = r.get("first_seen"), r.get("restock_at")
                 is_new = 1 if (fs and fs >= cutoff) else 0

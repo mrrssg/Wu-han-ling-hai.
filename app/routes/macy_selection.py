@@ -288,6 +288,24 @@ def triage():
             _write(stmts)
             return jsonify({"success": True, "msg": f"已弃用 {len(rows)} 个", "n": len(rows)})
 
+        if action == "map_skus":
+            # 未归类桶里"只勾一部分产品"映射进池:写逐SKU决策(approved+改后类目),只这些SKU来,不含将来新品
+            supplier = (data.get("supplier") or "").strip()
+            leaf = (data.get("leaf") or "").strip()
+            skus = [str(x).strip() for x in (data.get("skus") or []) if str(x).strip()]
+            if not (supplier and leaf and skus):
+                return jsonify({"success": False, "msg": "缺供应商/目标类目/勾选产品"})
+            if store == "wopet":
+                brand = "COZITO"
+            else:
+                lb = _query("SELECT brand FROM order_system.macy_leaf_category "
+                            "WHERE active=1 AND leaf=%s AND brand IS NOT NULL LIMIT 1", (leaf,))
+                brand = lb[0]["brand"] if lb else None
+            stmts = [(_DEC_UPSERT, (store, supplier, sku[:64], "approved", leaf, brand)) for sku in skus]
+            _write(stmts)
+            return jsonify({"success": True, "n": len(skus),
+                            "msg": f"已把勾选的 {len(skus)} 个映射到 {leaf}（重建后进精选，不含将来新品）"})
+
         if action == "apply_category":
             supplier = (data.get("supplier") or "").strip()
             supplier_cat = (data.get("supplier_cat") or "").strip()
