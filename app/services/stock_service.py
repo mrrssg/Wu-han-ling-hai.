@@ -1565,6 +1565,9 @@ class StockService:
 
     @staticmethod
     def save_hd_config(base_dir: str, excluded_list, threshold=50, qty_high=20, qty_low=0, supplier_rules=None, costway_zip_password=None):
+        import glob
+        import json
+        import shutil
         config_path = os.path.join(base_dir, "instance", "hd_config.json")
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         rules = supplier_rules or {}
@@ -1572,6 +1575,20 @@ class StockService:
         if costway_zip_password is None:
             existing = StockService.load_hd_config(base_dir)
             costway_zip_password = existing.get("costway_zip_password", "")
+        # 覆盖前先备份旧文件(带时间戳),任何一次覆盖都能回滚;只留最近80份
+        if os.path.exists(config_path):
+            bdir = os.path.join(base_dir, "instance", "hd_config_backups")
+            os.makedirs(bdir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            try:
+                shutil.copy2(config_path, os.path.join(bdir, f"hd_config_{ts}.json"))
+                for old in sorted(glob.glob(os.path.join(bdir, "hd_config_*.json")))[:-80]:
+                    try:
+                        os.remove(old)
+                    except OSError:
+                        pass
+            except Exception as exc:
+                print(f"[HD_CONFIG][BACKUP_FAIL] {exc}")
         data = {
             "excluded": list(excluded_list),
             "threshold": int(threshold),
@@ -1580,10 +1597,56 @@ class StockService:
             "supplier_rules": rules,
             "costway_zip_password": costway_zip_password,
         }
-        import json
-        print(f"[HD_CONFIG][WRITE] {datetime.now().isoformat(timespec='seconds')} -> {config_path}")
+        print(f"[HD_CONFIG][WRITE] {datetime.now().isoformat(timespec='seconds')} "
+              f"excluded={len(data['excluded'])} -> {config_path}")
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def list_hd_config_backups(base_dir: str, limit=40):
+        """列出 hd_config 备份(最新在前),含时间戳+排除条数。"""
+        import glob
+        import json
+        bdir = os.path.join(base_dir, "instance", "hd_config_backups")
+        out = []
+        for p in sorted(glob.glob(os.path.join(bdir, "hd_config_*.json")), reverse=True)[:limit]:
+            ts = os.path.basename(p)[len("hd_config_"):-len(".json")]
+            label = ts
+            if len(ts) == 15:   # YYYYMMDD_HHMMSS
+                label = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]}"
+            try:
+                d = json.load(open(p, encoding="utf-8"))
+                out.append({"ts": ts, "label": label, "excluded_n": len(d.get("excluded", []))})
+            except Exception:
+                out.append({"ts": ts, "label": label, "excluded_n": "?"})
+        return out
+
+    @staticmethod
+    def restore_hd_config(base_dir: str, ts: str):
+        """把 hd_config 恢复到某个备份;恢复前先把当前也备份一份(恢复本身可撤销)。"""
+        import json
+        import re
+        import shutil
+        if not re.fullmatch(r"\d{8}_\d{6}", ts or ""):
+            return False, "备份标识不合法"
+        bdir = os.path.join(base_dir, "instance", "hd_config_backups")
+        bpath = os.path.join(bdir, f"hd_config_{ts}.json")
+        config_path = os.path.join(base_dir, "instance", "hd_config.json")
+        if not os.path.exists(bpath):
+            return False, "该备份不存在"
+        if os.path.exists(config_path):
+            try:
+                cur_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                shutil.copy2(config_path, os.path.join(bdir, f"hd_config_{cur_ts}.json"))
+            except OSError:
+                pass
+        shutil.copy2(bpath, config_path)
+        try:
+            n = len(json.load(open(config_path, encoding="utf-8")).get("excluded", []))
+        except Exception:
+            n = "?"
+        print(f"[HD_CONFIG][RESTORE] {datetime.now().isoformat(timespec='seconds')} <- {ts} excluded={n}")
+        return True, f"已恢复到 {ts} 版本（排除名单 {n} 条）"
 
     @staticmethod
     def _read_hd_api_token(base_dir: str) -> str:

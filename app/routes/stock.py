@@ -67,10 +67,19 @@ def index():
         hd_qty_low=cfg.get('qty_low', 0),
         supplier_rules=supplier_rules,
         costway_zip_password=cfg.get('costway_zip_password', ''),
+        hd_backups=StockService.list_hd_config_backups(current_app.config['BASE_DIR']),
         hd_log=None,
         hd_message=None,
         hd_success=None,
     )
+
+
+@stock_bp.route('/hd-restore', methods=['POST'])
+def hd_restore():
+    ts = (request.form.get('ts') or '').strip()
+    ok, msg = StockService.restore_hd_config(current_app.config['BASE_DIR'], ts)
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('stock.index'))
 
 
 @stock_bp.route('/sync-suppliers', methods=['POST'])

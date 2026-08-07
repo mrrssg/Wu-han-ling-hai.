@@ -167,6 +167,22 @@
           </div>
         </form>
 
+        {% if hd_backups %}
+        <div class="mt-3 p-2 border rounded bg-light" style="font-size:.85rem">
+          <div class="fw-bold mb-1"><i class="bi bi-clock-history"></i> 排除名单历史备份（每次覆盖前自动存，可一键回滚）</div>
+          <form method="POST" action="{{ url_for('stock.hd_restore') }}" class="d-flex gap-2 align-items-center flex-wrap"
+                onsubmit="return confirm('确定把排除名单恢复到所选版本？（恢复前会先把当前版本也备份一份，可再恢复回来）');">
+            <select name="ts" class="form-select form-select-sm" style="width:auto">
+              {% for b in hd_backups %}
+              <option value="{{ b.ts }}">{{ b.label }} · {{ b.excluded_n }} 条</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-counterclockwise"></i> 恢复到该版本</button>
+            <span class="text-muted">保留最近 {{ hd_backups|length }} 份</span>
+          </form>
+        </div>
+        {% endif %}
+
         {% if hd_message is not none %}
           <div class="alert mt-3 {% if hd_success %}alert-success{% else %}alert-warning{% endif %}">
             {{ hd_message }}
