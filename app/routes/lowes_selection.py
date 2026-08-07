@@ -257,3 +257,118 @@ def push():
         return jsonify(push_to_feishu(ids, batch))
     except Exception as exc:
         return jsonify({"success": False, "msg": str(exc)[:200]}), 500
+
+
+def _write(statements):
+    conn = DBManager.get_connection()
+    n = 0
+    try:
+        with conn.cursor() as cur:
+            for sql, params in statements:
+                cur.execute(sql, params)
+                n += cur.rowcount or 0
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _supplier_of(store):
+    return "Costway" if store == "autool" else "Vevor"
+
+
+def _leaf_of_path(path):
+    r = _query("SELECT leaf FROM order_system.lowes_leaf_category WHERE full_path=%s LIMIT 1", (path,))
+    if r and r[0].get("leaf"):
+        return r[0]["leaf"]
+    return path.rsplit("/", 1)[-1] if path else ""
+
+
+@lowes_selection_bp.route("/triage", methods=["POST"])
+def triage():
+    """未归类桶:整类映射(记住,含将来新品) / 勾选部分映射(只这些)。"""
+    data = request.get_json(silent=True) or {}
+    action = (data.get("action") or "").strip()
+    store = (data.get("store") or "autool").strip().lower()
+    if store not in STORES:
+        store = "autool"
+    supplier = _supplier_of(store)
+    try:
+        if action == "apply_category":
+            cat = (data.get("supplier_cat") or "").strip()
+            path = (data.get("leaf") or "").strip()   # 前端传 full_path
+            if not (cat and path):
+                return jsonify({"success": False, "msg": "缺供应商类目/目标类目"})
+            leaf = _leaf_of_path(path)
+            _write([("INSERT INTO order_system.lowes_cat_override "
+                     "(store,supplier,supplier_cat,lowes_leaf,lowes_path) VALUES (%s,%s,%s,%s,%s) "
+                     "ON DUPLICATE KEY UPDATE lowes_leaf=VALUES(lowes_leaf), lowes_path=VALUES(lowes_path)",
+                     (store, supplier, cat, leaf, path))])
+            return jsonify({"success": True,
+                            "msg": f"已把「{cat[:40]}」整类归到 {leaf} 并记住(含将来新品),重建后进池"})
+        if action == "map_skus":
+            path = (data.get("leaf") or "").strip()
+            skus = [str(x).strip() for x in (data.get("skus") or []) if str(x).strip()]
+            if not (path and skus):
+                return jsonify({"success": False, "msg": "缺目标类目/勾选产品"})
+            leaf = _leaf_of_path(path)
+            stmts = [("INSERT INTO order_system.lowes_selection_decision "
+                      "(store,supplier,supplier_sku,decision,override_leaf,override_path) "
+                      "VALUES (%s,%s,%s,'approved',%s,%s) "
+                      "ON DUPLICATE KEY UPDATE override_leaf=VALUES(override_leaf), "
+                      "override_path=VALUES(override_path), decision='approved'",
+                      (store, supplier, s[:64], leaf, path)) for s in skus]
+            _write(stmts)
+            return jsonify({"success": True, "n": len(skus),
+                            "msg": f"已把勾选的 {len(skus)} 个归到 {leaf}（重建后进池,不含将来新品）"})
+        return jsonify({"success": False, "msg": "未知操作"}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "msg": str(exc)[:200]}), 500
+
+
+@lowes_selection_bp.route("/unmapped")
+def unmapped():
+    """🕳 未归类复核:有货>50 但类目没归到 Lowes、不在池里的产品(带图),人工映射进池。"""
+    store = _cur_store()
+    supplier = _supplier_of(store)
+    leaf_options = [r["full_path"] for r in _query(
+        "SELECT full_path FROM order_system.lowes_leaf_category WHERE active=1 ORDER BY full_path")]
+    f_cat = (request.args.get("cat") or "").strip()
+
+    if f_cat:   # 某类目的具体产品(带图)
+        if supplier == "Costway":
+            products = _query("""SELECT d.SKU AS sku, c.title, c.image_url AS img, d.Stock AS stock, d.Price AS price
+                FROM autooperate.newestdropship d
+                JOIN order_system.safety_product_cache c ON c.sku=d.SKU AND c.supplier='Costway'
+                WHERE COALESCE(d.`status`,'Enabled')<>'Disabled' AND c.category=%s AND d.Stock>50
+                  AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=d.SKU)
+                ORDER BY d.Stock DESC LIMIT 300""", (f_cat, store))
+        else:
+            products = _query("""SELECT v.sku, v.title, v.image AS img, v.inventory AS stock, v.price
+                FROM autooperate.vevor_feed v
+                WHERE v.product_type=%s AND v.inventory>50
+                  AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=v.sku)
+                ORDER BY v.inventory DESC LIMIT 300""", (f_cat, store))
+        return render_template("lowes_selection/unmapped.html", store=store, supplier=supplier,
+                               rows=None, products=products, leaf_options=leaf_options, total_n=0, f_cat=f_cat)
+
+    if supplier == "Costway":
+        rows = _query("""SELECT c.category AS cat, COUNT(*) AS n, MAX(c.image_url) AS img
+            FROM autooperate.newestdropship d
+            JOIN order_system.safety_product_cache c ON c.sku=d.SKU AND c.supplier='Costway'
+            WHERE COALESCE(d.`status`,'Enabled')<>'Disabled' AND c.category<>'' AND d.Stock>50
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_map m WHERE m.supplier='Costway' AND m.supplier_cat=c.category AND m.lowes_path IS NOT NULL)
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_override o WHERE o.store=%s AND o.supplier='Costway' AND o.supplier_cat=c.category)
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=d.SKU)
+            GROUP BY c.category ORDER BY n DESC LIMIT 500""", (store, store))
+    else:
+        rows = _query("""SELECT v.product_type AS cat, COUNT(*) AS n, MAX(v.image) AS img
+            FROM autooperate.vevor_feed v
+            WHERE v.product_type<>'' AND v.inventory>50
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_map m WHERE m.supplier='Vevor' AND m.supplier_cat=v.product_type AND m.lowes_path IS NOT NULL)
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_override o WHERE o.store=%s AND o.supplier='Vevor' AND o.supplier_cat=v.product_type)
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=v.sku)
+            GROUP BY v.product_type ORDER BY n DESC LIMIT 500""", (store, store))
+    total_n = sum(int(r["n"]) for r in rows)
+    return render_template("lowes_selection/unmapped.html", store=store, supplier=supplier,
+                           rows=rows, products=None, leaf_options=leaf_options, total_n=total_n, f_cat="")

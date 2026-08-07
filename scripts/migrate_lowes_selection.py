@@ -113,6 +113,34 @@ DDLS = [
         PRIMARY KEY (store, lowes_leaf),
         KEY idx_store_score (store, blue_score)
     ) CHARSET=utf8mb4 COMMENT='Lowes蓝海类目推荐(未涉及类目,邻接适配+季节)'""",
+    # 已上过SKU快照(未归类桶排除已上架)
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_used_sku (
+        store VARCHAR(12) NOT NULL,
+        supplier_sku VARCHAR(64) NOT NULL,
+        PRIMARY KEY (store, supplier_sku)
+    ) CHARSET=utf8mb4 COMMENT='Lowes已上过供应商SKU快照(每次重建刷新,未归类桶用)'""",
+    # 未归类桶:人工锁定 供应商类目→Lowes类目(记住映射,含将来新品)
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_cat_override (
+        store VARCHAR(12) NOT NULL,
+        supplier VARCHAR(16) NOT NULL,
+        supplier_cat VARCHAR(400) NOT NULL,
+        lowes_leaf VARCHAR(120) DEFAULT NULL,
+        lowes_path VARCHAR(400) NOT NULL,
+        note VARCHAR(200) DEFAULT NULL,
+        decided_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, supplier, supplier_cat(200))
+    ) CHARSET=utf8mb4 COMMENT='Lowes未归类桶:人工锁定供应商类目→Lowes类目'""",
+    # 未归类桶:逐SKU映射(勾选部分产品映射进池)
+    """CREATE TABLE IF NOT EXISTS order_system.lowes_selection_decision (
+        store VARCHAR(12) NOT NULL,
+        supplier VARCHAR(16) NOT NULL,
+        supplier_sku VARCHAR(64) NOT NULL,
+        decision VARCHAR(12) NOT NULL DEFAULT 'approved',
+        override_leaf VARCHAR(120) DEFAULT NULL,
+        override_path VARCHAR(400) DEFAULT NULL,
+        decided_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, supplier, supplier_sku)
+    ) CHARSET=utf8mb4 COMMENT='Lowes未归类桶:逐SKU映射进池'""",
     # 推送记录（带 store）
     """CREATE TABLE IF NOT EXISTS order_system.lowes_push_log (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,

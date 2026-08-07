@@ -16,13 +16,17 @@
 </style>
 
 <!-- 店铺切换：切换后重建/推送/选择都只针对当前店 -->
-<div class="btn-group mb-3" role="group">
-  {% for sk, sname in stores.items() %}
-  <a class="btn btn-sm store-tab {{ 'btn-primary' if store==sk else 'btn-outline-primary' }}"
-     href="{{ url_for('lowes_selection.page', store=sk) }}">
-    {{ sname }} <span class="badge bg-light text-dark ms-1">{{ store_totals.get(sk, 0) }}</span>
-  </a>
-  {% endfor %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <div class="btn-group" role="group">
+    {% for sk, sname in stores.items() %}
+    <a class="btn btn-sm store-tab {{ 'btn-primary' if store==sk else 'btn-outline-primary' }}"
+       href="{{ url_for('lowes_selection.page', store=sk) }}">
+      {{ sname }} <span class="badge bg-light text-dark ms-1">{{ store_totals.get(sk, 0) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  <a class="btn btn-sm btn-outline-warning" href="{{ url_for('lowes_selection.unmapped', store=store) }}"
+     title="有货但类目没归到Lowes、不在池里的产品">🕳 未归类复核</a>
 </div>
 
 {% if hot_window %}

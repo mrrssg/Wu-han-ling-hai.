@@ -224,6 +224,13 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                            WHERE supplier=%s AND lowes_path IS NOT NULL""", (supplier,))
             cat2path = {r["supplier_cat"]: (r["lowes_leaf"], r["lowes_path"])
                         for r in cur.fetchall()}
+            # 未归类桶的人工映射:①整类override ②逐SKU(能救没映射上的货进池,持久化不回退)
+            cur.execute("SELECT supplier_cat, lowes_leaf, lowes_path FROM order_system.lowes_cat_override "
+                        "WHERE store=%s AND supplier=%s", (store, supplier))
+            cat_override = {r["supplier_cat"]: (r["lowes_leaf"], r["lowes_path"]) for r in cur.fetchall()}
+            cur.execute("SELECT supplier_sku, override_leaf, override_path FROM order_system.lowes_selection_decision "
+                        "WHERE store=%s AND supplier=%s AND decision='approved' AND override_path IS NOT NULL", (store, supplier))
+            sku_override = {r["supplier_sku"]: (r["override_leaf"], r["override_path"]) for r in cur.fetchall()}
 
             used |= _local_pushed_skus(cur, store)               # 叠加本地已推(补飞书同步延迟)
             cat_scores = _compute_category_demand(cur, store)    # 类目需求分(近90天GMV×毛利)
@@ -265,10 +272,19 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
 
         rows = []
         for r in recs:
-            lp = cat2path.get(r["cat"])
-            if not lp:
-                continue   # 供应商类目没映射到Lowes叶子 → 不进池
-            leaf, path = lp
+            # 优先级:①逐SKU人工映射 ②整类override ③AI映射表;都没有→不进池(在未归类桶等人工)
+            so = sku_override.get(r["sku"])
+            ov = cat_override.get(r["cat"])
+            if so:
+                leaf, path = so
+            elif ov:
+                leaf, path = ov
+            else:
+                lp = cat2path.get(r["cat"])
+                if not lp:
+                    continue
+                leaf, path = lp
+            leaf = leaf or (path.rsplit("/", 1)[-1] if path else "")
             has_img = 1 if r["sku"] in overview else 0
             fs = _asdate(r.get("first_seen")); rs = _asdate(r.get("restock_at"))
             is_new = 1 if (fs and fs >= cutoff) else 0
@@ -291,6 +307,12 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                 ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.lowes_selection_pool ({cols}) VALUES {ph}", flat)
+            # 已上过快照(未归类桶排除已上架)
+            cur.execute("DELETE FROM order_system.lowes_used_sku WHERE store=%s", (store,))
+            for i in range(0, len(ul), 2000):
+                c = ul[i:i + 2000]
+                cur.execute(f"INSERT IGNORE INTO order_system.lowes_used_sku (store, supplier_sku) "
+                            f"VALUES {','.join(['(%s,%s)'] * len(c))}", [v for s in c for v in (store, s)])
         conn.commit()
         return {"store": store, "supplier": supplier, "used_skus": len(used),
                 "mapped_cats": len(cat2path), "scored_cats": len(cat_scores),
