@@ -1,61 +1,115 @@
 {% extends "base_v2.html" %}
 {% block title %}Macy未归类复核{% endblock %}
 {% block page_title %}🕳 未归类复核 · {{ 'Kuyotq' if store=='kuyotq' else 'Wopet' }}{% endblock %}
-{% block page_sub %}有货(库存&gt;50)但供应商类目没归到任何 Macy 可上类目的产品——它们不在任何池里、彻底隐形。给它选个 Macy 类目→映射进池（下次重建生效）{% endblock %}
+{% block page_sub %}有货(库存&gt;50)但类目没归到任何 Macy 可上类目的产品——它们不在任何池里、彻底隐形。先看产品图，再决定归到哪个 Macy 类目、映射进池{% endblock %}
 {% block page_actions %}
 <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.page', store=store) }}">← 回选品池</a>
 <button class="btn btn-sm btn-outline-primary" onclick="rebuildPool(this)">🔄 重建候选池</button>
 {% endblock %}
 
 {% block content %}
+<style>
+.sel-img { width:56px; height:56px; object-fit:cover; border-radius:5px; border:1px solid #e5e8ee; cursor:zoom-in; }
+.cat-thumb { width:44px; height:44px; object-fit:cover; border-radius:5px; border:1px solid #e5e8ee; cursor:zoom-in; }
+#sel-preview { position:fixed; width:420px; height:420px; object-fit:contain; background:#fff;
+  border:1px solid #d5d9e0; border-radius:8px; box-shadow:0 10px 34px rgba(0,0,0,.35);
+  z-index:2000; display:none; pointer-events:none; }
+</style>
+
 {% if is_wopet %}
-<div class="alert alert-info">Wopet 用的是<b>逐产品分类器</b>（按产品名判宠物/露营），不是按供应商类目映射，所以没有"未归类类目"这个概念——非宠物/露营的产品是<b>故意</b>不上 wopet 的。要补 wopet 的漏网，去擦边池里挑。</div>
+<div class="alert alert-info">Wopet 用<b>逐产品分类器</b>（按产品名判宠物/露营），没有"未归类类目"概念——非宠物/露营是<b>故意</b>不上的。补漏去擦边池挑。</div>
+
+{% elif products is not none %}
+{# ===== 模式二:某类目的具体产品(带图) ===== #}
+<div class="card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem;position:sticky;top:0;z-index:10;background:#fff">
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('macy_selection.unmapped', store=store) }}">← 所有未归类类目</a>
+  <span>{{ '豪雅' if f_sup=='Costway' else '司顺' }} · <b>{{ f_cat }}</b> · 看到 {{ products|length }} 个</span>
+  <span class="ms-auto">看完觉得能上 → 归到：</span>
+  <input id="cat-leaf" list="um-dl" class="form-control form-control-sm" style="width:240px" placeholder="选 Macy 类目" autocomplete="off">
+  <button class="btn btn-sm btn-success" onclick="mapWholeCat('{{ f_sup }}','{{ f_cat|e }}')">整类映射进池</button>
+</div>
+<div class="card"><div class="table-responsive" style="max-height:74vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th>图</th><th>SKU</th><th style="min-width:360px">产品名</th><th class="text-end">库存</th><th class="text-end">供应商价</th></tr></thead>
+    <tbody>
+    {% for p in products %}
+    <tr>
+      <td>{% if p.img %}<img src="{{ p.img }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+      <td class="font-monospace small">{{ p.sku }}</td>
+      <td class="small"><div style="max-width:560px" class="text-truncate" title="{{ p.title }}">{{ p.title }}</div></td>
+      <td class="text-end">{{ p.stock }}</td>
+      <td class="text-end">{{ p.price }}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="text-center text-muted py-3">这个类目没产品了</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div></div>
+<datalist id="um-dl">{% for lf in leaf_options %}<option value="{{ lf }}">{% endfor %}</datalist>
+
 {% else %}
+{# ===== 模式一:未归类类目汇总(带样图) ===== #}
 <div class="alert alert-warning py-2" style="font-size:.85rem">
-  共 <b>{{ rows|length }}</b> 个未归类供应商类目、约 <b>{{ total_n }}</b> 个有货产品被挡在池外。
-  给它选一个 Macy 类目点「映射进池」→ 写进映射（含将来新品自动跟）→ <b>点右上「重建候选池」后进精选</b>。
-  真的不该上 Macy 的（如工具/工业/充气）可以不管它。
+  共 <b>{{ rows|length }}</b> 个未归类类目、约 <b>{{ total_n }}</b> 个有货产品被挡在池外。
+  <b>点「看产品」先看图</b>，觉得能上 Macy 就给它选个类目「映射进池」→ 右上「重建候选池」后进精选。工具/工业/充气这种真不该上的，不管它。
 </div>
-<div class="card">
-  <div class="table-responsive" style="max-height:74vh;overflow-y:auto">
-    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
-      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
-        <th>供应商</th><th style="min-width:340px">供应商类目（没归到Macy）</th>
-        <th class="text-end">有货产品数</th><th style="min-width:230px">归到 Macy 类目</th><th></th></tr></thead>
-      <tbody>
-      {% for r in rows %}
-      <tr data-supplier="{{ r.supplier }}" data-cat="{{ r.cat|e }}">
-        <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
-        <td class="small"><div style="max-width:520px" class="text-truncate" title="{{ r.cat }}">{{ r.cat }}</div></td>
-        <td class="text-end fw-semibold">{{ r.n }}</td>
-        <td><input class="form-control form-control-sm um-leaf" list="um-dl" placeholder="选 Macy 类目" autocomplete="off"></td>
-        <td><button class="btn btn-sm btn-success py-0" onclick="mapCat(this)">映射进池</button></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5" class="text-center text-muted py-4">没有未归类的有货类目 🎉</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+<div class="card"><div class="table-responsive" style="max-height:74vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th>样图</th><th>供应商</th><th style="min-width:340px">供应商类目（没归到Macy）</th>
+      <th class="text-end">有货数</th><th></th><th style="min-width:230px">归到 Macy 类目</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-supplier="{{ r.supplier }}" data-cat="{{ r.cat|e }}">
+      <td>{% if r.img %}<img src="{{ r.img }}" class="cat-thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('—')">{% else %}—{% endif %}</td>
+      <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+      <td class="small"><div style="max-width:520px" class="text-truncate" title="{{ r.cat }}">{{ r.cat }}</div></td>
+      <td class="text-end fw-semibold">{{ r.n }}</td>
+      <td><a class="btn btn-sm btn-outline-primary py-0" href="{{ url_for('macy_selection.unmapped', store=store, supplier=r.supplier, cat=r.cat) }}">看产品 →</a></td>
+      <td><input class="form-control form-control-sm um-leaf" list="um-dl" placeholder="选 Macy 类目" autocomplete="off"></td>
+      <td><button class="btn btn-sm btn-success py-0" onclick="mapRow(this)">映射进池</button></td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="text-center text-muted py-4">没有未归类的有货类目 🎉</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div></div>
 <datalist id="um-dl">{% for lf in leaf_options %}<option value="{{ lf }}">{% endfor %}</datalist>
 {% endif %}
 
 <script>
 const STORE='{{ store }}';
-async function mapCat(btn){
-  const tr=btn.closest('tr');
-  const supplier=tr.dataset.supplier, cat=tr.dataset.cat;
+(function(){
+  const prev=document.createElement('img'); prev.id='sel-preview'; document.body.appendChild(prev);
+  function place(e){const W=420,pad=16;let x=e.clientX+pad;if(x+W>innerWidth-8)x=e.clientX-W-pad;
+    let y=Math.max(8,Math.min(e.clientY-W/2,innerHeight-W-8));prev.style.left=x+'px';prev.style.top=y+'px';}
+  document.querySelectorAll('.sel-img,.cat-thumb').forEach(img=>{
+    img.addEventListener('mouseenter',e=>{prev.src=img.src;prev.style.display='block';place(e);});
+    img.addEventListener('mousemove',place);
+    img.addEventListener('mouseleave',()=>prev.style.display='none');});
+})();
+async function postMap(supplier,cat,leaf){
+  const r=await fetch('{{ url_for("macy_selection.triage") }}',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'apply_category',store:STORE,supplier:supplier,supplier_cat:cat,leaf:leaf})});
+  return r.json();
+}
+async function mapRow(btn){
+  const tr=btn.closest('tr'), supplier=tr.dataset.supplier, cat=tr.dataset.cat;
   const leaf=tr.querySelector('.um-leaf').value.trim();
   if(!leaf){alert('先选一个 Macy 类目');return;}
   if(!confirm('把「'+cat+'」整类归到 '+leaf+'，并记住(以后同类新品自动跟)？\n点右上「重建候选池」后进精选池。'))return;
   btn.disabled=true;
-  const r=await fetch('{{ url_for("macy_selection.triage") }}',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'apply_category',store:STORE,supplier:supplier,supplier_cat:cat,leaf:leaf})});
-  const d=await r.json();
+  const d=await postMap(supplier,cat,leaf);
   if(d.success){tr.style.opacity=.4;tr.querySelector('td:last-child').innerHTML='<span class="text-success small">✅已映射,待重建</span>';}
   else{alert('失败：'+(d.msg||''));btn.disabled=false;}
+}
+async function mapWholeCat(supplier,cat){
+  const leaf=document.getElementById('cat-leaf').value.trim();
+  if(!leaf){alert('先选一个 Macy 类目');return;}
+  if(!confirm('把「'+cat+'」整类归到 '+leaf+'，并记住(以后同类新品自动跟)？\n点右上「重建候选池」后进精选池。'))return;
+  const d=await postMap(supplier,cat,leaf);
+  alert(d.msg||'');
+  if(d.success) location.href='{{ url_for("macy_selection.unmapped", store=store) }}';
 }
 async function rebuildPool(btn){btn.disabled=true;btn.textContent='已开始…';
   const r=await fetch('{{ url_for("macy_selection.rebuild") }}?store={{ store }}',{method:'POST'});
