@@ -346,7 +346,7 @@ def unmapped():
         else:
             products = _query("""SELECT v.sku, v.title, v.image AS img, v.inventory AS stock, v.price
                 FROM autooperate.vevor_feed v
-                WHERE v.product_type=%s AND v.inventory>50
+                WHERE TRIM(v.product_type)=%s AND v.inventory>50
                   AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=v.sku)
                 ORDER BY v.inventory DESC LIMIT 300""", (f_cat, store))
         return render_template("lowes_selection/unmapped.html", store=store, supplier=supplier,
@@ -362,13 +362,13 @@ def unmapped():
               AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=d.SKU)
             GROUP BY c.category ORDER BY n DESC LIMIT 500""", (store, store))
     else:
-        rows = _query("""SELECT v.product_type AS cat, COUNT(*) AS n, MAX(v.image) AS img
+        rows = _query("""SELECT TRIM(v.product_type) AS cat, COUNT(*) AS n, MAX(v.image) AS img
             FROM autooperate.vevor_feed v
             WHERE v.product_type<>'' AND v.inventory>50
               AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_map m WHERE m.supplier='Vevor' AND m.supplier_cat=v.product_type AND m.lowes_path IS NOT NULL)
-              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_override o WHERE o.store=%s AND o.supplier='Vevor' AND o.supplier_cat=v.product_type)
+              AND NOT EXISTS(SELECT 1 FROM order_system.lowes_cat_override o WHERE o.store=%s AND o.supplier='Vevor' AND o.supplier_cat=TRIM(v.product_type))
               AND NOT EXISTS(SELECT 1 FROM order_system.lowes_used_sku uu WHERE uu.store=%s AND uu.supplier_sku=v.sku)
-            GROUP BY v.product_type ORDER BY n DESC LIMIT 500""", (store, store))
+            GROUP BY TRIM(v.product_type) ORDER BY n DESC LIMIT 500""", (store, store))
     total_n = sum(int(r["n"]) for r in rows)
     return render_template("lowes_selection/unmapped.html", store=store, supplier=supplier,
                            rows=rows, products=None, leaf_options=leaf_options, total_n=total_n, f_cat="")

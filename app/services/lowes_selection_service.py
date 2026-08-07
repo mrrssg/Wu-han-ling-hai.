@@ -274,7 +274,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
         for r in recs:
             # 优先级:①逐SKU人工映射 ②整类override ③AI映射表;都没有→不进池(在未归类桶等人工)
             so = sku_override.get(r["sku"])
-            ov = cat_override.get(r["cat"])
+            # 整类override按 strip 后的类目匹配(Vevor feed 带尾随空格,桶里存的是strip过的)
+            ov = cat_override.get((r["cat"] or "").strip())
             if so:
                 leaf, path = so
             elif ov:
