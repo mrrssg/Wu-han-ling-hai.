@@ -1,0 +1,247 @@
+{% extends "base_v2.html" %}
+{% block title %}HD选品{% endblock %}
+{% block page_title %}HD 选品 · {{ f_store|upper }}{% endblock %}
+{% block page_sub %}从豪雅+司顺全量产品里，选没上过、库存&gt;50、供应商类目能归到 HD 可上类目的候选；勾选后推送到 HD-{{ f_store|upper }} 飞书表{% endblock %}
+{% block page_actions %}
+<button class="btn btn-sm btn-outline-primary" onclick="rebuild(this)">🔄 重建候选池</button>
+{% endblock %}
+
+{% block content %}
+<style>
+.sel-img { width:56px; height:56px; object-fit:cover; border-radius:5px; border:1px solid #e5e8ee; cursor:zoom-in; }
+#sel-preview { position:fixed; width:420px; height:420px; object-fit:contain; background:#fff;
+  border:1px solid #d5d9e0; border-radius:8px; box-shadow:0 10px 34px rgba(0,0,0,.35);
+  z-index:2000; display:none; pointer-events:none; }
+</style>
+
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <div class="btn-group" role="group">
+    <a class="btn btn-sm {{ 'btn-primary' if f_store=='top' else 'btn-outline-primary' }}"
+       href="{{ url_for('hd_selection.page', store='top') }}">HD-TOP（厨卫/小家电/收纳）</a>
+    <a class="btn btn-sm {{ 'btn-primary' if f_store=='bos' else 'btn-outline-primary' }}"
+       href="{{ url_for('hd_selection.page', store='bos') }}">HD-BOS（户外/庭院）</a>
+  </div>
+  <a class="btn btn-sm btn-outline-warning" href="{{ url_for('hd_selection.unmapped', store=f_store) }}"
+     title="有货但类目没归到HD、不在任何池里的产品">🕳 未归类复核</a>
+</div>
+
+<div class="btn-group btn-group-sm mb-2" role="group">
+  {% set nkp = {'store': f_store, 'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
+  <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}" href="{{ url_for('hd_selection.page', **nkp) }}">全部 {{ newn_stat.a or 0 }}</a>
+  <a class="btn {{ 'btn-warning' if f_newn=='new' else 'btn-outline-warning' }}" href="{{ url_for('hd_selection.page', newn='new', **nkp) }}">🆕 新品 {{ newn_stat.nw or 0 }}</a>
+  <a class="btn {{ 'btn-info' if f_newn=='restock' else 'btn-outline-info' }}" href="{{ url_for('hd_selection.page', newn='restock', **nkp) }}">📦 新补货 {{ newn_stat.rs or 0 }}</a>
+</div>
+
+<div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
+  <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('hd_selection.page') }}">
+    <input type="hidden" name="store" value="{{ f_store }}">
+    <select name="supplier" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">全部供应商</option>
+      <option value="Costway" {{ 'selected' if f_supplier=='Costway' }}>豪雅 ({{ counts.get('Costway',0) }})</option>
+      <option value="Vevor" {{ 'selected' if f_supplier=='Vevor' }}>司顺 ({{ counts.get('Vevor',0) }})</option>
+    </select>
+    <input name="leaf" value="{{ f_leaf }}" list="leaf-list" class="form-control form-control-sm"
+           style="width:280px" placeholder="HD类目(可打字搜)" autocomplete="off" onchange="this.form.submit()">
+    <datalist id="leaf-list">{% for lf in leaves %}<option value="{{ lf }}">{% endfor %}</datalist>
+    <select name="img" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      <option value="">图片总览(全部)</option>
+      <option value="y" {{ 'selected' if f_img=='y' }}>✅总览有图 ({{ img_stat.y or 0 }})</option>
+      <option value="n" {{ 'selected' if f_img=='n' }}>❌总览无图 ({{ img_stat.n or 0 }})</option>
+    </select>
+    <input name="q" value="{{ f_q }}" class="form-control form-control-sm" style="width:180px" placeholder="搜SKU/标题/类目">
+    <button class="btn btn-sm btn-primary">搜索</button>
+    {% if f_supplier or f_leaf or f_q or f_img %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('hd_selection.page', store=f_store) }}">✕清除</a>{% endif %}
+  </form>
+  <span class="text-muted ms-auto" style="font-size:.75rem">共 {{ total }} 候选 · 第{{ page }}/{{ pages }}页 · 重建于 {{ built_at or '—' }}</span>
+</div>
+
+<details class="mb-2" style="font-size:.82rem">
+  <summary style="cursor:pointer" class="text-primary">📜 推送历史（{{ push_log|length }} 批）</summary>
+  <div class="card mt-1"><div class="table-responsive" style="max-height:280px;overflow-y:auto">
+    <table class="table table-sm mb-0" style="font-size:.8rem">
+      <thead class="table-light"><tr><th>时间</th><th>批次</th><th class="text-end">SKU</th><th class="text-end">豪雅</th><th class="text-end">司顺</th><th>类目</th></tr></thead>
+      <tbody>{% for p in push_log %}<tr><td class="small text-muted" style="white-space:nowrap">{{ p.pushed_at }}</td><td class="small">{{ p.batch_desc }}</td><td class="text-end fw-bold">{{ p.sku_count }}</td><td class="text-end">{{ p.costway_n }}</td><td class="text-end">{{ p.vevor_n }}</td><td class="small text-muted" style="max-width:420px">{{ p.leaf_summary }}</td></tr>
+      {% else %}<tr><td colspan="6" class="text-center text-muted py-3">还没有推送记录</td></tr>{% endfor %}</tbody>
+    </table>
+  </div></div>
+</details>
+
+<div class="card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap" style="position:sticky;top:0;z-index:10;background:#fff">
+  <input id="batch-desc" class="form-control form-control-sm" style="width:280px" placeholder="选品批次描述（必填）">
+  <button class="btn btn-sm btn-success" onclick="pushSel()">✅ 推送已选到 {{ f_store|upper }}（<span id="sel-n">0</span>）</button>
+  <label class="small text-muted"><input type="checkbox" id="sel-all-page"> 全选本页</label>
+  <span class="small text-muted">已跨页选中 <b id="sel-total">0</b> 个</span>
+  <button class="btn btn-sm btn-outline-secondary py-0" onclick="clearSel()">清空已选</button>
+</div>
+
+<div class="card"><div class="table-responsive" style="max-height:70vh;overflow-y:auto">
+  <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem">
+    <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+      <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th>
+      <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
+      <th>供应商类目</th><th>HD类目</th><th title="总览表有无此SKU图">总览图</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><input type="checkbox" class="sel-cb" value="{{ r.id }}"></td>
+        <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+        <td class="font-monospace small">{{ r.supplier_sku }}</td>
+        <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+        <td class="small">
+          {% if r.is_new %}<span class="badge text-bg-warning">🆕新品</span>{% elif r.is_restock %}<span class="badge text-bg-info">📦新补货</span>{% endif %}
+          <div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="text-end">{{ r.stock }}</td>
+        <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
+        <td class="small"><span class="badge text-bg-info" title="{{ r.hd_path }}">{{ r.hd_path.split('/')[-1] if r.hd_path else '' }}</span></td>
+        <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger">❌</span>{% endif %}</td>
+      </tr>
+      {% else %}<tr><td colspan="9" class="text-center text-muted py-4">候选池是空的——点右上"重建候选池"</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
+  <span class="text-muted">共 {{ total }} 候选</span>
+  {% set kp = {'store': f_store, 'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None, 'newn': f_newn or None} %}
+  <div class="btn-group">
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page<=1 }}" href="{{ url_for('hd_selection.page', page=page-1, **kp) }}">‹ 上一页</a>
+    <span class="btn btn-sm btn-light disabled">{{ page }}/{{ pages }}</span>
+    <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page>=pages }}" href="{{ url_for('hd_selection.page', page=page+1, **kp) }}">下一页 ›</a>
+  </div>
+</div>
+{% endif %}
+</div>
+
+{% if manual_total or m_sup or m_cat or m_q %}
+<div class="card mt-3" style="border-left:3px solid #d4a017">
+  <div class="card-header bg-white py-2" style="font-size:.85rem">
+    <span class="fw-semibold">🖐 人工待选池（擦边）</span>
+    <span class="text-muted">供应商类目落多个HD类目、AI拿不准的 {{ manual_total }} 个——筛选 → 改类目 → 采用进精选；或整类套用记住</span>
+  </div>
+  <div class="card-body p-2">
+    <form method="get" class="d-flex gap-2 flex-wrap align-items-center mb-2" style="font-size:.8rem">
+      <input type="hidden" name="store" value="{{ f_store }}">
+      {% for k,v in {'supplier':f_supplier,'leaf':f_leaf,'q':f_q,'img':f_img,'newn':f_newn}.items() %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+      <select name="msup" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+        <option value="">全部供应商</option>
+        <option value="Costway" {{ 'selected' if m_sup=='Costway' }}>豪雅</option>
+        <option value="Vevor" {{ 'selected' if m_sup=='Vevor' }}>司顺</option>
+      </select>
+      <select name="mcat" class="form-select form-select-sm" style="max-width:380px" onchange="this.form.submit()">
+        <option value="">全部供应商类目（{{ manual_cats|length }} 类）</option>
+        {% for mc in manual_cats %}<option value="{{ mc.supplier_cat }}" {{ 'selected' if m_cat==mc.supplier_cat }}>{{ ('豪雅·' if mc.supplier=='Costway' else '司顺·') }}{{ mc.supplier_cat }} · {{ mc.n }}</option>{% endfor %}
+      </select>
+      <input name="mq" value="{{ m_q }}" class="form-control form-control-sm" style="width:160px" placeholder="搜SKU/标题">
+      <button class="btn btn-sm btn-outline-secondary">筛选</button>
+      {% if m_sup or m_cat or m_q %}<a class="btn btn-sm btn-link p-0" href="{{ url_for('hd_selection.page', store=f_store) }}">✕清擦边筛选</a>{% endif %}
+      <span class="text-muted ms-auto">擦边 {{ manual_total }} 个 · 第{{ m_pg }}/{{ m_pages }}页</span>
+    </form>
+    {% if m_cat %}
+    <div class="alert alert-warning py-2 px-2 mb-2 d-flex gap-2 align-items-center flex-wrap" style="font-size:.8rem">
+      <span>🔒 把「<b>{{ m_cat }}</b>」<b>整类({{ manual_total }}个)</b>归到：</span>
+      <input id="cat-leaf" list="mleaf-dl" class="form-control form-control-sm" style="width:260px" placeholder="选 HD 类目" autocomplete="off">
+      <button class="btn btn-sm btn-warning" onclick="applyCat('{{ m_cat|e }}','{{ m_sup or (manual_cats[0].supplier if manual_cats else '') }}')">套用并记住</button>
+    </div>
+    {% endif %}
+    <div class="d-flex gap-2 align-items-center flex-wrap mb-2" style="font-size:.8rem">
+      <label class="text-muted"><input type="checkbox" id="mtri-all"> 全选本页</label>
+      <span>勾选 <b id="mtri-n">0</b> 个：</span>
+      <input id="mtri-bulk-leaf" list="mleaf-dl" class="form-control form-control-sm" style="width:230px" placeholder="(可选)统一改成类目" autocomplete="off">
+      <button class="btn btn-sm btn-outline-primary" onclick="mtriSetLeaf()">应用到勾选</button>
+      <button class="btn btn-sm btn-success" onclick="mtriApprove()">✅ 采用进精选</button>
+      <button class="btn btn-sm btn-outline-danger" onclick="mtriReject()">🗑 弃用</button>
+    </div>
+    <div class="table-responsive" style="max-height:60vh;overflow-y:auto">
+      <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
+        <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+          <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th><th style="min-width:220px">产品名</th>
+          <th class="text-end">库存</th><th>供应商类目</th><th style="min-width:200px">HD类目(可改)</th><th>擦边原因</th><th>总览图</th></tr></thead>
+        <tbody>
+        {% for r in manual_rows %}
+        <tr data-id="{{ r.id }}">
+          <td><input type="checkbox" class="mtri-cb" value="{{ r.id }}"></td>
+          <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+          <td class="font-monospace small">{{ r.supplier_sku }}</td>
+          <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+          <td class="small"><div style="max-width:340px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+          <td class="text-end">{{ r.stock }}</td>
+          <td class="small" style="max-width:180px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
+          <td><input class="form-control form-control-sm mtri-leaf" list="mleaf-dl" value="{{ r.hd_path }}" autocomplete="off" style="min-width:190px"></td>
+          <td class="small text-muted" style="max-width:200px"><div class="text-truncate" title="{{ r.classify_reason }}">{{ r.classify_reason }}</div></td>
+          <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger">❌</span>{% endif %}</td>
+        </tr>
+        {% else %}<tr><td colspan="10" class="text-center text-muted py-3">这个筛选下没有擦边候选</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <datalist id="mleaf-dl">{% for lf in leaf_options %}<option value="{{ lf }}">{% endfor %}</datalist>
+    {% if m_pages > 1 %}
+    {% set mkp = {'store':f_store,'msup':m_sup or None,'mcat':m_cat or None,'mq':m_q or None,'supplier':f_supplier or None,'leaf':f_leaf or None,'q':f_q or None,'img':f_img or None,'newn':f_newn or None} %}
+    <div class="d-flex justify-content-end gap-1 mt-2">
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if m_pg<=1 }}" href="{{ url_for('hd_selection.page', mp=m_pg-1, **mkp) }}">‹ 上一页</a>
+      <span class="btn btn-sm btn-light disabled">{{ m_pg }}/{{ m_pages }}</span>
+      <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if m_pg>=m_pages }}" href="{{ url_for('hd_selection.page', mp=m_pg+1, **mkp) }}">下一页 ›</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function(){
+  const prev=document.createElement('img'); prev.id='sel-preview'; document.body.appendChild(prev);
+  function place(e){const W=420,pad=16;let x=e.clientX+pad;if(x+W>innerWidth-8)x=e.clientX-W-pad;
+    let y=Math.max(8,Math.min(e.clientY-W/2,innerHeight-W-8));prev.style.left=x+'px';prev.style.top=y+'px';}
+  document.querySelectorAll('.sel-img').forEach(img=>{
+    img.addEventListener('mouseenter',e=>{prev.src=img.src;prev.style.display='block';place(e);});
+    img.addEventListener('mousemove',place);
+    img.addEventListener('mouseleave',()=>prev.style.display='none');});
+})();
+const SK='hd_sel_ids';
+function selSet(){try{return new Set(JSON.parse(sessionStorage.getItem(SK)||'[]'));}catch(e){return new Set();}}
+function saveSet(s){sessionStorage.setItem(SK,JSON.stringify([...s]));}
+function cbs(){return Array.from(document.querySelectorAll('.sel-cb'));}
+function refresh(){const s=selSet();document.getElementById('sel-n').textContent=cbs().filter(c=>c.checked).length;
+  document.getElementById('sel-total').textContent=s.size;const all=cbs();
+  document.getElementById('sel-all-page').checked=all.length>0 && all.every(c=>c.checked);}
+(function(){const s=selSet();cbs().forEach(c=>{if(s.has(c.value))c.checked=true;});refresh();})();
+cbs().forEach(c=>c.addEventListener('change',function(){const s=selSet();this.checked?s.add(this.value):s.delete(this.value);saveSet(s);refresh();}));
+document.getElementById('sel-all-page').addEventListener('change',function(){
+  const s=selSet();cbs().forEach(c=>{c.checked=this.checked;this.checked?s.add(c.value):s.delete(c.value);});saveSet(s);refresh();});
+function clearSel(){sessionStorage.removeItem(SK);cbs().forEach(c=>c.checked=false);refresh();}
+async function rebuild(btn){btn.disabled=true;btn.textContent='已开始…';
+  const r=await fetch('{{ url_for("hd_selection.rebuild") }}?store={{ f_store }}',{method:'POST'});alert((await r.json()).msg);}
+async function pushSel(){
+  const ids=[...selSet()];const batch=document.getElementById('batch-desc').value.trim();
+  if(!ids.length){alert('没有勾选');return;}if(!batch){alert('请填选品批次描述');return;}
+  if(!confirm('推送 '+ids.length+' 个到 HD-{{ f_store|upper }} 飞书表，批次「'+batch+'」？'))return;
+  const r=await fetch('{{ url_for("hd_selection.push") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,batch:batch})});
+  const d=await r.json();
+  if(d.success){sessionStorage.removeItem(SK);alert('已推送 '+d.pushed+' 个');location.reload();}else alert('失败：'+(d.msg||''));
+}
+// 擦边池
+function mtriRows(){return Array.from(document.querySelectorAll('.mtri-cb'));}
+function mtriChecked(){return mtriRows().filter(c=>c.checked);}
+function mtriRefresh(){const el=document.getElementById('mtri-n');if(el)el.textContent=mtriChecked().length;
+  const all=document.getElementById('mtri-all');const rs=mtriRows();if(all)all.checked=rs.length>0&&rs.every(c=>c.checked);}
+(function(){const all=document.getElementById('mtri-all');if(!all)return;
+  mtriRows().forEach(c=>c.addEventListener('change',mtriRefresh));
+  all.addEventListener('change',function(){mtriRows().forEach(c=>c.checked=this.checked);mtriRefresh();});mtriRefresh();})();
+function rowLeaf(id){const tr=document.querySelector('tr[data-id="'+id+'"]');const inp=tr&&tr.querySelector('.mtri-leaf');return inp?inp.value.trim():'';}
+function mtriSetLeaf(){const v=document.getElementById('mtri-bulk-leaf').value.trim();if(!v){alert('先填/选一个 HD 类目');return;}
+  const chk=mtriChecked();if(!chk.length){alert('先勾选');return;}chk.forEach(c=>{const inp=c.closest('tr').querySelector('.mtri-leaf');if(inp)inp.value=v;});}
+async function mtriPost(body){const r=await fetch('{{ url_for("hd_selection.triage") }}',{method:'POST',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({store:'{{ f_store }}'},body))});return r.json();}
+async function mtriApprove(){const chk=mtriChecked();if(!chk.length){alert('先勾选');return;}
+  const items=chk.map(c=>({id:+c.value,leaf:rowLeaf(c.value)}));const bad=items.filter(x=>!x.leaf);
+  if(bad.length){alert('有 '+bad.length+' 个没填 HD 类目');return;}
+  if(!confirm('把勾选的 '+items.length+' 个采用进精选池?'))return;
+  const d=await mtriPost({action:'approve',items:items});alert(d.msg||'');if(d.success)location.reload();}
+async function mtriReject(){const chk=mtriChecked();if(!chk.length){alert('先勾选');return;}
+  if(!confirm('弃用勾选的 '+chk.length+' 个?'))return;
+  const d=await mtriPost({action:'reject',ids:chk.map(c=>+c.value)});alert(d.msg||'');if(d.success)location.reload();}
+async function applyCat(cat,supplier){const leaf=document.getElementById('cat-leaf').value.trim();if(!leaf){alert('先选一个 HD 类目');return;}
+  if(!confirm('把「'+cat+'」整类归到 '+leaf+',并记住?'))return;
+  const d=await mtriPost({action:'apply_category',supplier:supplier,supplier_cat:cat,leaf:leaf});alert(d.msg||'');if(d.success)location.reload();}
+</script>
+{% endblock %}

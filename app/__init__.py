@@ -48,6 +48,8 @@ def create_app(config_name='default'):
 
     from app.routes.macy_selection import macy_selection_bp
     app.register_blueprint(macy_selection_bp, url_prefix='/macy-selection')  # Macy选品
+    from app.routes.hd_selection import hd_selection_bp
+    app.register_blueprint(hd_selection_bp, url_prefix='/hd-selection')  # HD选品
 
     from app.routes.lowes_selection import lowes_selection_bp
     app.register_blueprint(lowes_selection_bp, url_prefix='/lowes-selection')  # Lowes选品

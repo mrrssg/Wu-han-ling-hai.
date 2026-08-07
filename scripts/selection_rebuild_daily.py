@@ -47,6 +47,7 @@ def main() -> int:
     with app.app_context():
         from app.services.macy_selection_service import rebuild_pool as macy_rebuild
         from app.services.lowes_selection_service import rebuild_pool as lowes_rebuild
+        from app.services.hd_selection_service import rebuild_pool as hd_rebuild
         # wopet 成本回填(飞书→macy_sku_cost),让 wopet 类目推荐分能算净利率
         try:
             from scripts.backfill_wopet_cost import backfill_wopet_cost
@@ -58,6 +59,8 @@ def main() -> int:
             ("macy-wopet", lambda: macy_rebuild("wopet")),
             ("lowes-autool", lambda: lowes_rebuild("autool")),
             ("lowes-yasonic", lambda: lowes_rebuild("yasonic")),
+            ("hd-top", lambda: hd_rebuild("top")),
+            ("hd-bos", lambda: hd_rebuild("bos")),
         ]
         for label, fn in jobs:
             t = time.time()
