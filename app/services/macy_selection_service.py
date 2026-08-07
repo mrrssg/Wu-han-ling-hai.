@@ -65,6 +65,15 @@ def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
                          round(net, 4) if net is not None else None,
                          round(gross, 4) if gross is not None else None,
                          round(comm_rate, 4) if comm_rate is not None else None, score))
+    # 季节列由蓝海周刷(refresh_macy_blue_ocean)维护；本重算 DELETE+INSERT 会冲成 NULL
+    # → 先快照、后恢复,别丢旺季数据。
+    season_keep: Dict[str, Any] = {}
+    try:
+        cur.execute("SELECT macy_leaf, season_tag, season_peak, trend_now, season_profile "
+                    "FROM order_system.macy_cat_demand WHERE store=%s", (store,))
+        season_keep = {r["macy_leaf"]: r for r in cur.fetchall()}
+    except Exception:
+        season_keep = {}
     cur.execute("DELETE FROM order_system.macy_cat_demand WHERE store=%s", (store,))
     for i in range(0, len(to_write), 500):
         c = to_write[i:i + 500]
@@ -72,6 +81,13 @@ def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
         cur.execute("INSERT INTO order_system.macy_cat_demand "
                     "(store,macy_leaf,gmv,units,margin_rate,gross_rate,comm_rate,score,computed_at) VALUES "
                     + ph, [v for row in c for v in row])
+    for leaf in scores:
+        sk = season_keep.get(leaf)
+        if sk and sk.get("season_tag"):
+            cur.execute("UPDATE order_system.macy_cat_demand SET season_tag=%s, season_peak=%s,"
+                        " trend_now=%s, season_profile=%s WHERE store=%s AND macy_leaf=%s",
+                        (sk["season_tag"], sk["season_peak"], sk["trend_now"],
+                         sk["season_profile"], store, leaf))
     return scores
 
 

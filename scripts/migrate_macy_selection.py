@@ -54,6 +54,28 @@ DDLS = [
         computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, macy_leaf)
     ) CHARSET=utf8mb4 COMMENT='Macy类目需求分(净利率×GMV,store参数化)'""",
+    # 蓝海类目（未涉及：供应商有货但0销量；邻接适配+货盘+季节+Amazon需求）
+    """CREATE TABLE IF NOT EXISTS order_system.macy_blue_ocean (
+        store VARCHAR(12) NOT NULL DEFAULT 'kuyotq',
+        macy_leaf VARCHAR(120) NOT NULL,
+        l1 VARCHAR(120), l2 VARCHAR(120), l3 VARCHAR(120),
+        brand VARCHAR(32),
+        sku_n INT DEFAULT 0, with_img INT DEFAULT 0,
+        avg_price DECIMAL(10,2) DEFAULT NULL, avg_stock INT DEFAULT NULL,
+        fit_score INT DEFAULT 0 COMMENT '邻接适配0~100(同L3强/同L2中/无邻接弱)',
+        fit_reason VARCHAR(255),
+        supply_score INT DEFAULT 0,
+        gt_keyword VARCHAR(120),
+        season_tag VARCHAR(24) DEFAULT NULL, season_peak VARCHAR(8) DEFAULT NULL,
+        trend_now INT DEFAULT NULL, season_profile TEXT DEFAULT NULL,
+        amz_units INT DEFAULT NULL, amz_revenue DECIMAL(14,2) DEFAULT NULL,
+        amz_price DECIMAL(10,2) DEFAULT NULL, amz_return DECIMAL(6,2) DEFAULT NULL,
+        amz_node VARCHAR(120) DEFAULT NULL,
+        blue_score INT DEFAULT 0,
+        computed_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, macy_leaf),
+        KEY idx_store_score (store, blue_score)
+    ) CHARSET=utf8mb4 COMMENT='Macy蓝海类目推荐(邻接适配+季节+Amazon需求)'""",
 ]
 
 ALTERS = [
