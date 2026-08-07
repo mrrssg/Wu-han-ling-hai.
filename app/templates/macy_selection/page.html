@@ -14,6 +14,31 @@
   z-index:2000; display:none; pointer-events:none; }
 </style>
 
+{% if cat_demand %}
+<div class="card p-2 mb-3" style="font-size:.8rem">
+  <div class="fw-semibold mb-1">🔥 Kuyotq 近90天最好卖的类目<span class="text-muted fw-normal">（分数=GMV×净利率加权；净利率=收入−实际佣金−成本；点类目=只看该类目候选）</span></div>
+  <div class="d-flex flex-wrap gap-1">
+    {% for c in cat_demand %}
+    <a class="badge text-decoration-none {{ 'text-bg-warning' if c.score>=60 else ('text-bg-info' if c.score>=30 else 'text-bg-secondary') }}"
+       href="{{ url_for('macy_selection.page', leaf=c.macy_leaf) }}"
+       title="GMV ${{ '%.0f'|format(c.gmv or 0) }} · {{ c.units or 0 }}件 · 候选{{ c.cand_n }}个&#10;净利率{{ '%.1f'|format((c.margin_rate or 0)*100) }}% = 毛利{{ '%.1f'|format((c.gross_rate or 0)*100) }}% − 实际佣金{{ '%.1f'|format((c.comm_rate or 0)*100) }}%">
+      {{ c.macy_leaf }} · <b>{{ c.score }}</b>分 · 候选{{ c.cand_n }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="btn-group btn-group-sm mb-2" role="group">
+  {% set nkp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
+  <a class="btn {{ 'btn-primary' if not f_newn else 'btn-outline-primary' }}"
+     href="{{ url_for('macy_selection.page', **nkp) }}">全部 {{ newn_stat.a or 0 }}</a>
+  <a class="btn {{ 'btn-warning' if f_newn=='new' else 'btn-outline-warning' }}"
+     href="{{ url_for('macy_selection.page', newn='new', **nkp) }}">🆕 新品 {{ newn_stat.nw or 0 }}</a>
+  <a class="btn {{ 'btn-info' if f_newn=='restock' else 'btn-outline-info' }}"
+     href="{{ url_for('macy_selection.page', newn='restock', **nkp) }}">📦 新补货 {{ newn_stat.rs or 0 }}</a>
+</div>
+
 <div class="card p-2 mb-3 d-flex flex-row align-items-center gap-2 flex-wrap" style="font-size:.85rem">
   <form method="get" class="d-flex gap-2 flex-wrap" action="{{ url_for('macy_selection.page') }}">
     <select name="supplier" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
@@ -74,7 +99,8 @@
     <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
       <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th>
       <th style="min-width:240px">产品名</th><th class="text-end">库存</th>
-      <th>供应商类目</th><th>建议Macy类目</th><th>品牌</th><th class="text-end">类目热度</th>
+      <th>供应商类目</th><th>建议Macy类目</th><th>品牌</th>
+      <th title="该类目近90天净利率×GMV加权推荐分(0~100),越高越值得上;+新品15/新补货8加成">推荐分</th>
       <th title="图片链接总览表里有没有这个SKU的图(上架取图用)">总览图</th></tr></thead>
     <tbody>
       {% for r in rows %}
@@ -83,12 +109,18 @@
         <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
         <td class="font-monospace small">{{ r.supplier_sku }}</td>
         <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
-        <td class="small"><div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="small">
+          {% if r.is_new %}<span class="badge text-bg-warning" title="近期新增产品">🆕新品</span>
+          {% elif r.is_restock %}<span class="badge text-bg-info" title="近期重新有货(0→有货)">📦新补货</span>{% endif %}
+          <div style="max-width:360px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
         <td class="text-end">{{ r.stock }}</td>
         <td class="small" style="max-width:200px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
         <td class="small"><span class="badge text-bg-info">{{ r.macy_leaf }}</span></td>
         <td class="small">{{ r.macy_brand }}</td>
-        <td class="text-end">{{ r.heat_90d }}</td>
+        <td class="text-center">
+          {% set dm = demand_map.get(r.macy_leaf) %}
+          <span class="badge {{ 'text-bg-warning' if r.heat_90d>=60 else ('text-bg-info' if r.heat_90d>=30 else 'text-bg-light text-dark') }}"
+            title="{% if dm %}{{ r.macy_leaf }} 近90天 ${{ '%.0f'|format(dm.gmv or 0) }}/{{ dm.units or 0 }}件&#10;净利率{{ '%.1f'|format((dm.margin_rate or 0)*100) }}% = 毛利{{ '%.1f'|format((dm.gross_rate or 0)*100) }}% − 实际佣金{{ '%.1f'|format((dm.comm_rate or 0)*100) }}%{% else %}该类目近90天无销量{% endif %}">{{ r.heat_90d }}</span></td>
         <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger" title="总览表没有此SKU图片,上架前需补图">❌</span>{% endif %}</td>
       </tr>
       {% else %}
@@ -100,7 +132,7 @@
 {% if pages > 1 %}
 <div class="card-footer bg-white d-flex justify-content-between align-items-center" style="font-size:.8rem">
   <span class="text-muted">共 {{ total }} 候选</span>
-  {% set kp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None} %}
+  {% set kp = {'supplier': f_supplier or None, 'leaf': f_leaf or None, 'q': f_q or None, 'img': f_img or None, 'newn': f_newn or None} %}
   <div class="btn-group">
     <a class="btn btn-sm btn-outline-secondary {{ 'disabled' if page<=1 }}" href="{{ url_for('macy_selection.page', page=page-1, **kp) }}">‹ 上一页</a>
     <span class="btn btn-sm btn-light disabled">{{ page }}/{{ pages }}</span>
