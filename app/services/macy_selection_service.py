@@ -102,7 +102,8 @@ STORE_BRAND = {"kuyotq": None, "wopet": "COZITO"}   # wopet 固定 COZITO;kuyotq
 
 
 def _feishu_used_skus(store: str = "kuyotq") -> set:
-    """该 Macy 店 Mirakl 表的「供应商SKU」全集=已上过(按店,不再混两店)。"""
+    """已上过的供应商SKU全集=**同平台(Macy)所有店 Mirakl 表并集**(kuyotq+wopet)。
+    同一供应商产品不能同时上 Macy 两个店(可跨平台上 Lowes),故两店并集去重。"""
     import requests
     APP_ID = "cli_a940a2a1067adbd2"
     SECRET = "i2mKLGVzUDmu4v0U9HYEYdMGc0ZvZAgU"
@@ -123,7 +124,7 @@ def _feishu_used_skus(store: str = "kuyotq") -> set:
         return str(v) if v is not None else ""
 
     used = set()
-    for tbl in (STORE_MIRAKL.get(store, "tblfyStm2eu3hp1Q"),):
+    for tbl in STORE_MIRAKL.values():   # Macy 两店(kuyotq+wopet)并集:同平台跨店去重
         pt = ""
         while True:
             url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{APP}"

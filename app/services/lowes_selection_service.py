@@ -210,7 +210,11 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
         return {"error": f"未知店铺 {store}"}
     supplier = cfg["supplier"]
     brand = cfg["brand"]
-    used = _feishu_used_skus(cfg["mirakl"])
+    # 同平台(Lowes)两店(autool+yasonic)并集去重:同一供应商产品不能同时上两个Lowes店
+    # (实际两店供应商不同=SKU不重叠,这里是规则兜底/未来防串)
+    used = set()
+    for _c in STORE_CFG.values():
+        used |= _feishu_used_skus(_c["mirakl"])
     overview = _feishu_overview_skus()
 
     conn = DBManager.get_connection()
