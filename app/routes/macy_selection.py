@@ -80,22 +80,68 @@ def page():
                          ORDER BY pushed_at DESC LIMIT 50""")
     # 类目推荐分面板：近90天净利率×GMV 最高的 Macy 类目 + 各有多少候选
     cat_demand = _query("""SELECT d.macy_leaf, d.gmv, d.units, d.margin_rate, d.gross_rate,
-                                  d.comm_rate, d.score, COALESCE(p.n,0) AS cand_n
+                                  d.comm_rate, d.score, d.season_tag, d.season_peak,
+                                  COALESCE(p.n,0) AS cand_n
                            FROM order_system.macy_cat_demand d
                            LEFT JOIN (SELECT macy_leaf, COUNT(*) n
                                       FROM order_system.macy_selection_pool GROUP BY macy_leaf) p
                              ON p.macy_leaf=d.macy_leaf
                            WHERE d.store='kuyotq' ORDER BY d.score DESC, d.gmv DESC LIMIT 15""")
     demand_map = {r["macy_leaf"]: r for r in _query(
-        "SELECT macy_leaf, gmv, units, margin_rate, gross_rate, comm_rate, score "
-        "FROM order_system.macy_cat_demand WHERE store='kuyotq'")}
+        "SELECT macy_leaf, gmv, units, margin_rate, gross_rate, comm_rate, score, "
+        "season_tag, season_peak FROM order_system.macy_cat_demand WHERE store='kuyotq'")}
+    # 🌱蓝海类目(邻接强,blue>=50) + 🚀探索区(邻接弱但Amazon需求大)
+    blue_ocean = _query("""SELECT macy_leaf, l1, l2, l3, brand, sku_n, with_img, avg_price,
+                                  fit_reason, season_tag, season_peak,
+                                  amz_units, amz_return, blue_score
+                           FROM order_system.macy_blue_ocean
+                           WHERE store='kuyotq' AND blue_score>=50
+                           ORDER BY blue_score DESC, sku_n DESC LIMIT 40""")
+    explore_ocean = _query("""SELECT macy_leaf, l1, l2, brand, sku_n, with_img, amz_node,
+                                     amz_units, amz_revenue, amz_return, amz_price, season_tag, season_peak
+                              FROM order_system.macy_blue_ocean
+                              WHERE store='kuyotq' AND fit_score<55 AND amz_units>=3000
+                              ORDER BY amz_units DESC LIMIT 15""")
+    # 📅近3个月最旺雷达(在售+蓝海+探索,按 season_profile 窗口热度)
+    cur_m = date.today().month
+    win_idx = [((cur_m - 1 + k) % 12) for k in range(3)]
+    win_months = "/".join(str(i + 1) for i in win_idx) + "月"
+
+    def _win_heat(pj):
+        try:
+            p = json.loads(pj) if pj else None
+        except (ValueError, TypeError):
+            p = None
+        if not p or len(p) < 12:
+            return None
+        vals = [p[i] for i in win_idx if p[i]]
+        return round(sum(vals) / len(vals)) if vals else None
+
+    hot = []
+    for r in _query("SELECT macy_leaf, season_profile, season_peak, season_tag "
+                    "FROM order_system.macy_cat_demand WHERE store='kuyotq' AND season_profile IS NOT NULL"):
+        hh = _win_heat(r["season_profile"])
+        if hh:
+            hot.append({"leaf": r["macy_leaf"], "kind": "在售", "heat": hh,
+                        "peak": r["season_peak"], "tag": r["season_tag"]})
+    for r in _query("SELECT macy_leaf, season_profile, season_peak, season_tag, blue_score "
+                    "FROM order_system.macy_blue_ocean WHERE store='kuyotq' AND season_profile IS NOT NULL"):
+        hh = _win_heat(r["season_profile"])
+        if hh:
+            hot.append({"leaf": r["macy_leaf"],
+                        "kind": "蓝海" if (r["blue_score"] or 0) >= 50 else "探索",
+                        "heat": hh, "peak": r["season_peak"], "tag": r["season_tag"]})
+    hot.sort(key=lambda x: x["heat"], reverse=True)
+    hot_window = hot[:12]
     return render_template("macy_selection/page.html", rows=rows, total=total,
                            page=pg, pages=pages, per=per,
                            f_supplier=f_supplier, f_leaf=f_leaf, f_q=f_q, f_img=f_img,
                            f_newn=f_newn, newn_stat=newn_stat,
                            leaves=leaves, counts=counts, img_stat=img_stat,
                            built_at=built[0]["t"] if built else None,
-                           push_log=push_log, cat_demand=cat_demand, demand_map=demand_map)
+                           push_log=push_log, cat_demand=cat_demand, demand_map=demand_map,
+                           blue_ocean=blue_ocean, explore_ocean=explore_ocean,
+                           hot_window=hot_window, win_months=win_months)
 
 
 @macy_selection_bp.route("/rebuild", methods=["POST"])
