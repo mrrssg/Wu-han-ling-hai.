@@ -96,6 +96,12 @@ DDLS = [
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, shop_sku)
     ) CHARSET=utf8mb4 COMMENT='选品净利率用的补充成本(飞书回填,不写共享offerprice_listing)'""",
+    # 该Macy店"已上过"的供应商SKU快照(每次重建刷新)——供未归类桶排除已上过的产品
+    """CREATE TABLE IF NOT EXISTS order_system.macy_used_sku (
+        store VARCHAR(12) NOT NULL,
+        supplier_sku VARCHAR(64) NOT NULL,
+        PRIMARY KEY (store, supplier_sku)
+    ) CHARSET=utf8mb4 COMMENT='已上过的供应商SKU快照(每次重建刷新,未归类桶用它排除已上过)'""",
     # 人工锁定的 供应商类目→Macy叶子 覆盖(记住映射,同类含将来新品自动跟)——两店通用
     """CREATE TABLE IF NOT EXISTS order_system.macy_cat_override (
         store VARCHAR(12) NOT NULL,

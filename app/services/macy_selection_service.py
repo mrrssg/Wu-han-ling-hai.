@@ -392,6 +392,14 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
                 ph = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"] * len(chunk))
                 flat = [v for row in chunk for v in row]
                 cur.execute(f"INSERT INTO order_system.macy_selection_pool ({cols}) VALUES {ph}", flat)
+            # 持久化"已上过"SKU快照,供未归类桶排除已上过的产品
+            cur.execute("DELETE FROM order_system.macy_used_sku WHERE store=%s", (store,))
+            ul = [s[:64] for s in used if s]
+            for i in range(0, len(ul), 2000):
+                c = ul[i:i + 2000]
+                cur.execute(f"INSERT IGNORE INTO order_system.macy_used_sku (store, supplier_sku) "
+                            f"VALUES {','.join(['(%s,%s)'] * len(c))}",
+                            [v for s in c for v in (store, s)])
         conn.commit()
         return {"store": store, "used_skus": len(used), "local_pushed_skus": len(local_pushed),
                 "overview_skus": len(overview), "candidates": len(rows),

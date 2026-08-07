@@ -362,14 +362,18 @@ def unmapped():
                              FROM autooperate.newestdropship d
                              JOIN order_system.safety_product_cache c ON c.sku=d.SKU AND c.supplier='Costway'
                              WHERE COALESCE(d.`status`,'Enabled')<>'Disabled' AND c.category=%s AND d.Stock>50
-                             ORDER BY d.Stock DESC LIMIT 300""", (f_cat,))
+                               AND NOT EXISTS(SELECT 1 FROM order_system.macy_used_sku uu
+                                              WHERE uu.store=%s AND uu.supplier_sku=d.SKU)
+                             ORDER BY d.Stock DESC LIMIT 300""", (f_cat, store))
         return render_template("macy_selection/unmapped.html", store=store, rows=None, products=products,
                                is_wopet=False, leaf_options=leaf_options, total_n=0, f_sup=f_sup, f_cat=f_cat)
     if f_sup == "Vevor" and f_cat:
         products = _query("""SELECT v.sku, v.title, v.image AS img, v.inventory AS stock, v.price
                              FROM autooperate.vevor_feed v
                              WHERE v.product_type=%s AND v.inventory>50
-                             ORDER BY v.inventory DESC LIMIT 300""", (f_cat,))
+                               AND NOT EXISTS(SELECT 1 FROM order_system.macy_used_sku uu
+                                              WHERE uu.store=%s AND uu.supplier_sku=v.sku)
+                             ORDER BY v.inventory DESC LIMIT 300""", (f_cat, store))
         return render_template("macy_selection/unmapped.html", store=store, rows=None, products=products,
                                is_wopet=False, leaf_options=leaf_options, total_n=0, f_sup=f_sup, f_cat=f_cat)
 
@@ -384,6 +388,8 @@ def unmapped():
                            WHERE m.supplier='Costway' AND m.supplier_cat=c.category AND m.macy_leaf IS NOT NULL)
             AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_override o
                            WHERE o.store=%s AND o.supplier='Costway' AND o.supplier_cat=c.category)
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_used_sku uu
+                           WHERE uu.store=%s AND uu.supplier_sku=d.SKU)
           GROUP BY c.category
           UNION ALL
           SELECT 'Vevor' AS supplier, v.product_type AS cat, COUNT(*) AS n, MAX(v.image) AS img
@@ -393,8 +399,10 @@ def unmapped():
                            WHERE m.supplier='Vevor' AND m.supplier_cat=v.product_type AND m.macy_leaf IS NOT NULL)
             AND NOT EXISTS(SELECT 1 FROM order_system.macy_cat_override o
                            WHERE o.store=%s AND o.supplier='Vevor' AND o.supplier_cat=v.product_type)
+            AND NOT EXISTS(SELECT 1 FROM order_system.macy_used_sku uu
+                           WHERE uu.store=%s AND uu.supplier_sku=v.sku)
           GROUP BY v.product_type
-        ) t ORDER BY n DESC LIMIT 500""", (store, store))
+        ) t ORDER BY n DESC LIMIT 500""", (store, store, store, store))
     total_n = sum(int(r["n"]) for r in rows)
     return render_template("macy_selection/unmapped.html", store=store, rows=rows, products=None,
                            is_wopet=False, leaf_options=leaf_options, total_n=total_n, f_sup="", f_cat="")
