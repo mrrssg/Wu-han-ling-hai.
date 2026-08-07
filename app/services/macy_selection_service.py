@@ -202,6 +202,20 @@ def _feishu_overview_skus() -> set:
     return have
 
 
+import re as _re
+
+# kuyotq 擦边信号：AI 映射理由里出现"够不着精确叶子、只能取最近"的措辞 → 归人工待选池
+_HEDGE_RE = _re.compile(r"最接近|最贴近|最贴合|勉强|近似|大致|可视为|暂归|无[^，。]{0,6}(细分|对应|匹配)|给定叶子")
+
+
+def _kuyotq_tier(ai_reason: str):
+    """kuyotq 按 cat_map 的 AI 理由分池：措辞在'取最近'一档 → ('manual', 擦边原因);否则精选。"""
+    r = ai_reason or ""
+    if _HEDGE_RE.search(r):
+        return "manual", "类目非精确对应,AI取最近叶子(需人工确认): " + r[:150]
+    return "ai", None
+
+
 def _classify_wopet(supplier: str, title: str, supplier_cat: str):
     """wopet 逐产品分类器 → (macy_leaf, tier, reason) 或 (None,None,None)。
     tier: 'ai'=有把握精选 / 'manual'=擦边人工待选。宠物(6叶子)豪雅+司顺都收；Camping 只司顺。
@@ -277,10 +291,11 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
             cur.execute("SELECT supplier_sku FROM order_system.macy_pushed_sku")
             local_pushed = {r["supplier_sku"] for r in cur.fetchall() if r["supplier_sku"]}
             used |= local_pushed
-            # 有效映射(供应商类目→Macy叶子)
-            cur.execute("""SELECT supplier, supplier_cat, macy_leaf, macy_brand
+            # 有效映射(供应商类目→Macy叶子);带AI理由,据此分精选/擦边两池
+            cur.execute("""SELECT supplier, supplier_cat, macy_leaf, macy_brand, ai_reason
                            FROM order_system.macy_cat_map WHERE macy_leaf IS NOT NULL""")
-            cat2leaf = {(r["supplier"], r["supplier_cat"]): (r["macy_leaf"], r["macy_brand"])
+            cat2leaf = {(r["supplier"], r["supplier_cat"]):
+                        (r["macy_leaf"], r["macy_brand"], r.get("ai_reason") or "")
                         for r in cur.fetchall()}
             # 类目推荐分：近90天净利率(收入−实际佣金−成本)×GMV,写 macy_cat_demand,返回 {leaf: score}
             cat_scores = _compute_macy_cat_demand(cur, store=store)
@@ -326,8 +341,8 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
                     lb = cat2leaf.get((supplier, r["cat"]))
                     if not lb:
                         continue
-                    leaf, brand = lb
-                    tier, reason = "ai", None
+                    leaf, brand, cat_reason = lb
+                    tier, reason = _kuyotq_tier(cat_reason)
                 has_img = 1 if r["sku"] in overview else 0
                 fs, rs = r.get("first_seen"), r.get("restock_at")
                 is_new = 1 if (fs and fs >= cutoff) else 0
