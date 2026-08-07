@@ -234,14 +234,16 @@ def _classify_wopet(supplier: str, title: str, supplier_cat: str):
     # 泛宠物(有pet无猫狗) → 擦边
     if has("rabbit", "hamster", "guinea", "reptile", "bird cage", "small animal", "chicken coop", "pet "):
         return "Dog Crates & Carriers & Gates", "manual", "泛宠物,拿不准→擦边"
-    # Camping —— 只司顺(Vevor)
+    # Camping —— 只司顺(Vevor)。Q1=B:只收真·露营,patio/grill/cooler 等不算(不进池,不进擦边)
     if supplier == "Vevor":
         if has("tent", "sleeping bag", "sleeping pad", "camping", "camp cot", "backpacking",
-               "camp stove", "camping chair", "bivy", "camp table") \
+               "camp stove", "camping chair", "bivy", "camp table", "camp kitchen") \
                 and not has("patio", "fire pit", "firepit", "grill", "cooler", "heater", "umbrella", "gazebo"):
             return "Camping & Outdoor Recreation Gear", "ai", "露营词"
-        if has("outdoor", "portable", "folding") and has("chair", "table", "canopy", "shelter", "cot", "cart"):
-            return "Camping & Outdoor Recreation Gear", "manual", "户外品,拿不准是否露营→擦边"
+        # 露营模糊(有 camp/背包但没帐篷/睡袋等明确词)→ 擦边(很窄)
+        if has(" camp ", "backpack", "outdoor recreation", "hiking") \
+                and not has("patio", "fire pit", "grill", "cooler", "heater", "umbrella", "chair", "table"):
+            return "Camping & Outdoor Recreation Gear", "manual", "露营沾边不明→擦边"
     return None, None, None
 
 
