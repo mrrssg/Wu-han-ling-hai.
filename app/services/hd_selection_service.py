@@ -141,13 +141,15 @@ def rebuild_pool(store: str = "top") -> Dict[str, Any]:
                 dec = sku_decision.get((supplier, r["sku"]))
                 if dec and dec["decision"] == "rejected":
                     continue
-                ov = cat_override.get((supplier, r["cat"]))
+                # Vevor feed 的 product_type 带尾随空格,而映射表来自飞书是 strip 过的 → 统一 strip 匹配
+                cat = (r["cat"] or "").strip()
+                ov = cat_override.get((supplier, cat))
                 if ov:
                     hd_path = ov["override_leaf"]
                     brand = ov.get("override_brand")
                     tier, reason = "ai", "人工锁定类目"
                 else:
-                    lb = cat2path.get((supplier, r["cat"]))
+                    lb = cat2path.get((supplier, cat))
                     if lb:
                         hd_path, maptier = lb
                         tier = "ai" if maptier == "record" else "manual"
@@ -169,7 +171,7 @@ def rebuild_pool(store: str = "top") -> Dict[str, Any]:
                 is_restock = 1 if (not is_new and rs and rs >= cutoff) else 0
                 rows.append((store, tier, (reason or "")[:200], supplier, r["sku"],
                              (r.get("title") or "")[:500], (r.get("img") or "")[:600],
-                             int(r.get("stock") or 0), (r["cat"] or "")[:400], hd_path,
+                             int(r.get("stock") or 0), cat[:400], hd_path,
                              (brand or "")[:48], (str(r.get("price") or ""))[:32],
                              0, has_img, is_new, is_restock))
 
