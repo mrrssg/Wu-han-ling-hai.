@@ -204,36 +204,40 @@ def _feishu_overview_skus() -> set:
 
 def _classify_wopet(supplier: str, title: str, supplier_cat: str):
     """wopet 逐产品分类器 → (macy_leaf, tier, reason) 或 (None,None,None)。
-    tier: 'ai'=有把握精选 / 'manual'=擦边人工待选。宠物(6叶子)豪雅+司顺都收；Camping 只司顺。"""
+    tier: 'ai'=有把握精选 / 'manual'=擦边人工待选。宠物(6叶子)豪雅+司顺都收；Camping 只司顺。
+    cat/dog/pet 用词边界匹配(避免 delicate/application/carpet 这类子串误命中)。"""
+    import re
     t = f"{title or ''} {supplier_cat or ''}".lower()
 
     def has(*ws):
         return any(w in t for w in ws)
 
-    # 猫（cat 但排除 category/cattle/certificate 等误命中）
-    if "cat" in t and not has("category", "cattle", "certificate", "duplicate", "educat", "locat", "delicat"):
-        if has("litter", "cleaning", "scoop", "waste", "litter box"):
+    def wb(*ws):
+        return any(re.search(r"\b" + w + r"\b", t) for w in ws)
+
+    # 猫（词边界 cat/cats/kitten/feline）
+    if wb("cat", "cats", "kitten", "kittens", "kitty", "feline"):
+        if has("litter", "cleaning", "scoop", "waste"):
             return "Cat Litter & Cleaning", "ai", "cat+litter"
-        if has("tree", "condo", "scratch", "tower", "perch", "cat house", "cat bed",
-                "cat shelf", "cat wall", "cat climb", "cat furniture", "cat cage", "cat window"):
+        if has("tree", "condo", "scratch", "tower", "perch", "house", "furniture",
+                "bed", "shelf", "climb", "cage", "window", "hammock", "cave"):
             return "Cat Furniture", "ai", "cat furniture词"
         return "Cat Furniture", "manual", "只识别到cat,细分不明→擦边"
-    # 狗
-    if has("dog", "puppy", "canine"):
-        if has("crate", "kennel", "carrier", "cage", "playpen", "pet gate", "dog gate",
-                "fence", "enclosure", "pen "):
+    # 狗（词边界）
+    if wb("dog", "dogs", "puppy", "puppies", "canine"):
+        if has("crate", "kennel", "carrier", "cage", "playpen", "gate", "fence", "enclosure"):
             return "Dog Crates & Carriers & Gates", "ai", "dog+笼子/围栏"
-        if has("collar", "leash", "harness", "lead "):
+        if has("collar", "leash", "harness"):
             return "Dog Collars & Leashes", "ai", "dog+项圈/牵引"
         if has("training", "muzzle", "clicker", "potty", "pee pad", "bark", "agility"):
             return "Dog Training", "ai", "dog+训练"
-        if has("bed", "sofa", "couch", " mat", "cushion", "dog house", "furniture",
-                "stairs", "steps", "ramp", "crib", "sofa"):
+        if has("bed", "sofa", "couch", "mat", "cushion", "house", "furniture",
+                "stairs", "steps", "ramp", "crib"):
             return "Dog Bedding & Furniture", "ai", "dog+床/家具"
         return "Dog Bedding & Furniture", "manual", "只识别到dog,细分不明→擦边"
-    # 泛宠物(有pet无猫狗) → 擦边
-    if has("rabbit", "hamster", "guinea", "reptile", "bird cage", "small animal", "chicken coop", "pet "):
-        return "Dog Crates & Carriers & Gates", "manual", "泛宠物,拿不准→擦边"
+    # 泛宠物(词边界 pet/pets,无猫狗) → 擦边;纯小动物/爬宠/鸟不是wopet类目→不收
+    if wb("pet", "pets"):
+        return "Dog Bedding & Furniture", "manual", "泛宠物无猫狗→擦边"
     # Camping —— 只司顺(Vevor)。Q1=B:只收真·露营,patio/grill/cooler 等不算(不进池,不进擦边)
     if supplier == "Vevor":
         if has("tent", "sleeping bag", "sleeping pad", "camping", "camp cot", "backpacking",
