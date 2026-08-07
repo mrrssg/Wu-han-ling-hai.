@@ -244,7 +244,8 @@ def rebuild_pool(store: str) -> Dict[str, Any]:
                     JOIN autooperate.newestdropship d ON d.SKU=c.sku
                     LEFT JOIN _lused u ON u.sku=c.sku COLLATE utf8mb4_general_ci
                     WHERE c.supplier='Costway' AND c.category<>'' AND d.Stock>50
-                      AND u.sku IS NULL""")
+                      AND u.sku IS NULL
+                      AND COALESCE(d.status,'Enabled')<>'Disabled'""")
             else:
                 cur.execute("""
                     SELECT v.sku, v.title, v.image AS img, v.inventory AS stock,

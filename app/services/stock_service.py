@@ -686,7 +686,10 @@ class StockService:
 
 
 
-        df = df[['SKU', 'Price', 'Stock']].copy()
+        # Status(Enabled/Disabled)：Disabled=豪雅禁用品不可上，选品池要排除。feed 有此列则带上。
+        has_status = 'Status' in df.columns
+        cols = ['SKU', 'Price', 'Stock'] + (['Status'] if has_status else [])
+        df = df[cols].copy()
 
         df['SKU'] = df['SKU'].fillna('').astype(str).str.strip()
 
@@ -694,13 +697,18 @@ class StockService:
 
         df['Stock'] = pd.to_numeric(df['Stock'], errors='coerce').fillna(0).astype(int)
 
+        if has_status:
+            df['Status'] = df['Status'].fillna('Enabled').astype(str).str.strip()
+        else:
+            df['Status'] = 'Enabled'
+
         df = df[df['SKU'] != '']
 
 
 
         now = datetime.now()
 
-        data = [(row['SKU'], float(row['Price']), int(row['Stock']), now) for _, row in df.iterrows()]
+        data = [(row['SKU'], float(row['Price']), int(row['Stock']), now, row['Status']) for _, row in df.iterrows()]
 
 
 

@@ -580,15 +580,18 @@ class DBManager:
                 # 改：Python 算好 today 当 first_seen 参数传进去，VALUES 全 %s → 恢复批量(几秒)。
                 # ON DUPLICATE 里的 CURDATE() 是字面量、不含 %s，不影响批量,保持追踪逻辑不变。
                 today = datetime.now().strftime("%Y-%m-%d")
-                rows = [(t[0], t[1], t[2], t[3], today) for t in data_tuples]
+                # data_tuples: (SKU,Price,Stock,Updated_At[,status]) —— status 缺省 Enabled(旧调用兼容)
+                rows = [(t[0], t[1], t[2], t[3], today, t[4] if len(t) > 4 else 'Enabled')
+                        for t in data_tuples]
                 sql = """
-                    INSERT INTO newestdropship (SKU, Price, Stock, Updated_At, first_seen)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO newestdropship (SKU, Price, Stock, Updated_At, first_seen, status)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         restock_at = IF(Stock <= 0 AND VALUES(Stock) > 0, CURDATE(), restock_at),
                         Price = VALUES(Price),
                         Stock = VALUES(Stock),
-                        Updated_At = VALUES(Updated_At);
+                        Updated_At = VALUES(Updated_At),
+                        status = VALUES(status);
                 """
                 cursor.executemany(sql, rows)
                 # 本次 feed 没带的 SKU = Costway 已下架/断货 → 库存置 0，

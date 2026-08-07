@@ -21,6 +21,8 @@ ALTERS = [
     "COMMENT '首次出现在feed的日期(新品判定);导入器维护,存量回填远古'",
     "ALTER TABLE autooperate.newestdropship ADD COLUMN restock_at DATE DEFAULT NULL "
     "COMMENT '最近一次库存0→>0的日期(新库存判定);导入器维护'",
+    "ALTER TABLE autooperate.newestdropship ADD COLUMN status VARCHAR(16) DEFAULT NULL "
+    "COMMENT 'Costway feed的Status(Enabled/Disabled);Disabled=禁用品,选品池排除'",
     "ALTER TABLE order_system.lowes_selection_pool ADD COLUMN is_new TINYINT DEFAULT 0 "
     "COMMENT '豪雅新品(first_seen近N天)'",
     "ALTER TABLE order_system.lowes_selection_pool ADD COLUMN is_restock TINYINT DEFAULT 0 "
