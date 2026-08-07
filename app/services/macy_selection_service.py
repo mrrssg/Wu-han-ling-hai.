@@ -16,7 +16,7 @@ CAT_MARGIN_FULL = 0.20      # 净利率≥20%算满分
 NEWNESS_DAYS = 14           # first_seen/restock_at 在近14天 → 新品/新补货
 NEW_BONUS = 15
 RESTOCK_BONUS = 8
-STORE_SHOP = {"kuyotq": "kuyotq"}   # store → offerprice_listing.shop_name(将来加店在此扩)
+STORE_SHOP = {"kuyotq": "kuyotq", "wopet": "wopet"}   # store → offerprice_listing.shop_name
 
 
 def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
@@ -40,6 +40,8 @@ def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
         GROUP BY o.category_label""", (shop,))
     rows = cur.fetchall()
     if not rows:
+        # 无订单也要清掉该店旧行(否则历史/误写的类目残留在推荐分面板)
+        cur.execute("DELETE FROM order_system.macy_cat_demand WHERE store=%s", (store,))
         return {}
     max_gmv = max(float(r["gmv"] or 0) for r in rows) or 1.0
     scores: Dict[str, int] = {}
