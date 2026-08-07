@@ -24,12 +24,13 @@ from apply_blue_ocean_season import FACTOR, _profile, _season
 from sellersprite_client import google_trend, market_research
 
 
-def refresh(store: str, topn: int):
-    cand = compute(store, topn)
+def refresh(store: str, topn: int, with_blue: bool = True):
+    # 窄类目店(wopet 只 7 个固定叶子)蓝海发现无意义,只跑"已售类目旺季"(含 Camping)
+    cand = compute(store, topn) if with_blue else []
     conn = DBManager.get_connection()
     try:
         with conn.cursor() as cur:
-            done = 0
+            done = exp = 0
             for c in cand:
                 leaf, kw = c["leaf"], c["gt_keyword"]
                 fit, sup = int(c["fit_score"]), int(c["supply_score"])
@@ -58,9 +59,8 @@ def refresh(store: str, topn: int):
             # 探索区: 邻接弱(fit<55)但货盘厚(sku>=30)→ 查 Amazon 需求 + 季节
             cur.execute("SELECT macy_leaf, gt_keyword FROM order_system.macy_blue_ocean "
                         "WHERE store=%s AND fit_score<55 AND sku_n>=30 AND amz_units IS NULL "
-                        "ORDER BY sku_n DESC LIMIT 15", (store,))
-            exp = 0
-            for e in cur.fetchall():
+                        "ORDER BY sku_n DESC LIMIT 15", (store,)) if with_blue else None
+            for e in (cur.fetchall() if with_blue else []):
                 kw = e["gt_keyword"]
                 mr = market_research(kw)
                 items = google_trend(kw)
@@ -104,11 +104,12 @@ def main() -> int:
     for a in sys.argv[1:]:
         if a.isdigit():
             topn = int(a)
-        elif a in ("kuyotq",):
+        elif a in ("kuyotq", "wopet"):
             store = a
     app = create_app(os.environ.get("FLASK_CONFIG", "production"))
     with app.app_context():
-        refresh(store, topn)
+        # wopet 窄类目:只刷已售类目旺季(含 Camping),不做蓝海/探索
+        refresh(store, topn, with_blue=(store == "kuyotq"))
     return 0
 
 

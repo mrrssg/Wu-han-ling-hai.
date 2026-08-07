@@ -87,6 +87,15 @@ DDLS = [
         decided_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (store, supplier, supplier_sku)
     ) CHARSET=utf8mb4 COMMENT='擦边池人工决策(采用/弃用/改类目),每日重建遵循'""",
+    # 补充成本(飞书有成本但 offerprice_listing.last_cost_snapshot 为空的店,如 wopet)
+    # 只给选品推荐分用,不动共享的 offerprice_listing(repricing/profit 也读它)
+    """CREATE TABLE IF NOT EXISTS order_system.macy_sku_cost (
+        store VARCHAR(12) NOT NULL,
+        shop_sku VARCHAR(64) NOT NULL COMMENT 'Macy offer/Shop SKU',
+        cost DECIMAL(12,4) NOT NULL COMMENT '产品成本(飞书「成本」字段)',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, shop_sku)
+    ) CHARSET=utf8mb4 COMMENT='选品净利率用的补充成本(飞书回填,不写共享offerprice_listing)'""",
     # 人工锁定的 供应商类目→Macy叶子 覆盖(记住映射,同类含将来新品自动跟)——两店通用
     """CREATE TABLE IF NOT EXISTS order_system.macy_cat_override (
         store VARCHAR(12) NOT NULL,

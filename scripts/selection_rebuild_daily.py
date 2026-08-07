@@ -47,6 +47,12 @@ def main() -> int:
     with app.app_context():
         from app.services.macy_selection_service import rebuild_pool as macy_rebuild
         from app.services.lowes_selection_service import rebuild_pool as lowes_rebuild
+        # wopet 成本回填(飞书→macy_sku_cost),让 wopet 类目推荐分能算净利率
+        try:
+            from scripts.backfill_wopet_cost import backfill_wopet_cost
+            backfill_wopet_cost()
+        except Exception as exc:
+            print(f"[rebuild] wopet成本回填失败: {exc}", flush=True)
         jobs = [
             ("macy-kuyotq", lambda: macy_rebuild("kuyotq")),
             ("macy-wopet", lambda: macy_rebuild("wopet")),

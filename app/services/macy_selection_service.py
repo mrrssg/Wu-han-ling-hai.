@@ -24,20 +24,24 @@ def _compute_macy_cat_demand(cur, store: str = "kuyotq") -> Dict[str, int]:
     净利率 = (收入 − 实际佣金commission_fee − 成本last_cost_snapshot) / 收入，只按有成本的行算。
     写 macy_cat_demand，返回 {category_label(=macy_leaf): score}。"""
     shop = STORE_SHOP.get(store, "kuyotq")
+    # 成本优先取补充表 macy_sku_cost(如 wopet 飞书回填),否则 offerprice_listing.last_cost_snapshot
     cur.execute("""
         SELECT o.category_label AS leaf,
                SUM(o.line_total_price) AS gmv,
                SUM(o.quantity) AS units,
-               SUM(CASE WHEN l.last_cost_snapshot>0 THEN o.line_total_price ELSE 0 END) AS gmv_c,
-               SUM(CASE WHEN l.last_cost_snapshot>0 THEN o.commission_fee ELSE 0 END) AS comm_c,
-               SUM(CASE WHEN l.last_cost_snapshot>0 THEN l.last_cost_snapshot*o.quantity ELSE 0 END) AS cost_c
+               SUM(CASE WHEN COALESCE(sc.cost,l.last_cost_snapshot)>0 THEN o.line_total_price ELSE 0 END) AS gmv_c,
+               SUM(CASE WHEN COALESCE(sc.cost,l.last_cost_snapshot)>0 THEN o.commission_fee ELSE 0 END) AS comm_c,
+               SUM(CASE WHEN COALESCE(sc.cost,l.last_cost_snapshot)>0
+                        THEN COALESCE(sc.cost,l.last_cost_snapshot)*o.quantity ELSE 0 END) AS cost_c
         FROM order_system.macy_order_data o
         JOIN order_system.offerprice_listing l
           ON l.shop_sku=o.offer_sku AND l.platform='Macy' AND l.shop_name=%s
+        LEFT JOIN order_system.macy_sku_cost sc
+          ON sc.store=%s AND sc.shop_sku=o.offer_sku
         WHERE o.order_state<>'CANCELED'
           AND o.created_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
           AND o.category_label IS NOT NULL AND o.category_label<>''
-        GROUP BY o.category_label""", (shop,))
+        GROUP BY o.category_label""", (shop, store))
     rows = cur.fetchall()
     if not rows:
         # 无订单也要清掉该店旧行(否则历史/误写的类目残留在推荐分面板)
