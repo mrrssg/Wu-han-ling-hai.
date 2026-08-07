@@ -14,6 +14,13 @@
   z-index:2000; display:none; pointer-events:none; }
 </style>
 
+<div class="btn-group mb-3" role="group">
+  <a class="btn btn-sm {{ 'btn-primary' if f_store=='kuyotq' else 'btn-outline-primary' }}"
+     href="{{ url_for('macy_selection.page', store='kuyotq') }}">Macy-Kuyotq（Mecale/Ecooso/Volenca）</a>
+  <a class="btn btn-sm {{ 'btn-primary' if f_store=='wopet' else 'btn-outline-primary' }}"
+     href="{{ url_for('macy_selection.page', store='wopet') }}">Macy-Wopet（COZITO·宠物/露营）</a>
+</div>
+
 {% if hot_window %}
 <div class="card p-2 mb-3" style="font-size:.8rem;border-left:3px solid #ff7a45">
   <div class="fw-semibold mb-1">📅 近3个月（{{ win_months }}）最旺类目
@@ -221,6 +228,38 @@
 </div>
 {% endif %}
 </div>
+
+{% if manual_rows %}
+<details class="card p-2 mb-3" style="font-size:.82rem;border-left:3px solid #d4a017">
+  <summary style="cursor:pointer" class="fw-semibold">🖐 人工待选池（擦边）—— AI 拿不准的 {{ manual_total }} 个,你人工挑
+    <span class="text-muted fw-normal">（沾宠物/露营但细分不明；勾选后和上面精选池一起推送,建议叶子上架时可改）</span></summary>
+  <div class="table-responsive mt-2" style="max-height:420px;overflow-y:auto">
+    <table class="table table-sm table-hover align-middle mb-0" style="font-size:.8rem">
+      <thead class="table-light" style="position:sticky;top:0;z-index:1"><tr>
+        <th style="width:28px"></th><th>图</th><th>供应商SKU</th><th>供应商</th>
+        <th style="min-width:220px">产品名</th><th class="text-end">库存</th>
+        <th>供应商类目</th><th>建议Macy类目</th><th>擦边原因</th><th>总览图</th></tr></thead>
+      <tbody>
+      {% for r in manual_rows %}
+      <tr>
+        <td><input type="checkbox" class="sel-cb" value="{{ r.id }}"></td>
+        <td>{% if r.image %}<img src="{{ r.image }}" class="sel-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith('图')">{% else %}—{% endif %}</td>
+        <td class="font-monospace small">{{ r.supplier_sku }}</td>
+        <td class="small">{{ '豪雅' if r.supplier=='Costway' else '司顺' }}</td>
+        <td class="small"><div style="max-width:340px" class="text-truncate" title="{{ r.title }}">{{ r.title }}</div></td>
+        <td class="text-end">{{ r.stock }}</td>
+        <td class="small" style="max-width:180px"><div class="text-truncate" title="{{ r.supplier_cat }}">{{ r.supplier_cat }}</div></td>
+        <td class="small"><span class="badge text-bg-secondary">{{ r.macy_leaf }}?</span></td>
+        <td class="small text-muted">{{ r.classify_reason }}</td>
+        <td class="text-center">{% if r.has_overview_img %}<span class="text-success">✅</span>{% else %}<span class="text-danger">❌</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-muted mt-1" style="font-size:.72rem">显示前 {{ manual_rows|length }}/{{ manual_total }} 个擦边候选。勾选后用上面绿色「推送」按钮一起推。</div>
+</details>
+{% endif %}
 
 <script>
 (function(){

@@ -40,7 +40,10 @@ def page():
         pg = 1
     per = 60
 
-    where, params = ["1=1"], []
+    f_store = (request.args.get("store") or "kuyotq").strip().lower()
+    if f_store not in ("kuyotq", "wopet"):
+        f_store = "kuyotq"
+    where, params = ["store=%s"], [f_store]
     if f_supplier:
         where.append("supplier=%s"); params.append(f_supplier)
     if f_leaf:
@@ -56,7 +59,8 @@ def page():
         where.append("is_new=1")
     elif f_newn == "restock":
         where.append("is_restock=1")
-    w = " AND ".join(where)
+    # 主池=🎯AI精选(tier='ai'),下方另有🖐人工待选(tier='manual')
+    w = " AND ".join(where) + " AND tier='ai'"
 
     total = int((_query(f"SELECT COUNT(*) n FROM order_system.macy_selection_pool WHERE {w}",
                         tuple(params)) or [{"n": 0}])[0]["n"])
@@ -65,18 +69,26 @@ def page():
     rows = _query(f"""SELECT * FROM order_system.macy_selection_pool WHERE {w}
                       ORDER BY heat_90d DESC, stock DESC LIMIT %s OFFSET %s""",
                   tuple(params) + (per, (pg - 1) * per))
+    # 🖐人工待选(擦边)池:tier='manual',同筛选,一次给前200条(带建议叶子/擦边原因)
+    manual_rows = _query(f"SELECT * FROM order_system.macy_selection_pool "
+                         f"WHERE {' AND '.join(where)} AND tier='manual' "
+                         f"ORDER BY heat_90d DESC, stock DESC LIMIT 200", tuple(params))
+    manual_total = int((_query(f"SELECT COUNT(*) n FROM order_system.macy_selection_pool "
+                               f"WHERE {' AND '.join(where)} AND tier='manual'",
+                               tuple(params)) or [{"n": 0}])[0]["n"])
     leaves = [r["macy_leaf"] for r in _query(
         """SELECT macy_leaf, COUNT(*) n FROM order_system.macy_selection_pool
-           GROUP BY macy_leaf ORDER BY n DESC""")]
+           WHERE store=%s AND macy_leaf IS NOT NULL GROUP BY macy_leaf ORDER BY n DESC""", (f_store,))]
     counts = {r["supplier"]: int(r["n"]) for r in _query(
-        "SELECT supplier, COUNT(*) n FROM order_system.macy_selection_pool GROUP BY supplier")}
-    imgc = _query("""SELECT SUM(has_overview_img=1) y, SUM(has_overview_img=0) n
-                     FROM order_system.macy_selection_pool""")
+        "SELECT supplier, COUNT(*) n FROM order_system.macy_selection_pool "
+        "WHERE store=%s AND tier='ai' GROUP BY supplier", (f_store,))}
+    imgc = _query("SELECT SUM(has_overview_img=1) y, SUM(has_overview_img=0) n "
+                  "FROM order_system.macy_selection_pool WHERE store=%s AND tier='ai'", (f_store,))
     img_stat = imgc[0] if imgc else {"y": 0, "n": 0}
-    nnc = _query("""SELECT COUNT(*) a, SUM(is_new) nw, SUM(is_restock) rs
-                    FROM order_system.macy_selection_pool""")
+    nnc = _query("SELECT COUNT(*) a, SUM(is_new) nw, SUM(is_restock) rs "
+                 "FROM order_system.macy_selection_pool WHERE store=%s AND tier='ai'", (f_store,))
     newn_stat = nnc[0] if nnc else {"a": 0, "nw": 0, "rs": 0}
-    built = _query("SELECT MAX(rebuilt_at) t FROM order_system.macy_selection_pool")
+    built = _query("SELECT MAX(rebuilt_at) t FROM order_system.macy_selection_pool WHERE store=%s", (f_store,))
     push_log = _query("""SELECT batch_desc, sku_count, costway_n, vevor_n,
                                 leaf_summary, pushed_at
                          FROM order_system.macy_push_log
@@ -87,24 +99,25 @@ def page():
                                   COALESCE(p.n,0) AS cand_n
                            FROM order_system.macy_cat_demand d
                            LEFT JOIN (SELECT macy_leaf, COUNT(*) n
-                                      FROM order_system.macy_selection_pool GROUP BY macy_leaf) p
+                                      FROM order_system.macy_selection_pool WHERE store=%s
+                                      GROUP BY macy_leaf) p
                              ON p.macy_leaf=d.macy_leaf
-                           WHERE d.store='kuyotq' ORDER BY d.score DESC, d.gmv DESC LIMIT 15""")
+                           WHERE d.store=%s ORDER BY d.score DESC, d.gmv DESC LIMIT 15""", (f_store, f_store))
     demand_map = {r["macy_leaf"]: r for r in _query(
         "SELECT macy_leaf, gmv, units, margin_rate, gross_rate, comm_rate, score, "
-        "season_tag, season_peak FROM order_system.macy_cat_demand WHERE store='kuyotq'")}
+        "season_tag, season_peak FROM order_system.macy_cat_demand WHERE store=%s", (f_store,))}
     # 🌱蓝海类目(邻接强,blue>=50) + 🚀探索区(邻接弱但Amazon需求大)
     blue_ocean = _query("""SELECT macy_leaf, l1, l2, l3, brand, sku_n, with_img, avg_price,
                                   fit_reason, season_tag, season_peak,
                                   amz_units, amz_return, blue_score
                            FROM order_system.macy_blue_ocean
-                           WHERE store='kuyotq' AND blue_score>=50
-                           ORDER BY blue_score DESC, sku_n DESC LIMIT 40""")
+                           WHERE store=%s AND blue_score>=50
+                           ORDER BY blue_score DESC, sku_n DESC LIMIT 40""", (f_store,))
     explore_ocean = _query("""SELECT macy_leaf, l1, l2, brand, sku_n, with_img, amz_node,
                                      amz_units, amz_revenue, amz_return, amz_price, season_tag, season_peak
                               FROM order_system.macy_blue_ocean
-                              WHERE store='kuyotq' AND fit_score<55 AND amz_units>=3000
-                              ORDER BY amz_units DESC LIMIT 15""")
+                              WHERE store=%s AND fit_score<55 AND amz_units>=3000
+                              ORDER BY amz_units DESC LIMIT 15""", (f_store,))
     # 📅近3个月最旺雷达(在售+蓝海+探索,按 season_profile 窗口热度)
     cur_m = date.today().month
     win_idx = [((cur_m - 1 + k) % 12) for k in range(3)]
@@ -122,13 +135,13 @@ def page():
 
     hot = []
     for r in _query("SELECT macy_leaf, season_profile, season_peak, season_tag "
-                    "FROM order_system.macy_cat_demand WHERE store='kuyotq' AND season_profile IS NOT NULL"):
+                    "FROM order_system.macy_cat_demand WHERE store=%s AND season_profile IS NOT NULL", (f_store,)):
         hh = _win_heat(r["season_profile"])
         if hh:
             hot.append({"leaf": r["macy_leaf"], "kind": "在售", "heat": hh,
                         "peak": r["season_peak"], "tag": r["season_tag"]})
     for r in _query("SELECT macy_leaf, season_profile, season_peak, season_tag, blue_score "
-                    "FROM order_system.macy_blue_ocean WHERE store='kuyotq' AND season_profile IS NOT NULL"):
+                    "FROM order_system.macy_blue_ocean WHERE store=%s AND season_profile IS NOT NULL", (f_store,)):
         hh = _win_heat(r["season_profile"])
         if hh:
             hot.append({"leaf": r["macy_leaf"],
@@ -144,11 +157,15 @@ def page():
                            built_at=built[0]["t"] if built else None,
                            push_log=push_log, cat_demand=cat_demand, demand_map=demand_map,
                            blue_ocean=blue_ocean, explore_ocean=explore_ocean,
-                           hot_window=hot_window, win_months=win_months)
+                           hot_window=hot_window, win_months=win_months,
+                           f_store=f_store, manual_rows=manual_rows, manual_total=manual_total)
 
 
 @macy_selection_bp.route("/rebuild", methods=["POST"])
 def rebuild():
+    store = (request.form.get("store") or request.args.get("store") or "kuyotq").strip().lower()
+    if store not in ("kuyotq", "wopet"):
+        store = "kuyotq"
     if _REBUILD["running"]:
         return jsonify({"success": False, "msg": "正在重建中，请稍候"})
     _REBUILD["running"] = True
@@ -158,7 +175,7 @@ def rebuild():
         try:
             with app_obj.app_context():
                 from app.services.macy_selection_service import rebuild_pool
-                print("[macy_selection] rebuild:", rebuild_pool())
+                print("[macy_selection] rebuild:", rebuild_pool(store))
         except Exception as exc:
             print("[macy_selection] rebuild failed:", exc)
         finally:
