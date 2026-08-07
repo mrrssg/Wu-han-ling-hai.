@@ -13,6 +13,7 @@ from app.models.db_manager import DBManager
 
 # HD 两店飞书表(HD-TOP-Mirkal / HD-Boson-Mirkal);同平台,已上过=两表并集
 HD_TABLES = {"top": "tblxHsORDrH6Ldvr", "bos": "tbl4OAnBZliXZ0Lm"}
+STORE_BRAND = {"top": "Volenca", "bos": "Ecooso"}   # HD 品牌按店固定(实测TOP全Volenca/BOS全Ecooso)
 NEWNESS_DAYS = 14
 APP = "QEeubiXYGa83zXs3Zt8cSSJPnih"
 APP_ID = "cli_a940a2a1067adbd2"
@@ -146,7 +147,7 @@ def rebuild_pool(store: str = "top") -> Dict[str, Any]:
                 ov = cat_override.get((supplier, cat))
                 if ov:
                     hd_path = ov["override_leaf"]
-                    brand = ov.get("override_brand")
+                    brand = ov.get("override_brand") or STORE_BRAND.get(store)
                     tier, reason = "ai", "人工锁定类目"
                 else:
                     lb = cat2path.get((supplier, cat))
@@ -154,7 +155,7 @@ def rebuild_pool(store: str = "top") -> Dict[str, Any]:
                         hd_path, maptier = lb
                         tier = "ai" if maptier == "record" else "manual"
                         reason = "现有记录一致" if maptier == "record" else "供应商类目落多个HD类目→擦边确认"
-                        brand = None
+                        brand = STORE_BRAND.get(store)
                     else:
                         hd_path = brand = tier = reason = None
                 if dec and dec["decision"] == "approved":
