@@ -76,6 +76,28 @@ DDLS = [
         PRIMARY KEY (store, macy_leaf),
         KEY idx_store_score (store, blue_score)
     ) CHARSET=utf8mb4 COMMENT='Macy蓝海类目推荐(邻接适配+季节+Amazon需求)'""",
+    # 擦边池逐SKU人工决策：采用进精选(可改类目)/弃用；每日重建遵循,不被冲掉
+    """CREATE TABLE IF NOT EXISTS order_system.macy_selection_decision (
+        store VARCHAR(12) NOT NULL,
+        supplier VARCHAR(16) NOT NULL,
+        supplier_sku VARCHAR(64) NOT NULL,
+        decision VARCHAR(12) NOT NULL DEFAULT 'approved' COMMENT 'approved采用进精选/rejected弃用',
+        override_leaf VARCHAR(120) DEFAULT NULL COMMENT '人工改后的Macy叶子;NULL=用原判',
+        override_brand VARCHAR(32) DEFAULT NULL,
+        decided_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, supplier, supplier_sku)
+    ) CHARSET=utf8mb4 COMMENT='擦边池人工决策(采用/弃用/改类目),每日重建遵循'""",
+    # 人工锁定的 供应商类目→Macy叶子 覆盖(记住映射,同类含将来新品自动跟)——两店通用
+    """CREATE TABLE IF NOT EXISTS order_system.macy_cat_override (
+        store VARCHAR(12) NOT NULL,
+        supplier VARCHAR(16) NOT NULL,
+        supplier_cat VARCHAR(400) NOT NULL,
+        override_leaf VARCHAR(120) NOT NULL,
+        override_brand VARCHAR(32) DEFAULT NULL,
+        note VARCHAR(200) DEFAULT NULL,
+        decided_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (store, supplier, supplier_cat(200))
+    ) CHARSET=utf8mb4 COMMENT='人工锁定 供应商类目→Macy叶子(记住映射,同类+将来新品自动跟)'""",
 ]
 
 ALTERS = [

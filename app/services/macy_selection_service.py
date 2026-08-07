@@ -299,6 +299,13 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
             cat2leaf = {(r["supplier"], r["supplier_cat"]):
                         (r["macy_leaf"], r["macy_brand"], r.get("ai_reason") or "")
                         for r in cur.fetchall()}
+            # 人工决策(擦边池)：逐SKU 采用/弃用/改类目 + 按供应商类目"记住映射"覆盖
+            cur.execute("SELECT supplier, supplier_sku, decision, override_leaf, override_brand "
+                        "FROM order_system.macy_selection_decision WHERE store=%s", (store,))
+            sku_decision = {(r["supplier"], r["supplier_sku"]): r for r in cur.fetchall()}
+            cur.execute("SELECT supplier, supplier_cat, override_leaf, override_brand "
+                        "FROM order_system.macy_cat_override WHERE store=%s", (store,))
+            cat_override = {(r["supplier"], r["supplier_cat"]): r for r in cur.fetchall()}
             # 类目推荐分：近90天净利率(收入−实际佣金−成本)×GMV,写 macy_cat_demand,返回 {leaf: score}
             cat_scores = _compute_macy_cat_demand(cur, store=store)
 
@@ -345,6 +352,24 @@ def rebuild_pool(store: str = "kuyotq") -> Dict[str, Any]:
                         continue
                     leaf, brand, cat_reason = lb
                     tier, reason = _kuyotq_tier(cat_reason)
+                # 人工"记住映射"(按供应商类目)——含将来新品自动跟,直接进精选
+                ov = cat_override.get((supplier, r["cat"]))
+                if ov:
+                    leaf = ov["override_leaf"]
+                    if ov.get("override_brand"):
+                        brand = ov["override_brand"]
+                    tier, reason = "ai", "人工锁定类目"
+                # 人工逐SKU决策：弃用→剔除;采用→进精选(带改后类目)
+                dec = sku_decision.get((supplier, r["sku"]))
+                if dec:
+                    if dec["decision"] == "rejected":
+                        continue
+                    tier = "ai"
+                    if dec.get("override_leaf"):
+                        leaf = dec["override_leaf"]
+                    if dec.get("override_brand"):
+                        brand = dec["override_brand"]
+                    reason = "人工采用进精选"
                 has_img = 1 if r["sku"] in overview else 0
                 fs, rs = r.get("first_seen"), r.get("restock_at")
                 is_new = 1 if (fs and fs >= cutoff) else 0
