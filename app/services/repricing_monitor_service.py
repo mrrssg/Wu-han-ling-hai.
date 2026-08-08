@@ -583,6 +583,14 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     print(f"[{run_id}] active offers: {len(offers)}, configs: {len(configs)}, "
           f"costway_max={freshness['costway_max']}, vevor_max={freshness['vevor_max']}")
 
+    # 退货运费兜底值：SKU 缺 return_shipping_base 但已亏本时，用本店中位数先顶上，
+    # 算个目标价放进待改价（打⚠️标记、只列不自动推），别让亏本被“配置缺失”盖住。
+    _rb_vals = sorted(
+        v for v in (_to_float(c.get("return_shipping_base")) for c in configs.values())
+        if v is not None and v > 0
+    )
+    fallback_return_base = _rb_vals[len(_rb_vals) // 2] if _rb_vals else 20.0
+
     summary = {
         "total": len(offers),
         "skipped_blacklist": 0,
@@ -592,6 +600,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
         "alert_no_cost": 0,
         "alert_cost_volatility": 0,
         "alert_loss_uncovered": 0,
+        "dry_run_needs_config": 0,
         "triggered": 0,
         "dry_run_count": 0,
         "mirakl_success": 0,
@@ -601,6 +610,9 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
     api_call_seq = 0
 
     for ctx in offers:
+        # 每个 SKU 重置：配置不全但已亏本 → 用兜底值算价进待改价、标记需人工、永不自动推
+        needs_human = False
+        config_notes = []
         # blacklist
         if is_blacklisted(ctx.shop_sku):
             _log(store_key, run_id, "auto_monitor", ctx, {
@@ -658,11 +670,14 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 L, W, H, wt = (L or 0), (W or 0), (H or 0), (wt or 0)
 
         if return_base is None:
-            # 精确改价需要退货运费基数,缺了不能改；但**先做亏本兜底检查**,别让亏本被"配置缺失"盖住
+            # 精确改价需要退货运费基数。缺了：已亏本 → 用本店兜底值顶上、算价进待改价(标⚠️需人工、不自动推)；
+            # 毛利健康只是缺配置 → 维持配置告警(不塞进待改价)。
             qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
             if qc[0]:
-                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
-                                 discount_factor, qc, "缺退货运费基数,暂不能精确改价(需人工补配置)")
+                return_base = fallback_return_base
+                needs_human = True
+                config_notes.append(f"退货运费缺→用本店兜底${fallback_return_base:.0f}")
+                # 不 continue，落到正常改价路径算目标价
             else:
                 _save_alert(ctx.shop_sku, store_key, "return_shipping_missing",
                             "Feishu return_shipping_base is NULL")
@@ -674,7 +689,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                     "commission_rate": commission_rate,
                 })
                 summary["alert_no_return_shipping"] += 1
-            continue
+                continue
 
         if supplier not in ("Costway", "Vevor"):
             _save_alert(ctx.shop_sku, store_key, "unsupported_supplier",
@@ -702,11 +717,15 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             continue
 
         if not _is_vevor and (None in (L, W, H, wt) or any(v == 0 for v in (L, W, H))):
-            # 缺尺寸不能算超大件退货运费→不能精确改价;但先做亏本兜底检查
-            qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
+            # 缺尺寸算不了超大件退货附加费。已亏本(或前一道门槛已判需人工) → 尺寸按0(不计附加费)、
+            # 算价进待改价标⚠️；毛利健康只是缺尺寸 → 维持配置告警。
+            qc = (True,) if needs_human else _quick_loss_check(
+                ctx, supplier, commission_rate, discount_factor, tier_map)
             if qc[0]:
-                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
-                                 discount_factor, qc, "缺尺寸/重量,暂不能精确改价(需人工补配置)")
+                L, W, H, wt = 0.0, 0.0, 0.0, 0.0
+                needs_human = True
+                config_notes.append("尺寸缺→未计超大件退货附加费(需补尺寸)")
+                # 不 continue
             else:
                 _save_alert(ctx.shop_sku, store_key, "dim_missing",
                             f"L/W/H/wt missing or zero: {L},{W},{H},{wt}")
@@ -717,7 +736,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                     "supplier": supplier, "supplier_price_db": supplier_price,
                 })
                 summary["alert_no_config"] += 1
-            continue
+                continue
 
         new_cost = cost_from_supplier_price(supplier_price, supplier)
 
@@ -728,11 +747,14 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 abs(new_cost - ctx.last_cost_snapshot) / ctx.last_cost_snapshot
                 if ctx.last_cost_snapshot else 0
             )
-            # 成本大幅波动→不自动改价等人工;但**若按新成本已亏本,升级成亏本告警**别被波动盖住
-            qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
+            # 成本大幅波动→不自动改价。已亏本(或前门槛已判需人工) → 算价进待改价标⚠️(需人工确认成本、不自动推)；
+            # 毛利健康 → 维持波动告警。
+            qc = (True,) if needs_human else _quick_loss_check(
+                ctx, supplier, commission_rate, discount_factor, tier_map)
             if qc[0]:
-                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
-                                 discount_factor, qc, f"且成本较快照波动{pct:.1%}>30%,暂不自动改价(需人工确认)")
+                needs_human = True
+                config_notes.append(f"成本较快照波动{pct:.1%}>30%(改价前人工确认成本)")
+                # 不 continue
             else:
                 _save_alert(ctx.shop_sku, store_key, "cost_volatility_30pct",
                             f"old={ctx.last_cost_snapshot:.2f} new={new_cost:.2f} pct={pct:.4f}")
@@ -744,7 +766,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                     "new_cost": new_cost, "cost_change_pct": pct,
                 })
                 summary["alert_cost_volatility"] += 1
-            continue
+                continue
 
         if ctx.db_origin_price is None or ctx.db_origin_price <= 0:
             _save_alert(ctx.shop_sku, store_key, "db_price_missing",
@@ -855,12 +877,16 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
         payload_hash = _hash_payload(of24_offer)
 
         api_call_seq += 1
-        if dry_run:
+        if dry_run or needs_human:
+            # needs_human：配置不全用兜底值算的价、或成本大幅波动——只列入待改价供人工核，永不自动推
+            cfg_note = ("⚠️配置不全[" + "；".join(config_notes) + "] " if needs_human else "")
+            tail = ("，仅列入待改价待人工核实(不自动推价)" if needs_human else "，dry_run=true")
             _log(store_key, run_id, "auto_monitor", ctx, {
                 **common_log,
                 "status": "dry_run",
+                "alert_type": ("loss_needs_config" if needs_human else None),
                 "decision_reason": (
-                    f"margin {margin:.4%} < {threshold:.2%}（{thr_desc}），dry_run=true"
+                    cfg_note + f"margin {margin:.4%} < {threshold:.2%}（{thr_desc}）" + tail
                 ),
                 "new_origin_price": target_origin,
                 "new_discount_price": target_discount,
@@ -875,6 +901,8 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 "api_call_seq": api_call_seq,
             })
             summary["dry_run_count"] += 1
+            if needs_human:
+                summary["dry_run_needs_config"] += 1
             continue
 
         # real call
