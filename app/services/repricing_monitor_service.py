@@ -127,6 +127,52 @@ def lookup_supplier_price(warehouse_sku: str, supplier: str) -> Tuple[Optional[f
         conn.close()
 
 
+def _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map):
+    """配置不全(缺退货运费基数/尺寸)时的亏本兜底检查——保证"在售就被监测到价格"。
+
+    口径全部沿用现成的：
+    - 卖价 = 折后成交价：discount_price → 原价×discount_factor 兜底（不能用活动前原价）
+    - 成本 = 供应商价 × 系数（cost_from_supplier_price；组合套装整串查得到真实价）
+    - 毛利**忽略退货损失**（退货只会让利润更差，是保守下限，只会漏报不会误报）
+    - 触发线 = 有 pricing_tier 行→档位目标−TIER_MARGIN_SLACK；无档位→PROFIT_THRESHOLD
+    返回 (is_loss, margin, cost, selling, threshold, tier_name)；算不了→(None,...)。"""
+    if supplier not in ("Costway", "Vevor") or commission_rate is None:
+        return None, None, None, None, None, None
+    sp, _ = lookup_supplier_price(ctx.warehouse_sku, supplier)
+    if sp is None:
+        return None, None, None, None, None, None
+    cost = cost_from_supplier_price(sp, supplier)
+    selling = ctx.db_discount_price
+    if (not selling or selling <= 0) and ctx.db_origin_price and discount_factor:
+        selling = ctx.db_origin_price * discount_factor
+    if not selling or selling <= 0:
+        return None, None, cost, None, None, None
+    margin = (selling * (1.0 - commission_rate) - cost) / selling
+    trow = tier_map.get(ctx.shop_sku)
+    tname = trow.get("tier") if trow else None
+    tt = _to_float(trow.get("target_margin")) if trow else None
+    threshold = (tt - TIER_MARGIN_SLACK) if tt is not None else PROFIT_THRESHOLD
+    return (margin < threshold), margin, cost, selling, threshold, tname
+
+
+def _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
+                     discount_factor, qc, blocked_reason):
+    """qc=_quick_loss_check 结果；发高优先级「亏本在售」告警(alert_type=loss_uncovered)。"""
+    _is_loss, margin, cost, selling, threshold, tname = qc
+    _save_alert(ctx.shop_sku, store_key, "loss_uncovered",
+                f"亏本在售 margin={margin:.4f}<{threshold:.2%}({tname or '无档'}) "
+                f"sell={selling:.2f} cost={cost:.2f}；{blocked_reason}")
+    _log(store_key, run_id, "auto_monitor", ctx, {
+        "status": "alert", "alert_type": "loss_uncovered",
+        "decision_reason": (f"折后价{selling:.2f}−佣金{commission_rate:.0%}−成本{cost:.2f} "
+                            f"毛利{margin:.2%} < 触发线{threshold:.2%}(忽略退货损失,保守下限)；{blocked_reason}"),
+        "supplier": supplier, "new_cost": round(cost, 4),
+        "profit_margin_before": round(margin, 4),
+        "discount_factor": discount_factor, "commission_rate": commission_rate,
+    })
+    summary["alert_loss_uncovered"] = summary.get("alert_loss_uncovered", 0) + 1
+
+
 # =============================================================================
 # DB queries
 # =============================================================================
@@ -545,6 +591,7 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
         "alert_no_return_shipping": 0,
         "alert_no_cost": 0,
         "alert_cost_volatility": 0,
+        "alert_loss_uncovered": 0,
         "triggered": 0,
         "dry_run_count": 0,
         "mirakl_success": 0,
@@ -611,16 +658,22 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 L, W, H, wt = (L or 0), (W or 0), (H or 0), (wt or 0)
 
         if return_base is None:
-            _save_alert(ctx.shop_sku, store_key, "return_shipping_missing",
-                        "Feishu return_shipping_base is NULL")
-            _log(store_key, run_id, "auto_monitor", ctx, {
-                "status": "alert",
-                "alert_type": "return_shipping_missing",
-                "decision_reason": "Feishu config has no return_shipping_base",
-                "supplier": supplier, "discount_factor": discount_factor,
-                "commission_rate": commission_rate,
-            })
-            summary["alert_no_return_shipping"] += 1
+            # 精确改价需要退货运费基数,缺了不能改；但**先做亏本兜底检查**,别让亏本被"配置缺失"盖住
+            qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
+            if qc[0]:
+                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
+                                 discount_factor, qc, "缺退货运费基数,暂不能精确改价(需人工补配置)")
+            else:
+                _save_alert(ctx.shop_sku, store_key, "return_shipping_missing",
+                            "Feishu return_shipping_base is NULL")
+                _log(store_key, run_id, "auto_monitor", ctx, {
+                    "status": "alert",
+                    "alert_type": "return_shipping_missing",
+                    "decision_reason": "Feishu config has no return_shipping_base",
+                    "supplier": supplier, "discount_factor": discount_factor,
+                    "commission_rate": commission_rate,
+                })
+                summary["alert_no_return_shipping"] += 1
             continue
 
         if supplier not in ("Costway", "Vevor"):
@@ -649,15 +702,21 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
             continue
 
         if not _is_vevor and (None in (L, W, H, wt) or any(v == 0 for v in (L, W, H))):
-            _save_alert(ctx.shop_sku, store_key, "dim_missing",
-                        f"L/W/H/wt missing or zero: {L},{W},{H},{wt}")
-            _log(store_key, run_id, "auto_monitor", ctx, {
-                "status": "alert",
-                "alert_type": "dim_missing",
-                "decision_reason": "Feishu dim/weight missing",
-                "supplier": supplier, "supplier_price_db": supplier_price,
-            })
-            summary["alert_no_config"] += 1
+            # 缺尺寸不能算超大件退货运费→不能精确改价;但先做亏本兜底检查
+            qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
+            if qc[0]:
+                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
+                                 discount_factor, qc, "缺尺寸/重量,暂不能精确改价(需人工补配置)")
+            else:
+                _save_alert(ctx.shop_sku, store_key, "dim_missing",
+                            f"L/W/H/wt missing or zero: {L},{W},{H},{wt}")
+                _log(store_key, run_id, "auto_monitor", ctx, {
+                    "status": "alert",
+                    "alert_type": "dim_missing",
+                    "decision_reason": "Feishu dim/weight missing",
+                    "supplier": supplier, "supplier_price_db": supplier_price,
+                })
+                summary["alert_no_config"] += 1
             continue
 
         new_cost = cost_from_supplier_price(supplier_price, supplier)
@@ -669,16 +728,22 @@ def run_monitor(store_key: str = "macy_kuyotq", dry_run: bool = True) -> Dict[st
                 abs(new_cost - ctx.last_cost_snapshot) / ctx.last_cost_snapshot
                 if ctx.last_cost_snapshot else 0
             )
-            _save_alert(ctx.shop_sku, store_key, "cost_volatility_30pct",
-                        f"old={ctx.last_cost_snapshot:.2f} new={new_cost:.2f} pct={pct:.4f}")
-            _log(store_key, run_id, "auto_monitor", ctx, {
-                "status": "alert",
-                "alert_type": "cost_volatility_30pct",
-                "decision_reason": f"cost moved {pct:.2%} > {COST_VOLATILITY_THRESHOLD:.0%}",
-                "supplier": supplier, "supplier_price_db": supplier_price,
-                "new_cost": new_cost, "cost_change_pct": pct,
-            })
-            summary["alert_cost_volatility"] += 1
+            # 成本大幅波动→不自动改价等人工;但**若按新成本已亏本,升级成亏本告警**别被波动盖住
+            qc = _quick_loss_check(ctx, supplier, commission_rate, discount_factor, tier_map)
+            if qc[0]:
+                _emit_loss_alert(ctx, store_key, run_id, summary, supplier, commission_rate,
+                                 discount_factor, qc, f"且成本较快照波动{pct:.1%}>30%,暂不自动改价(需人工确认)")
+            else:
+                _save_alert(ctx.shop_sku, store_key, "cost_volatility_30pct",
+                            f"old={ctx.last_cost_snapshot:.2f} new={new_cost:.2f} pct={pct:.4f}")
+                _log(store_key, run_id, "auto_monitor", ctx, {
+                    "status": "alert",
+                    "alert_type": "cost_volatility_30pct",
+                    "decision_reason": f"cost moved {pct:.2%} > {COST_VOLATILITY_THRESHOLD:.0%}",
+                    "supplier": supplier, "supplier_price_db": supplier_price,
+                    "new_cost": new_cost, "cost_change_pct": pct,
+                })
+                summary["alert_cost_volatility"] += 1
             continue
 
         if ctx.db_origin_price is None or ctx.db_origin_price <= 0:
